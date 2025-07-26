@@ -1,4 +1,4 @@
-use json_tools_rs::{JsonFlattener, JsonUnflattener, JsonOutput};
+use json_tools_rs::{JsonFlattener, JsonOutput, JsonUnflattener};
 
 fn main() {
     println!("JSON Tools RS - JsonFlattener & JsonUnflattener Builder API Examples\n");
@@ -61,7 +61,8 @@ fn main() {
 
     // Example 5: Basic unflattening with JsonUnflattener
     println!("Example 5: Basic unflattening (JsonUnflattener)");
-    let flattened1 = r#"{"user.profile.name": "John", "user.profile.age": 30, "user.settings.theme": "dark"}"#;
+    let flattened1 =
+        r#"{"user.profile.name": "John", "user.profile.age": 30, "user.settings.theme": "dark"}"#;
     match JsonUnflattener::new().unflatten(flattened1) {
         Ok(JsonOutput::Single(result)) => println!("Input:  {}\nOutput: {}\n", flattened1, result),
         Ok(JsonOutput::Multiple(_)) => println!("Unexpected multiple results\n"),
@@ -94,8 +95,10 @@ fn main() {
                     println!("Unflattened: {}\n", unflattened);
 
                     // Verify they're equivalent
-                    let original_parsed: serde_json::Value = serde_json::from_str(original).unwrap();
-                    let result_parsed: serde_json::Value = serde_json::from_str(&unflattened).unwrap();
+                    let original_parsed: serde_json::Value =
+                        serde_json::from_str(original).unwrap();
+                    let result_parsed: serde_json::Value =
+                        serde_json::from_str(&unflattened).unwrap();
                     if original_parsed == result_parsed {
                         println!("✅ Roundtrip successful - original and result are identical!\n");
                     } else {

@@ -5,10 +5,12 @@ JSON Tools RS Python Example
 This example demonstrates the unified JsonFlattener and JsonUnflattener APIs in Python.
 """
 
+from typing import Any, Dict
+
 import json_tools_rs
 
 
-def main():
+def main() -> None:
     print("JSON Tools RS - Python Example")
     print("Perfect Type Matching: Input Type = Output Type!")
     print("Complete Flatten/Unflatten Solution")
@@ -39,7 +41,7 @@ def main():
     print("-" * 30)
 
     # Use Python dict directly (much more convenient!)
-    python_data = {
+    python_data: Dict[str, Any] = {
         "User": {
             "Name": "Alice",
             "Email": "",

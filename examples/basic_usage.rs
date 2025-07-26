@@ -41,9 +41,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Example 4: Custom separator
     println!("4. Custom Separator:");
     let json = r#"{"user": {"profile": {"name": "John"}}}"#;
-    let result = JsonFlattener::new()
-        .separator("_")
-        .flatten(json)?;
+    let result = JsonFlattener::new().separator("_").flatten(json)?;
     if let JsonOutput::Single(output) = result {
         println!("   Input:  {}", json);
         println!("   Output: {}\n", output);
@@ -52,9 +50,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Example 5: Lowercase keys
     println!("5. Lowercase Key Conversion:");
     let json = r#"{"User": {"Name": "John", "Email": "john@example.com"}}"#;
-    let result = JsonFlattener::new()
-        .lowercase_keys(true)
-        .flatten(json)?;
+    let result = JsonFlattener::new().lowercase_keys(true).flatten(json)?;
     if let JsonOutput::Single(output) = result {
         println!("   Input:  {}", json);
         println!("   Output: {}\n", output);
@@ -119,7 +115,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .flatten(json)?;
 
     if let JsonOutput::Single(output) = result {
-        println!("   Features: empty filtering + regex replacements + lowercase + custom separator");
+        println!(
+            "   Features: empty filtering + regex replacements + lowercase + custom separator"
+        );
         println!("   Output: {}\n", output);
     }
 

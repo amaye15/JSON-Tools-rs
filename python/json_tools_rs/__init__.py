@@ -63,7 +63,7 @@ Advanced Configuration:
     >>> print(dict_results)  # [{'a': {'b': 1}}, {'c': {'d': 2}}] (list of dicts)
 """
 
-from .json_tools_rs import JsonFlattener, JsonUnflattener, JsonOutput, JsonFlattenError
+from .json_tools_rs import JsonFlattener, JsonFlattenError, JsonOutput, JsonUnflattener
 
 __version__ = "0.1.0"
 __author__ = "JSON Tools RS Contributors"

@@ -15,9 +15,10 @@ This test suite provides complete coverage of the JsonFlattener and JsonUnflatte
 
 import json
 import time
-import pytest
-import json_tools_rs
 from typing import Any, Dict, List, Union
+
+import json_tools_rs
+import pytest
 
 
 class TestBasicFunctionality:

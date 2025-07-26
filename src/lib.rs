@@ -186,8 +186,6 @@ impl From<regex::Error> for FlattenError {
     }
 }
 
-
-
 /// JSON Flattener with builder pattern for easy configuration
 ///
 /// This is the main interface for flattening JSON data. It provides a fluent
@@ -298,7 +296,11 @@ impl JsonFlattener {
     /// # Arguments
     /// * `find` - Pattern to find (use "regex:" prefix for regex patterns)
     /// * `replace` - Replacement string
-    pub fn key_replacement<F: Into<String>, R: Into<String>>(mut self, find: F, replace: R) -> Self {
+    pub fn key_replacement<F: Into<String>, R: Into<String>>(
+        mut self,
+        find: F,
+        replace: R,
+    ) -> Self {
         self.key_replacements.push((find.into(), replace.into()));
         self
     }
@@ -308,7 +310,11 @@ impl JsonFlattener {
     /// # Arguments
     /// * `find` - Pattern to find (use "regex:" prefix for regex patterns)
     /// * `replace` - Replacement string
-    pub fn value_replacement<F: Into<String>, R: Into<String>>(mut self, find: F, replace: R) -> Self {
+    pub fn value_replacement<F: Into<String>, R: Into<String>>(
+        mut self,
+        find: F,
+        replace: R,
+    ) -> Self {
         self.value_replacements.push((find.into(), replace.into()));
         self
     }
@@ -384,10 +390,9 @@ impl JsonFlattener {
                                 index,
                                 error: Box::new(match e.downcast::<FlattenError>() {
                                     Ok(flatten_err) => *flatten_err,
-                                    Err(other_err) => FlattenError::InvalidReplacementPattern(format!(
-                                        "Unknown error: {}",
-                                        other_err
-                                    )),
+                                    Err(other_err) => FlattenError::InvalidReplacementPattern(
+                                        format!("Unknown error: {}", other_err),
+                                    ),
                                 }),
                             }));
                         }
@@ -486,7 +491,11 @@ impl JsonUnflattener {
     ///
     /// The pattern can be a literal string or a regex pattern (prefix with "regex:")
     /// This replacement is applied to keys before unflattening
-    pub fn key_replacement<F: Into<String>, R: Into<String>>(mut self, find: F, replace: R) -> Self {
+    pub fn key_replacement<F: Into<String>, R: Into<String>>(
+        mut self,
+        find: F,
+        replace: R,
+    ) -> Self {
         self.key_replacements.push((find.into(), replace.into()));
         self
     }
@@ -495,7 +504,11 @@ impl JsonUnflattener {
     ///
     /// The pattern can be a literal string or a regex pattern (prefix with "regex:")
     /// This replacement is applied to values before unflattening
-    pub fn value_replacement<F: Into<String>, R: Into<String>>(mut self, find: F, replace: R) -> Self {
+    pub fn value_replacement<F: Into<String>, R: Into<String>>(
+        mut self,
+        find: F,
+        replace: R,
+    ) -> Self {
         self.value_replacements.push((find.into(), replace.into()));
         self
     }
@@ -537,10 +550,9 @@ impl JsonUnflattener {
                                 index,
                                 error: Box::new(match e.downcast::<FlattenError>() {
                                     Ok(flatten_err) => *flatten_err,
-                                    Err(other_err) => FlattenError::InvalidReplacementPattern(format!(
-                                        "Unknown error: {}",
-                                        other_err
-                                    )),
+                                    Err(other_err) => FlattenError::InvalidReplacementPattern(
+                                        format!("Unknown error: {}", other_err),
+                                    ),
                                 }),
                             }));
                         }
@@ -593,7 +605,11 @@ fn process_single_json_unflatten(
     // Extract the flattened object
     let flattened_obj = match flattened {
         Value::Object(obj) => obj,
-        _ => return Err(Box::new(FlattenError::InvalidJson("Expected object for unflattening".to_string()))),
+        _ => {
+            return Err(Box::new(FlattenError::InvalidJson(
+                "Expected object for unflattening".to_string(),
+            )))
+        }
     };
 
     // Apply key and value replacements if specified
@@ -757,12 +773,6 @@ fn apply_lowercase_to_keys(flattened: HashMap<String, Value>) -> HashMap<String,
     result
 }
 
-
-
-
-
-
-
 /// Estimates the flattened size to pre-allocate HashMap capacity
 fn estimate_flattened_size(value: &Value) -> usize {
     match value {
@@ -824,8 +834,6 @@ fn estimate_max_key_length(value: &Value) -> usize {
     // Estimate: max_depth * (max_width + 1 for dot) + some buffer
     max_depth * (max_width + 1) + 50
 }
-
-
 
 /// Optimized key replacement with regex caching and in-place operations
 fn apply_key_replacements_optimized(
@@ -1404,8 +1412,7 @@ fn apply_key_replacements_for_unflatten(
             if let Some(regex_pattern) = pattern.strip_prefix("regex:") {
                 // Handle regex replacement
                 // Remove "regex:" prefix
-                let regex = Regex::new(regex_pattern)
-                    .map_err(FlattenError::RegexError)?;
+                let regex = Regex::new(regex_pattern).map_err(FlattenError::RegexError)?;
                 new_key = regex.replace_all(&new_key, replacement).into_owned();
             } else {
                 // Handle literal replacement
@@ -1430,8 +1437,7 @@ fn apply_value_replacements_for_unflatten(
                 if let Some(regex_pattern) = pattern.strip_prefix("regex:") {
                     // Handle regex replacement
                     // Remove "regex:" prefix
-                    let regex = Regex::new(regex_pattern)
-                        .map_err(FlattenError::RegexError)?;
+                    let regex = Regex::new(regex_pattern).map_err(FlattenError::RegexError)?;
                     *s = regex.replace_all(s, replacement).into_owned();
                 } else {
                     // Handle literal replacement
@@ -1480,7 +1486,7 @@ fn analyze_path_types(obj: &Map<String, Value>, separator: &str) -> HashMap<Stri
 
         // Only consider paths that have more than one part (i.e., have children)
         if parts.len() > 1 {
-            for i in 0..parts.len()-1 {
+            for i in 0..parts.len() - 1 {
                 let parent_path = parts[..=i].join(separator);
                 parent_paths.insert(parent_path);
             }
@@ -1493,10 +1499,13 @@ fn analyze_path_types(obj: &Map<String, Value>, separator: &str) -> HashMap<Stri
         let parent_depth = parent_parts.len();
 
         // Find all child keys for this parent path
-        let child_keys: Vec<&str> = obj.keys()
+        let child_keys: Vec<&str> = obj
+            .keys()
             .filter_map(|key| {
                 let parts: Vec<&str> = key.split(separator).collect();
-                if parts.len() > parent_depth && parts[..parent_depth].join(separator) == parent_path {
+                if parts.len() > parent_depth
+                    && parts[..parent_depth].join(separator) == parent_path
+                {
                     Some(parts[parent_depth])
                 } else {
                     None
@@ -1505,15 +1514,16 @@ fn analyze_path_types(obj: &Map<String, Value>, separator: &str) -> HashMap<Stri
             .collect();
 
         // Check if all child keys are valid array indices
-        let all_numeric = !child_keys.is_empty() && child_keys.iter().all(|&key| {
-            // Must be a valid usize and not have leading zeros (except "0" itself)
-            key.parse::<usize>().is_ok() && (key == "0" || !key.starts_with('0'))
-        });
+        let all_numeric = !child_keys.is_empty()
+            && child_keys.iter().all(|&key| {
+                // Must be a valid usize and not have leading zeros (except "0" itself)
+                key.parse::<usize>().is_ok() && (key == "0" || !key.starts_with('0'))
+            });
 
         // Also check if there are any non-numeric keys
-        let has_non_numeric = child_keys.iter().any(|&key| {
-            key.parse::<usize>().is_err() || (key != "0" && key.starts_with('0'))
-        });
+        let has_non_numeric = child_keys
+            .iter()
+            .any(|&key| key.parse::<usize>().is_err() || (key != "0" && key.starts_with('0')));
 
         if has_non_numeric {
             path_types.insert(parent_path, false); // object
@@ -1582,9 +1592,14 @@ fn set_nested_value_recursive_with_types(
     });
 
     match entry {
-        Value::Object(ref mut obj) => {
-            set_nested_value_recursive_with_types(obj, parts, index + 1, value, separator, path_types)
-        }
+        Value::Object(ref mut obj) => set_nested_value_recursive_with_types(
+            obj,
+            parts,
+            index + 1,
+            value,
+            separator,
+            path_types,
+        ),
         Value::Array(ref mut arr) => {
             // Handle array indexing
             let next_part = parts[index + 1];
@@ -1600,7 +1615,7 @@ fn set_nested_value_recursive_with_types(
                     Ok(())
                 } else {
                     // Continue navigating
-                    let next_path = parts[..=index+1].join(separator);
+                    let next_path = parts[..=index + 1].join(separator);
                     let next_should_be_array = path_types.get(&next_path).copied().unwrap_or(false);
 
                     if arr[array_index].is_null() {
@@ -1612,16 +1627,28 @@ fn set_nested_value_recursive_with_types(
                     }
 
                     match &mut arr[array_index] {
-                        Value::Object(ref mut obj) => {
-                            set_nested_value_recursive_with_types(obj, parts, index + 2, value, separator, path_types)
-                        }
+                        Value::Object(ref mut obj) => set_nested_value_recursive_with_types(
+                            obj,
+                            parts,
+                            index + 2,
+                            value,
+                            separator,
+                            path_types,
+                        ),
                         Value::Array(ref mut nested_arr) => {
-                            set_nested_value_recursive_for_array_with_types(nested_arr, parts, index + 2, value, separator, path_types)
+                            set_nested_value_recursive_for_array_with_types(
+                                nested_arr,
+                                parts,
+                                index + 2,
+                                value,
+                                separator,
+                                path_types,
+                            )
                         }
                         _ => Err(FlattenError::InvalidJson(format!(
                             "Array element at index {} has incompatible type",
                             array_index
-                        )))
+                        ))),
                     }
                 }
             } else {
@@ -1638,7 +1665,14 @@ fn set_nested_value_recursive_with_types(
 
                 // Now continue as object
                 if let Value::Object(ref mut obj) = entry {
-                    set_nested_value_recursive_with_types(obj, parts, index + 1, value, separator, path_types)
+                    set_nested_value_recursive_with_types(
+                        obj,
+                        parts,
+                        index + 1,
+                        value,
+                        separator,
+                        path_types,
+                    )
                 } else {
                     unreachable!()
                 }
@@ -1661,7 +1695,9 @@ fn set_nested_value_recursive_for_array_with_types(
     path_types: &HashMap<String, bool>,
 ) -> Result<(), FlattenError> {
     if index >= parts.len() {
-        return Err(FlattenError::InvalidJson("Invalid path for array".to_string()));
+        return Err(FlattenError::InvalidJson(
+            "Invalid path for array".to_string(),
+        ));
     }
 
     let part = parts[index];
@@ -1687,16 +1723,28 @@ fn set_nested_value_recursive_for_array_with_types(
             }
 
             match &mut arr[array_index] {
-                Value::Object(ref mut obj) => {
-                    set_nested_value_recursive_with_types(obj, parts, index + 1, value, separator, path_types)
-                }
+                Value::Object(ref mut obj) => set_nested_value_recursive_with_types(
+                    obj,
+                    parts,
+                    index + 1,
+                    value,
+                    separator,
+                    path_types,
+                ),
                 Value::Array(ref mut nested_arr) => {
-                    set_nested_value_recursive_for_array_with_types(nested_arr, parts, index + 1, value, separator, path_types)
+                    set_nested_value_recursive_for_array_with_types(
+                        nested_arr,
+                        parts,
+                        index + 1,
+                        value,
+                        separator,
+                        path_types,
+                    )
                 }
                 _ => Err(FlattenError::InvalidJson(format!(
                     "Array element at index {} has incompatible type",
                     array_index
-                )))
+                ))),
             }
         }
     } else {
@@ -1706,9 +1754,6 @@ fn set_nested_value_recursive_for_array_with_types(
         )))
     }
 }
-
-
-
 
 // Helper function for tests that need the old parameter-based API
 #[cfg(test)]

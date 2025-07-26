@@ -92,21 +92,15 @@ fn custom_separator_example() -> Result<(), Box<dyn Error>> {
     println!("Default (.):       {}", extract_single(result));
 
     // Underscore separator
-    let result = JsonFlattener::new()
-        .separator("_")
-        .flatten(json)?;
+    let result = JsonFlattener::new().separator("_").flatten(json)?;
     println!("Underscore (_):    {}", extract_single(result));
 
     // Double colon separator
-    let result = JsonFlattener::new()
-        .separator("::")
-        .flatten(json)?;
+    let result = JsonFlattener::new().separator("::").flatten(json)?;
     println!("Double colon (::): {}", extract_single(result));
 
     // Pipe separator
-    let result = JsonFlattener::new()
-        .separator("|")
-        .flatten(json)?;
+    let result = JsonFlattener::new().separator("|").flatten(json)?;
     println!("Pipe (|):          {}\n", extract_single(result));
 
     Ok(())
@@ -142,9 +136,7 @@ fn filtering_examples() -> Result<(), Box<dyn Error>> {
     println!("Remove empty strings: {}", extract_single(result));
 
     // Remove null values
-    let result = JsonFlattener::new()
-        .remove_nulls(true)
-        .flatten(json)?;
+    let result = JsonFlattener::new().remove_nulls(true).flatten(json)?;
     println!("Remove null values: {}", extract_single(result));
 
     // Remove empty objects
@@ -253,9 +245,7 @@ fn lowercase_examples() -> Result<(), Box<dyn Error>> {
     println!("Without lowercase: {}", extract_single(result));
 
     // With lowercase conversion
-    let result = JsonFlattener::new()
-        .lowercase_keys(true)
-        .flatten(json)?;
+    let result = JsonFlattener::new().lowercase_keys(true).flatten(json)?;
     println!("With lowercase: {}", extract_single(result));
 
     // Lowercase with regex replacement
@@ -274,9 +264,11 @@ fn multiple_json_example() -> Result<(), Box<dyn Error>> {
     println!("8. Multiple JSON Inputs");
     println!("=======================");
 
-    let json_list = [r#"{"user1": {"name": "Alice", "age": 25}}"#,
+    let json_list = [
+        r#"{"user1": {"name": "Alice", "age": 25}}"#,
         r#"{"user2": {"name": "Bob", "age": 30}}"#,
-        r#"{"user3": {"name": "Charlie", "age": 35}}"#];
+        r#"{"user3": {"name": "Charlie", "age": 35}}"#,
+    ];
 
     let result = JsonFlattener::new().flatten(&json_list[..])?;
 
