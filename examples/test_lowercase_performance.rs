@@ -1,5 +1,5 @@
 extern crate json_tools_rs;
-use json_tools_rs::{flatten_json, JsonOutput};
+use json_tools_rs::{flatten_json_with_params, JsonOutput};
 use std::time::Instant;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -42,7 +42,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\nTesting WITHOUT lowercase conversion:");
     let start = Instant::now();
     for _ in 0..iterations {
-        let _ = flatten_json(json, false, false, false, false, None, None, None, false)?;
+        let _ = flatten_json_with_params(json, false, false, false, false, None, None, None, false)?;
     }
     let duration_without = start.elapsed();
     println!(
@@ -55,7 +55,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\nTesting WITH lowercase conversion:");
     let start = Instant::now();
     for _ in 0..iterations {
-        let _ = flatten_json(json, false, false, false, false, None, None, None, true)?;
+        let _ = flatten_json_with_params(json, false, false, false, false, None, None, None, true)?;
     }
     let duration_with = start.elapsed();
     println!(
@@ -75,7 +75,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Show sample output
     println!("\nSample outputs:");
 
-    let result_without = flatten_json(json, false, false, false, false, None, None, None, false)?;
+    let result_without = flatten_json_with_params(json, false, false, false, false, None, None, None, false)?;
     if let JsonOutput::Single(output) = result_without {
         println!("\nWithout lowercase (first 3 keys):");
         let parsed: serde_json::Value = serde_json::from_str(&output)?;
@@ -86,7 +86,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    let result_with = flatten_json(json, false, false, false, false, None, None, None, true)?;
+    let result_with = flatten_json_with_params(json, false, false, false, false, None, None, None, true)?;
     if let JsonOutput::Single(output) = result_with {
         println!("\nWith lowercase (first 3 keys):");
         let parsed: serde_json::Value = serde_json::from_str(&output)?;

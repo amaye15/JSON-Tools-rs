@@ -1,5 +1,5 @@
 extern crate json_tools_rs;
-use json_tools_rs::{flatten_json, JsonOutput};
+use json_tools_rs::{flatten_json_with_params, JsonOutput};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Testing lowercase key functionality:");
@@ -8,7 +8,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Test without lowercase conversion
     println!("\n1. Without lowercase conversion:");
-    let result = flatten_json(json, false, false, false, false, None, None, None, false)?;
+    let result = flatten_json_with_params(json, false, false, false, false, None, None, None, false)?;
     match result {
         JsonOutput::Single(flattened) => {
             println!("Input:  {}", json);
@@ -19,7 +19,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Test with lowercase conversion
     println!("\n2. With lowercase conversion:");
-    let result = flatten_json(json, false, false, false, false, None, None, None, true)?;
+    let result = flatten_json_with_params(json, false, false, false, false, None, None, None, true)?;
     match result {
         JsonOutput::Single(flattened) => {
             println!("Input:  {}", json);
@@ -32,7 +32,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n3. With regex replacement AND lowercase conversion:");
     let json2 = r#"{"User_Name": "John", "Admin_Role": "super", "Temp_Data": "test"}"#;
     let key_replacements = Some(vec![("regex:^(User|Admin)_".to_string(), "".to_string())]);
-    let result = flatten_json(
+    let result = flatten_json_with_params(
         json2,
         false,
         false,

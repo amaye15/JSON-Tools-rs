@@ -11,7 +11,7 @@ use pyo3::prelude::*;
 use pyo3::types::PyModule;
 
 #[cfg(feature = "python")]
-use crate::{flatten_json as rust_flatten_json, FlattenError, JsonOutput};
+use crate::{flatten_json_with_params as rust_flatten_json_with_params, JsonFlattener, FlattenError, JsonOutput};
 
 /// Python exception for JSON flattening errors
 #[cfg(feature = "python")]
@@ -112,6 +112,14 @@ impl From<JsonOutput> for PyJsonOutput {
     }
 }
 
+#[cfg(feature = "python")]
+impl PyJsonOutput {
+    /// Helper method to create PyJsonOutput from Rust JsonOutput
+    pub fn from_rust_output(output: JsonOutput) -> Self {
+        PyJsonOutput { inner: output }
+    }
+}
+
 /// Flatten JSON with comprehensive options
 ///
 /// Args:
@@ -133,15 +141,15 @@ impl From<JsonOutput> for PyJsonOutput {
 ///     ValueError: If arguments are invalid
 ///
 /// Examples:
-///     >>> result = flatten_json('{"a": {"b": 1}}')
+///     >>> result = flatten_json_with_params('{"a": {"b": 1}}')
 ///     >>> result.get_single()
 ///     '{"a.b": 1}'
 ///
-///     >>> result = flatten_json('{"User": {"Name": "John"}}', lower_case_keys=True)
+///     >>> result = flatten_json_with_params('{"User": {"Name": "John"}}', lower_case_keys=True)
 ///     >>> result.get_single()
 ///     '{"user.name": "John"}'
 ///
-///     >>> result = flatten_json(['{"a": 1}', '{"b": 2}'])
+///     >>> result = flatten_json_with_params(['{"a": 1}', '{"b": 2}'])
 ///     >>> result.get_multiple()
 ///     ['{"a": 1}', '{"b": 2}']
 #[cfg(feature = "python")]
@@ -157,8 +165,8 @@ impl From<JsonOutput> for PyJsonOutput {
     separator = None,
     lower_case_keys = false
 ))]
-pub fn flatten_json(
-    json_input: &PyAny,
+pub fn flatten_json_with_params(
+    json_input: &Bound<'_, PyAny>,
     remove_empty_string_values: bool,
     remove_null_values: bool,
     remove_empty_dict: bool,
@@ -171,7 +179,7 @@ pub fn flatten_json(
     // Handle different input types
     if let Ok(json_str) = json_input.extract::<String>() {
         // Single JSON string
-        let result = rust_flatten_json(
+        let result = rust_flatten_json_with_params(
             json_str.as_str(),
             remove_empty_string_values,
             remove_null_values,
@@ -196,7 +204,7 @@ pub fn flatten_json(
     } else if let Ok(json_list) = json_input.extract::<Vec<String>>() {
         // Multiple JSON strings
         let json_refs: Vec<&str> = json_list.iter().map(|s| s.as_str()).collect();
-        let result = rust_flatten_json(
+        let result = rust_flatten_json_with_params(
             &json_refs[..],
             remove_empty_string_values,
             remove_null_values,
@@ -225,13 +233,162 @@ pub fn flatten_json(
     }
 }
 
+/// Python JsonFlattener class with builder pattern
+///
+/// This provides the same fluent builder API as the Rust version.
+///
+/// # Examples
+///
+/// ```python
+/// import json_tools_rs
+///
+/// # Basic usage
+/// result = json_tools_rs.JsonFlattener().flatten('{"a": {"b": 1}}')
+///
+/// # Builder pattern
+/// result = (json_tools_rs.JsonFlattener()
+///     .remove_empty_strings(True)
+///     .remove_nulls(True)
+///     .separator("_")
+///     .lowercase_keys(True)
+///     .key_replacement("regex:^user_", "")
+///     .value_replacement("@example.com", "@company.org")
+///     .flatten(json))
+/// ```
+#[cfg(feature = "python")]
+#[pyclass]
+pub struct PyJsonFlattener {
+    inner: JsonFlattener,
+}
+
+#[cfg(feature = "python")]
+#[pymethods]
+impl PyJsonFlattener {
+    #[new]
+    pub fn new() -> Self {
+        Self {
+            inner: JsonFlattener::new(),
+        }
+    }
+
+    /// Remove keys with empty string values
+    pub fn remove_empty_strings(slf: PyRef<'_, Self>, value: bool) -> PyJsonFlattener {
+        PyJsonFlattener {
+            inner: slf.inner.clone().remove_empty_strings(value),
+        }
+    }
+
+    /// Remove keys with null values
+    pub fn remove_nulls(slf: PyRef<'_, Self>, value: bool) -> PyJsonFlattener {
+        PyJsonFlattener {
+            inner: slf.inner.clone().remove_nulls(value),
+        }
+    }
+
+    /// Remove keys with empty object values
+    pub fn remove_empty_objects(slf: PyRef<'_, Self>, value: bool) -> PyJsonFlattener {
+        PyJsonFlattener {
+            inner: slf.inner.clone().remove_empty_objects(value),
+        }
+    }
+
+    /// Remove keys with empty array values
+    pub fn remove_empty_arrays(slf: PyRef<'_, Self>, value: bool) -> PyJsonFlattener {
+        PyJsonFlattener {
+            inner: slf.inner.clone().remove_empty_arrays(value),
+        }
+    }
+
+    /// Add a key replacement pattern
+    ///
+    /// # Arguments
+    /// * `find` - Pattern to find (use "regex:" prefix for regex patterns)
+    /// * `replace` - Replacement string
+    pub fn key_replacement(slf: PyRef<'_, Self>, find: String, replace: String) -> PyJsonFlattener {
+        PyJsonFlattener {
+            inner: slf.inner.clone().key_replacement(find, replace),
+        }
+    }
+
+    /// Add a value replacement pattern
+    ///
+    /// # Arguments
+    /// * `find` - Pattern to find (use "regex:" prefix for regex patterns)
+    /// * `replace` - Replacement string
+    pub fn value_replacement(slf: PyRef<'_, Self>, find: String, replace: String) -> PyJsonFlattener {
+        PyJsonFlattener {
+            inner: slf.inner.clone().value_replacement(find, replace),
+        }
+    }
+
+    /// Set the separator for nested keys
+    pub fn separator(slf: PyRef<'_, Self>, separator: String) -> PyJsonFlattener {
+        PyJsonFlattener {
+            inner: slf.inner.clone().separator(separator),
+        }
+    }
+
+    /// Convert all keys to lowercase
+    pub fn lowercase_keys(slf: PyRef<'_, Self>, value: bool) -> PyJsonFlattener {
+        PyJsonFlattener {
+            inner: slf.inner.clone().lowercase_keys(value),
+        }
+    }
+
+    /// Flatten the JSON input
+    ///
+    /// # Arguments
+    /// * `json_input` - JSON input as string or list of strings
+    ///
+    /// # Returns
+    /// * `PyJsonOutput` - Single flattened JSON string or multiple results
+    pub fn flatten(&self, json_input: &Bound<'_, PyAny>) -> PyResult<PyJsonOutput> {
+        // Handle different input types
+        if let Ok(json_str) = json_input.extract::<String>() {
+            // Single JSON string
+            let result = self.inner.clone().flatten(json_str.as_str())
+                .map_err(|e| JsonFlattenError::new_err(format!("Failed to flatten JSON: {}", e)))?;
+            Ok(PyJsonOutput::from_rust_output(result))
+        } else if let Ok(json_list) = json_input.extract::<Vec<String>>() {
+            // List of JSON strings
+            let json_refs: Vec<&str> = json_list.iter().map(|s| s.as_str()).collect();
+            let result = self.inner.clone().flatten(&json_refs[..])
+                .map_err(|e| JsonFlattenError::new_err(format!("Failed to flatten JSON list: {}", e)))?;
+            Ok(PyJsonOutput::from_rust_output(result))
+        } else {
+            Err(PyValueError::new_err(
+                "json_input must be a string or list of strings",
+            ))
+        }
+    }
+}
+
+/// Convenience function for simple JSON flattening with default settings
+///
+/// For more advanced configuration, use `JsonFlattener()` with the builder pattern.
+///
+/// # Examples
+///
+/// ```python
+/// import json_tools_rs
+///
+/// result = json_tools_rs.flatten_json('{"user": {"name": "John"}}')
+/// ```
+#[cfg(feature = "python")]
+#[pyfunction]
+pub fn flatten_json(json_input: &Bound<'_, PyAny>) -> PyResult<PyJsonOutput> {
+    PyJsonFlattener::new().flatten(json_input)
+}
+
 /// Python module definition
 #[cfg(feature = "python")]
 #[pymodule]
-fn json_tools_rs(py: Python, m: &PyModule) -> PyResult<()> {
+fn json_tools_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<PyJsonFlattener>()?;
     m.add_function(wrap_pyfunction!(flatten_json, m)?)?;
+    m.add_function(wrap_pyfunction!(flatten_json_with_params, m)?)?;
     m.add_class::<PyJsonOutput>()?;
-    m.add("JsonFlattenError", py.get_type::<JsonFlattenError>())?;
+    m.add("JsonFlattenError", m.py().get_type_bound::<JsonFlattenError>())?;
 
     // Add module metadata
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;

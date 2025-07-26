@@ -1,4 +1,4 @@
-use json_tools_rs::{flatten_json, FlattenError, JsonOutput};
+use json_tools_rs::{flatten_json, JsonFlattener, FlattenError, JsonOutput};
 use std::error::Error;
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -40,13 +40,13 @@ fn basic_flattening_example() -> Result<(), Box<dyn Error>> {
 
     // Simple nested object
     let json1 = r#"{"user": {"name": "John", "age": 30}}"#;
-    let result = flatten_json(json1, false, false, false, false, None, None, None, false)?;
+    let result = flatten_json(json1)?;
     println!("Input:  {}", json1);
     println!("Output: {}\n", extract_single(result));
 
     // Deeply nested object
     let json2 = r#"{"company": {"department": {"team": {"member": {"name": "Alice"}}}}}"#;
-    let result = flatten_json(json2, false, false, false, false, None, None, None, false)?;
+    let result = flatten_json(json2)?;
     println!("Input:  {}", json2);
     println!("Output: {}\n", extract_single(result));
 
@@ -59,19 +59,19 @@ fn array_flattening_example() -> Result<(), Box<dyn Error>> {
 
     // Simple array
     let json1 = r#"{"items": [1, 2, {"nested": "value"}]}"#;
-    let result = flatten_json(json1, false, false, false, false, None, None, None, false)?;
+    let result = flatten_json(json1)?;
     println!("Array Input:  {}", json1);
     println!("Array Output: {}\n", extract_single(result));
 
     // Matrix (nested arrays)
     let json2 = r#"{"matrix": [[1, 2], [3, 4]]}"#;
-    let result = flatten_json(json2, false, false, false, false, None, None, None, false)?;
+    let result = flatten_json(json2)?;
     println!("Matrix Input:  {}", json2);
     println!("Matrix Output: {}\n", extract_single(result));
 
     // Mixed array with objects
     let json3 = r#"{"users": [{"name": "John", "age": 30}, {"name": "Jane", "age": 25}]}"#;
-    let result = flatten_json(json3, false, false, false, false, None, None, None, false)?;
+    let result = JsonFlattener::new().flatten(json3, false, false, false, false, None, None, None, false)?;
     println!("Mixed Array Input:  {}", json3);
     println!("Mixed Array Output: {}\n", extract_single(result));
 
@@ -85,11 +85,11 @@ fn custom_separator_example() -> Result<(), Box<dyn Error>> {
     let json = r#"{"user": {"profile": {"name": "John"}}}"#;
 
     // Default dot separator
-    let result = flatten_json(json, false, false, false, false, None, None, None, false)?;
+    let result = JsonFlattener::new().flatten(json, false, false, false, false, None, None, None, false)?;
     println!("Default (.):     {}", extract_single(result));
 
     // Underscore separator
-    let result = flatten_json(
+    let result = JsonFlattener::new().flatten(
         json,
         false,
         false,
@@ -103,7 +103,7 @@ fn custom_separator_example() -> Result<(), Box<dyn Error>> {
     println!("Underscore (_):  {}", extract_single(result));
 
     // Double colon separator
-    let result = flatten_json(
+    let result = JsonFlattener::new().flatten(
         json,
         false,
         false,
@@ -117,7 +117,7 @@ fn custom_separator_example() -> Result<(), Box<dyn Error>> {
     println!("Double colon (::): {}", extract_single(result));
 
     // Pipe separator
-    let result = flatten_json(
+    let result = JsonFlattener::new().flatten(
         json,
         false,
         false,
@@ -153,27 +153,27 @@ fn filtering_examples() -> Result<(), Box<dyn Error>> {
     println!("Original: {}", json.replace('\n', "").replace("  ", ""));
 
     // No filtering
-    let result = flatten_json(json, false, false, false, false, None, None, None, false)?;
+    let result = JsonFlattener::new().flatten(json, false, false, false, false, None, None, None, false)?;
     println!("No filtering: {}", extract_single(result));
 
     // Remove empty strings
-    let result = flatten_json(json, true, false, false, false, None, None, None, false)?;
+    let result = JsonFlattener::new().flatten(json, true, false, false, false, None, None, None, false)?;
     println!("Remove empty strings: {}", extract_single(result));
 
     // Remove null values
-    let result = flatten_json(json, false, true, false, false, None, None, None, false)?;
+    let result = JsonFlattener::new().flatten(json, false, true, false, false, None, None, None, false)?;
     println!("Remove null values: {}", extract_single(result));
 
     // Remove empty objects
-    let result = flatten_json(json, false, false, true, false, None, None, None, false)?;
+    let result = JsonFlattener::new().flatten(json, false, false, true, false, None, None, None, false)?;
     println!("Remove empty objects: {}", extract_single(result));
 
     // Remove empty arrays
-    let result = flatten_json(json, false, false, false, true, None, None, None, false)?;
+    let result = JsonFlattener::new().flatten(json, false, false, false, true, None, None, None, false)?;
     println!("Remove empty arrays: {}", extract_single(result));
 
     // All filtering enabled
-    let result = flatten_json(json, true, true, true, true, None, None, None, false)?;
+    let result = JsonFlattener::new().flatten(json, true, true, true, true, None, None, None, false)?;
     println!("All filtering: {}\n", extract_single(result));
 
     Ok(())
@@ -186,7 +186,7 @@ fn replacement_examples() -> Result<(), Box<dyn Error>> {
     // Key replacements
     let json1 = r#"{"user_name": "John", "user_email": "john@example.com", "admin_role": "super"}"#;
     let key_replacements = Some(vec![("user_".to_string(), "person_".to_string())]);
-    let result = flatten_json(
+    let result = JsonFlattener::new().flatten(
         json1,
         false,
         false,
@@ -206,7 +206,7 @@ fn replacement_examples() -> Result<(), Box<dyn Error>> {
         "@example.com".to_string(),
         "@company.org".to_string(),
     )]);
-    let result = flatten_json(
+    let result = JsonFlattener::new().flatten(
         json2,
         false,
         false,
@@ -227,7 +227,7 @@ fn replacement_examples() -> Result<(), Box<dyn Error>> {
         "@example.com".to_string(),
         "@company.org".to_string(),
     )]);
-    let result = flatten_json(
+    let result = JsonFlattener::new().flatten(
         json3,
         false,
         false,
@@ -254,7 +254,7 @@ fn regex_examples() -> Result<(), Box<dyn Error>> {
         "regex:^(user|admin|guest)_".to_string(),
         "".to_string(),
     )]);
-    let result = flatten_json(
+    let result = JsonFlattener::new().flatten(
         json1,
         false,
         false,
@@ -274,7 +274,7 @@ fn regex_examples() -> Result<(), Box<dyn Error>> {
         "regex:@example\\.com".to_string(),
         "@company.org".to_string(),
     )]);
-    let result = flatten_json(
+    let result = JsonFlattener::new().flatten(
         json2,
         false,
         false,
@@ -294,7 +294,7 @@ fn regex_examples() -> Result<(), Box<dyn Error>> {
         "regex:^field_(\\d+)_(.+)".to_string(),
         "$2_id_$1".to_string(),
     )]);
-    let result = flatten_json(
+    let result = JsonFlattener::new().flatten(
         json3,
         false,
         false,
@@ -314,7 +314,7 @@ fn regex_examples() -> Result<(), Box<dyn Error>> {
         "regex:\\+(\\d)-(\\d{3})-(\\d{3})-(\\d{4})".to_string(),
         "($2) $3-$4".to_string(),
     )]);
-    let result = flatten_json(
+    let result = JsonFlattener::new().flatten(
         json4,
         false,
         false,
@@ -341,7 +341,7 @@ fn multiple_json_example() -> Result<(), Box<dyn Error>> {
         r#"{"user3": {"name": "Charlie", "age": 35}}"#,
     ];
 
-    let result = flatten_json(
+    let result = JsonFlattener::new().flatten(
         &json_list[..],
         false,
         false,
@@ -373,7 +373,7 @@ fn error_handling_example() {
 
     // Invalid JSON
     let invalid_json = r#"{"invalid": json}"#;
-    match flatten_json(
+    match JsonFlattener::new().flatten(
         invalid_json,
         false,
         false,
@@ -402,7 +402,7 @@ fn error_handling_example() {
         "regex:[invalid".to_string(),
         "replacement".to_string(),
     )]);
-    match flatten_json(
+    match JsonFlattener::new().flatten(
         r#"{"test": "value"}"#,
         false,
         false,
@@ -464,7 +464,7 @@ fn real_world_example() -> Result<(), Box<dyn Error>> {
     println!("{{\"product\": {{\"id\": 12345, \"name\": \"Gaming Laptop\", ...}}}}");
 
     // Basic flattening
-    let result = flatten_json(
+    let result = JsonFlattener::new().flatten(
         product_json,
         false,
         false,
@@ -480,7 +480,7 @@ fn real_world_example() -> Result<(), Box<dyn Error>> {
 
     // With filtering and key simplification
     let key_replacements = Some(vec![("product.".to_string(), "".to_string())]);
-    let result = flatten_json(
+    let result = JsonFlattener::new().flatten(
         product_json,
         false,
         true,

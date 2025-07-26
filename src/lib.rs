@@ -16,7 +16,7 @@
 //! use json_tools_rs::flatten_json;
 //!
 //! let json = r#"{"user": {"name": "John", "details": {"age": null, "city": ""}}}"#;
-//! let result = flatten_json(json, true, true, false, false, None, None, None, false).unwrap();
+//! let result = test_flatten_json_with_params(json, true, true, false, false, None, None, None, false).unwrap();
 //! // Result: {"user.name": "John"}
 //! ```
 
@@ -175,7 +175,7 @@ impl From<regex::Error> for FlattenError {
 /// use json_tools_rs::flatten_json;
 ///
 /// let json = r#"{"a": {"b": {"c": 1}}}"#;
-/// let result = flatten_json(json, false, false, false, false, None, None, None, false).unwrap();
+/// let result = test_flatten_json_with_params(json, false, false, false, false, None, None, None, false).unwrap();
 /// // Result: {"a.b.c": 1}
 /// ```
 ///
@@ -184,7 +184,7 @@ impl From<regex::Error> for FlattenError {
 /// use json_tools_rs::flatten_json;
 ///
 /// let json = r#"{"user": {"name": "John", "details": {"age": null, "city": ""}}}"#;
-/// let result = flatten_json(json, true, true, false, false, None, None, None, false).unwrap();
+/// let result = test_flatten_json_with_params(json, true, true, false, false, None, None, None, false).unwrap();
 /// // Result: {"user.name": "John"}
 /// ```
 ///
@@ -194,7 +194,7 @@ impl From<regex::Error> for FlattenError {
 ///
 /// let json = r#"{"user_name": "John", "admin_role": "super"}"#;
 /// let key_replacements = Some(vec![("regex:^(user|admin)_".to_string(), "".to_string())]);
-/// let result = flatten_json(json, false, false, false, false, key_replacements, None, None, false).unwrap();
+/// let result = test_flatten_json_with_params(json, false, false, false, false, key_replacements, None, None, false).unwrap();
 /// // Result: {"name": "John", "role": "super"}
 /// ```
 ///
@@ -203,7 +203,7 @@ impl From<regex::Error> for FlattenError {
 /// use json_tools_rs::flatten_json;
 ///
 /// let json = r#"{"User": {"Name": "John", "Email": "john@example.com"}}"#;
-/// let result = flatten_json(json, false, false, false, false, None, None, None, true).unwrap();
+/// let result = test_flatten_json_with_params(json, false, false, false, false, None, None, None, true).unwrap();
 /// // Result: {"user.name": "John", "user.email": "john@example.com"}
 /// ```
 /// Unified flatten_json function that accepts either single or multiple JSON strings
@@ -242,7 +242,7 @@ impl From<regex::Error> for FlattenError {
 /// use json_tools_rs::{flatten_json, JsonOutput};
 ///
 /// let json = r#"{"user": {"name": "John", "age": 30}}"#;
-/// let result = flatten_json(json, false, false, false, false, None, None, None, false).unwrap();
+/// let result = test_flatten_json_with_params(json, false, false, false, false, None, None, None, false).unwrap();
 /// match result {
 ///     JsonOutput::Single(flattened) => println!("Result: {}", flattened),
 ///     JsonOutput::Multiple(_) => unreachable!(),
@@ -255,7 +255,7 @@ impl From<regex::Error> for FlattenError {
 /// use json_tools_rs::{flatten_json, JsonOutput};
 ///
 /// let json = r#"{"items": [1, 2, {"nested": "value"}], "matrix": [[1, 2], [3, 4]]}"#;
-/// let result = flatten_json(json, false, false, false, false, None, None, None, false).unwrap();
+/// let result = test_flatten_json_with_params(json, false, false, false, false, None, None, None, false).unwrap();
 /// match result {
 ///     JsonOutput::Single(flattened) => println!("Result: {}", flattened),
 ///     JsonOutput::Multiple(_) => unreachable!(),
@@ -271,7 +271,7 @@ impl From<regex::Error> for FlattenError {
 ///     r#"{"user1": {"name": "Alice"}}"#,
 ///     r#"{"user2": {"name": "Bob"}}"#,
 /// ];
-/// let result = flatten_json(&json_list[..], false, false, false, false, None, None, None, false).unwrap();
+/// let result = test_flatten_json_with_params(&json_list[..], false, false, false, false, None, None, None, false).unwrap();
 /// match result {
 ///     JsonOutput::Single(_) => unreachable!(),
 ///     JsonOutput::Multiple(results) => {
@@ -287,7 +287,7 @@ impl From<regex::Error> for FlattenError {
 /// use json_tools_rs::{flatten_json, JsonOutput};
 ///
 /// let json = r#"{"data": [{"name": "John", "email": ""}, null, [], {"name": "Jane"}]}"#;
-/// let result = flatten_json(json, true, true, false, true, None, None, None, false).unwrap();
+/// let result = test_flatten_json_with_params(json, true, true, false, true, None, None, None, false).unwrap();
 /// match result {
 ///     JsonOutput::Single(flattened) => println!("Result: {}", flattened),
 ///     JsonOutput::Multiple(_) => unreachable!(),
@@ -309,7 +309,7 @@ impl From<regex::Error> for FlattenError {
 ///     ("regex:@example\\.com".to_string(), "@company.org".to_string()),
 /// ]);
 ///
-/// let result = flatten_json(json, false, false, false, false, key_replacements, value_replacements, None, false).unwrap();
+/// let result = test_flatten_json_with_params(json, false, false, false, false, key_replacements, value_replacements, None, false).unwrap();
 /// match result {
 ///     JsonOutput::Single(flattened) => println!("Result: {}", flattened),
 ///     JsonOutput::Multiple(_) => unreachable!(),
@@ -324,7 +324,7 @@ impl From<regex::Error> for FlattenError {
 /// let json = r#"{"user": {"profile": {"name": "John"}}}"#;
 ///
 /// // Using underscore separator
-/// let result = flatten_json(json, false, false, false, false, None, None, Some("_"), false).unwrap();
+/// let result = test_flatten_json_with_params(json, false, false, false, false, None, None, Some("_"), false).unwrap();
 /// match result {
 ///     JsonOutput::Single(flattened) => println!("Result: {}", flattened),
 ///     JsonOutput::Multiple(_) => unreachable!(),
@@ -332,15 +332,185 @@ impl From<regex::Error> for FlattenError {
 /// // Result: {"user_profile_name": "John"}
 ///
 /// // Using double colon separator
-/// let result = flatten_json(json, false, false, false, false, None, None, Some("::"), false).unwrap();
+/// let result = test_flatten_json_with_params(json, false, false, false, false, None, None, Some("::"), false).unwrap();
 /// match result {
 ///     JsonOutput::Single(flattened) => println!("Result: {}", flattened),
 ///     JsonOutput::Multiple(_) => unreachable!(),
 /// }
 /// // Result: {"user::profile::name": "John"}
 /// ```
+/// JSON Flattener with builder pattern for easy configuration
+///
+/// This is the main interface for flattening JSON data. It provides a fluent
+/// builder API that makes it easy to configure all flattening options.
+///
+/// # Examples
+///
+/// ```rust
+/// use json_tools_rs::JsonFlattener;
+///
+/// // Basic flattening
+/// let result = JsonFlattener::new()
+///     .flatten(r#"{"user": {"name": "John"}}"#)?;
+///
+/// // Advanced configuration
+/// let result = JsonFlattener::new()
+///     .remove_empty_strings(true)
+///     .remove_nulls(true)
+///     .separator("_")
+///     .lowercase_keys(true)
+///     .key_replacement("regex:^user_", "")
+///     .value_replacement("@example.com", "@company.org")
+///     .flatten(json)?;
+/// ```
+#[derive(Debug, Clone)]
+pub struct JsonFlattener {
+    /// Remove keys with empty string values
+    remove_empty_string_values: bool,
+    /// Remove keys with null values
+    remove_null_values: bool,
+    /// Remove keys with empty object values
+    remove_empty_dict: bool,
+    /// Remove keys with empty array values
+    remove_empty_list: bool,
+    /// Key replacement patterns (find, replace)
+    key_replacements: Vec<(String, String)>,
+    /// Value replacement patterns (find, replace)
+    value_replacements: Vec<(String, String)>,
+    /// Separator for nested keys (default: ".")
+    separator: String,
+    /// Convert all keys to lowercase
+    lower_case_keys: bool,
+}
+
+impl Default for JsonFlattener {
+    fn default() -> Self {
+        Self {
+            remove_empty_string_values: false,
+            remove_null_values: false,
+            remove_empty_dict: false,
+            remove_empty_list: false,
+            key_replacements: Vec::new(),
+            value_replacements: Vec::new(),
+            separator: ".".to_string(),
+            lower_case_keys: false,
+        }
+    }
+}
+
+impl JsonFlattener {
+    /// Create a new JSON flattener with default settings
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Remove keys with empty string values
+    pub fn remove_empty_strings(mut self, value: bool) -> Self {
+        self.remove_empty_string_values = value;
+        self
+    }
+
+    /// Remove keys with null values
+    pub fn remove_nulls(mut self, value: bool) -> Self {
+        self.remove_null_values = value;
+        self
+    }
+
+    /// Remove keys with empty object values
+    pub fn remove_empty_objects(mut self, value: bool) -> Self {
+        self.remove_empty_dict = value;
+        self
+    }
+
+    /// Remove keys with empty array values
+    pub fn remove_empty_arrays(mut self, value: bool) -> Self {
+        self.remove_empty_list = value;
+        self
+    }
+
+    /// Add a key replacement pattern
+    ///
+    /// # Arguments
+    /// * `find` - Pattern to find (use "regex:" prefix for regex patterns)
+    /// * `replace` - Replacement string
+    pub fn key_replacement<F: Into<String>, R: Into<String>>(mut self, find: F, replace: R) -> Self {
+        self.key_replacements.push((find.into(), replace.into()));
+        self
+    }
+
+    /// Add a value replacement pattern
+    ///
+    /// # Arguments
+    /// * `find` - Pattern to find (use "regex:" prefix for regex patterns)
+    /// * `replace` - Replacement string
+    pub fn value_replacement<F: Into<String>, R: Into<String>>(mut self, find: F, replace: R) -> Self {
+        self.value_replacements.push((find.into(), replace.into()));
+        self
+    }
+
+    /// Set the separator for nested keys
+    pub fn separator<S: Into<String>>(mut self, separator: S) -> Self {
+        self.separator = separator.into();
+        self
+    }
+
+    /// Convert all keys to lowercase
+    pub fn lowercase_keys(mut self, value: bool) -> Self {
+        self.lower_case_keys = value;
+        self
+    }
+
+    /// Flatten the JSON input
+    ///
+    /// # Arguments
+    /// * `json_input` - JSON input as string, &str, or slice of strings
+    ///
+    /// # Returns
+    /// * `JsonOutput` - Single flattened JSON string or multiple results
+    pub fn flatten<'a, T>(self, json_input: T) -> Result<JsonOutput, Box<dyn Error>>
+    where
+        T: Into<JsonInput<'a>>,
+    {
+        flatten_json_with_params(
+            json_input,
+            self.remove_empty_string_values,
+            self.remove_null_values,
+            self.remove_empty_dict,
+            self.remove_empty_list,
+            if self.key_replacements.is_empty() { None } else { Some(self.key_replacements) },
+            if self.value_replacements.is_empty() { None } else { Some(self.value_replacements) },
+            Some(&self.separator),
+            self.lower_case_keys,
+        )
+    }
+}
+
+/// Convenience function for simple JSON flattening with default settings
+///
+/// For more advanced configuration, use `JsonFlattener::new()` with the builder pattern.
+///
+/// # Examples
+///
+/// ```rust
+/// use json_tools_rs::flatten_json;
+///
+/// let result = flatten_json(r#"{"user": {"name": "John"}}"#)?;
+/// ```
 #[inline]
-pub fn flatten_json<'a, T>(
+pub fn flatten_json<'a, T>(json_input: T) -> Result<JsonOutput, Box<dyn Error>>
+where
+    T: Into<JsonInput<'a>>,
+{
+    JsonFlattener::new().flatten(json_input)
+}
+
+/// Backward compatibility function with individual parameters
+///
+/// This function maintains the original API for existing code.
+/// For new code, prefer using `JsonFlattener::new()` with the builder pattern.
+#[inline]
+#[allow(clippy::too_many_arguments)]
+pub fn flatten_json_with_params<'a, T>(
     json_input: T,
     remove_empty_string_values: bool,
     remove_null_values: bool,
@@ -422,7 +592,7 @@ pub fn flatten_json_default<'a, T>(
 where
     T: Into<JsonInput<'a>>,
 {
-    flatten_json(
+    flatten_json_with_params(
         json_input,
         remove_empty_string_values,
         remove_null_values,
@@ -437,6 +607,7 @@ where
 
 /// Core flattening logic for a single JSON string
 #[inline]
+#[allow(clippy::too_many_arguments)]
 fn process_single_json(
     json: &str,
     remove_empty_string_values: bool,
@@ -609,8 +780,7 @@ fn apply_key_replacements(
             let pattern = &chunk[0];
             let replacement = &chunk[1];
 
-            if pattern.starts_with("regex:") {
-                let regex_pattern = &pattern[6..]; // Remove "regex:" prefix
+            if let Some(regex_pattern) = pattern.strip_prefix("regex:") {
                 let regex = Regex::new(regex_pattern)?;
                 new_key = regex.replace_all(&new_key, replacement).to_string();
             } else {
@@ -646,8 +816,7 @@ fn apply_value_replacements(
                 let pattern = &chunk[0];
                 let replacement = &chunk[1];
 
-                if pattern.starts_with("regex:") {
-                    let regex_pattern = &pattern[6..]; // Remove "regex:" prefix
+                if let Some(regex_pattern) = pattern.strip_prefix("regex:") {
                     let regex = Regex::new(regex_pattern)?;
                     new_value = regex.replace_all(&new_value, replacement).to_string();
                 } else {
@@ -815,8 +984,7 @@ fn apply_key_replacements_optimized(
         let pattern = &chunk[0];
         let replacement = &chunk[1];
 
-        if pattern.starts_with("regex:") {
-            let regex_pattern = &pattern[6..];
+        if let Some(regex_pattern) = pattern.strip_prefix("regex:") {
             let regex = Regex::new(regex_pattern)?;
             compiled_patterns.push((Some(regex), replacement));
         } else {
@@ -892,8 +1060,7 @@ fn apply_value_replacements_optimized(
         let pattern = &chunk[0];
         let replacement = &chunk[1];
 
-        if pattern.starts_with("regex:") {
-            let regex_pattern = &pattern[6..];
+        if let Some(regex_pattern) = pattern.strip_prefix("regex:") {
             let regex = Regex::new(regex_pattern)?;
             compiled_patterns.push((Some(regex), replacement));
         } else {
@@ -978,16 +1145,16 @@ fn serialize_value_ultra_fast(value: &Value, result: &mut String) -> Result<(), 
             // Optimized number serialization
             if let Some(i) = n.as_i64() {
                 // Fast integer path
-                if i >= 0 && i < 10 {
+                if (0..10).contains(&i) {
                     // Ultra-fast path for single digits
                     result.push(char::from(b'0' + i as u8));
-                } else if i >= 0 && i < 100 {
+                } else if (0..100).contains(&i) {
                     // Fast path for two digits
                     let tens = i / 10;
                     let ones = i % 10;
                     result.push(char::from(b'0' + tens as u8));
                     result.push(char::from(b'0' + ones as u8));
-                } else if i >= 0 && i < 1000 {
+                } else if (0..1000).contains(&i) {
                     // Fast path for three digits
                     let hundreds = i / 100;
                     let tens = (i % 100) / 10;
@@ -1335,10 +1502,95 @@ fn flatten_value_ultra_optimized(
     }
 }
 
+// Helper function for tests that need the old parameter-based API
+#[cfg(test)]
+#[allow(clippy::too_many_arguments)]
+pub fn test_flatten_json_with_params<'a, T>(
+    json_input: T,
+    remove_empty_string_values: bool,
+    remove_null_values: bool,
+    remove_empty_dict: bool,
+    remove_empty_list: bool,
+    key_replacements: Option<Vec<(String, String)>>,
+    value_replacements: Option<Vec<(String, String)>>,
+    separator: Option<&str>,
+    lower_case_keys: bool,
+) -> Result<JsonOutput, Box<dyn Error>>
+where
+    T: Into<JsonInput<'a>>,
+{
+    let mut flattener = JsonFlattener::new()
+        .remove_empty_strings(remove_empty_string_values)
+        .remove_nulls(remove_null_values)
+        .remove_empty_objects(remove_empty_dict)
+        .remove_empty_arrays(remove_empty_list)
+        .lowercase_keys(lower_case_keys);
+
+    if let Some(sep) = separator {
+        flattener = flattener.separator(sep);
+    }
+
+    if let Some(key_reps) = key_replacements {
+        for (find, replace) in key_reps {
+            flattener = flattener.key_replacement(find, replace);
+        }
+    }
+
+    if let Some(val_reps) = value_replacements {
+        for (find, replace) in val_reps {
+            flattener = flattener.value_replacement(find, replace);
+        }
+    }
+
+    flattener.flatten(json_input)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::Value;
+
+    // Helper function for tests that need the old parameter-based API
+    #[allow(clippy::too_many_arguments)]
+    fn test_flatten_json_with_params<'a, T>(
+        json_input: T,
+        remove_empty_string_values: bool,
+        remove_null_values: bool,
+        remove_empty_dict: bool,
+        remove_empty_list: bool,
+        key_replacements: Option<Vec<(String, String)>>,
+        value_replacements: Option<Vec<(String, String)>>,
+        separator: Option<&str>,
+        lower_case_keys: bool,
+    ) -> Result<JsonOutput, Box<dyn Error>>
+    where
+        T: Into<JsonInput<'a>>,
+    {
+        let mut flattener = JsonFlattener::new()
+            .remove_empty_strings(remove_empty_string_values)
+            .remove_nulls(remove_null_values)
+            .remove_empty_objects(remove_empty_dict)
+            .remove_empty_arrays(remove_empty_list)
+            .lowercase_keys(lower_case_keys);
+
+        if let Some(sep) = separator {
+            flattener = flattener.separator(sep);
+        }
+
+        if let Some(key_reps) = key_replacements {
+            for (find, replace) in key_reps {
+                flattener = flattener.key_replacement(find, replace);
+            }
+        }
+
+        if let Some(val_reps) = value_replacements {
+            for (find, replace) in val_reps {
+                flattener = flattener.value_replacement(find, replace);
+            }
+        }
+
+        flattener.flatten(json_input)
+    }
 
     /// Helper function to check if we're running in GitHub Actions
     pub fn is_github_actions() -> bool {
@@ -1364,8 +1616,7 @@ mod tests {
     #[test]
     fn test_basic_flattening() {
         let json = r#"{"a": {"b": {"c": 1}}}"#;
-        let result =
-            flatten_json(json, false, false, false, false, None, None, None, false).unwrap();
+        let result = JsonFlattener::new().flatten(json).unwrap();
         let flattened = extract_single(result);
         let parsed: Value = serde_json::from_str(&flattened).unwrap();
 
@@ -1376,7 +1627,7 @@ mod tests {
     fn test_array_flattening() {
         let json = r#"{"items": [1, 2, {"nested": "value"}]}"#;
         let result =
-            flatten_json(json, false, false, false, false, None, None, None, false).unwrap();
+            test_flatten_json_with_params(json, false, false, false, false, None, None, None, false).unwrap();
         let flattened = extract_single(result);
         let parsed: Value = serde_json::from_str(&flattened).unwrap();
 
@@ -1391,7 +1642,7 @@ mod tests {
 
         // Test with lowercase conversion enabled
         let result =
-            flatten_json(json, false, false, false, false, None, None, None, true).unwrap();
+            test_flatten_json_with_params(json, false, false, false, false, None, None, None, true).unwrap();
         let flattened = extract_single(result);
         let parsed: Value = serde_json::from_str(&flattened).unwrap();
 
@@ -1403,7 +1654,7 @@ mod tests {
 
         // Test with lowercase conversion disabled
         let result =
-            flatten_json(json, false, false, false, false, None, None, None, false).unwrap();
+            test_flatten_json_with_params(json, false, false, false, false, None, None, None, false).unwrap();
         let flattened = extract_single(result);
         let parsed: Value = serde_json::from_str(&flattened).unwrap();
 
@@ -1420,7 +1671,7 @@ mod tests {
 
         // Apply regex replacement first, then lowercase
         let key_replacements = Some(vec![("regex:^(User|Admin)_".to_string(), "".to_string())]);
-        let result = flatten_json(
+        let result = test_flatten_json_with_params(
             json,
             false,
             false,
@@ -1446,7 +1697,7 @@ mod tests {
         let json =
             r#"{"numbers": [1, 2, 3], "strings": ["a", "b", "c"], "booleans": [true, false]}"#;
         let result =
-            flatten_json(json, false, false, false, false, None, None, None, false).unwrap();
+            test_flatten_json_with_params(json, false, false, false, false, None, None, None, false).unwrap();
         let flattened = extract_single(result);
         let parsed: Value = serde_json::from_str(&flattened).unwrap();
 
@@ -1469,7 +1720,7 @@ mod tests {
     fn test_array_of_objects() {
         let json = r#"{"users": [{"name": "John", "age": 30}, {"name": "Jane", "age": 25}]}"#;
         let result =
-            flatten_json(json, false, false, false, false, None, None, None, false).unwrap();
+            test_flatten_json_with_params(json, false, false, false, false, None, None, None, false).unwrap();
         let flattened = extract_single(result);
         let parsed: Value = serde_json::from_str(&flattened).unwrap();
 
@@ -1483,7 +1734,7 @@ mod tests {
     fn test_nested_arrays() {
         let json = r#"{"matrix": [[1, 2], [3, 4]], "deep": [[[5, 6]]]}"#;
         let result =
-            flatten_json(json, false, false, false, false, None, None, None, false).unwrap();
+            test_flatten_json_with_params(json, false, false, false, false, None, None, None, false).unwrap();
         let flattened = extract_single(result);
         let parsed: Value = serde_json::from_str(&flattened).unwrap();
 
@@ -1502,7 +1753,7 @@ mod tests {
     fn test_mixed_content_arrays() {
         let json = r#"{"mixed": [1, {"nested": "value"}, [2, 3], "string", null, true]}"#;
         let result =
-            flatten_json(json, false, false, false, false, None, None, None, false).unwrap();
+            test_flatten_json_with_params(json, false, false, false, false, None, None, None, false).unwrap();
         let flattened = extract_single(result);
         let parsed: Value = serde_json::from_str(&flattened).unwrap();
 
@@ -1521,7 +1772,7 @@ mod tests {
 
         // Test with empty arrays preserved
         let result =
-            flatten_json(json, false, false, false, false, None, None, None, false).unwrap();
+            test_flatten_json_with_params(json, false, false, false, false, None, None, None, false).unwrap();
         let flattened = extract_single(result);
         let parsed: Value = serde_json::from_str(&flattened).unwrap();
 
@@ -1536,7 +1787,7 @@ mod tests {
 
         // Test with empty arrays removed
         let result_filtered =
-            flatten_json(json, false, false, false, true, None, None, None, false).unwrap();
+            test_flatten_json_with_params(json, false, false, false, true, None, None, None, false).unwrap();
         let flattened_filtered = extract_single(result_filtered);
         let parsed_filtered: Value = serde_json::from_str(&flattened_filtered).unwrap();
 
@@ -1556,7 +1807,7 @@ mod tests {
 
         // Test with nulls preserved
         let result =
-            flatten_json(json, false, false, false, false, None, None, None, false).unwrap();
+            test_flatten_json_with_params(json, false, false, false, false, None, None, None, false).unwrap();
         let flattened = extract_single(result);
         let parsed: Value = serde_json::from_str(&flattened).unwrap();
 
@@ -1569,7 +1820,7 @@ mod tests {
 
         // Test with nulls removed
         let result_filtered =
-            flatten_json(json, false, true, false, false, None, None, None, false).unwrap();
+            test_flatten_json_with_params(json, false, true, false, false, None, None, None, false).unwrap();
         let flattened_filtered = extract_single(result_filtered);
         let parsed_filtered: Value = serde_json::from_str(&flattened_filtered).unwrap();
 
@@ -1591,7 +1842,7 @@ mod tests {
     fn test_deeply_nested_arrays() {
         let json = r#"{"level1": [{"level2": [{"level3": [1, 2, 3]}]}]}"#;
         let result =
-            flatten_json(json, false, false, false, false, None, None, None, false).unwrap();
+            test_flatten_json_with_params(json, false, false, false, false, None, None, None, false).unwrap();
         let flattened = extract_single(result);
         let parsed: Value = serde_json::from_str(&flattened).unwrap();
 
@@ -1611,7 +1862,7 @@ mod tests {
         let json = simd_json::serde::to_string(&json_value).unwrap();
 
         let result =
-            flatten_json(&json, false, false, false, false, None, None, None, false).unwrap();
+            test_flatten_json_with_params(&json, false, false, false, false, None, None, None, false).unwrap();
         let flattened = extract_single(result);
         let parsed: Value = serde_json::from_str(&flattened).unwrap();
 
@@ -1646,7 +1897,7 @@ mod tests {
         }"#;
 
         let result =
-            flatten_json(json, false, false, false, false, None, None, None, false).unwrap();
+            test_flatten_json_with_params(json, false, false, false, false, None, None, None, false).unwrap();
         let flattened = extract_single(result);
         let parsed: Value = serde_json::from_str(&flattened).unwrap();
 
@@ -1672,7 +1923,7 @@ mod tests {
             ]
         }"#;
 
-        let result = flatten_json(json, true, true, true, true, None, None, None, false).unwrap();
+        let result = test_flatten_json_with_params(json, true, true, true, true, None, None, None, false).unwrap();
         let flattened = extract_single(result);
         let parsed: Value = serde_json::from_str(&flattened).unwrap();
 
@@ -1700,7 +1951,7 @@ mod tests {
         }"#;
 
         let key_replacements = Some(vec![("user_".to_string(), "".to_string())]);
-        let result = flatten_json(
+        let result = test_flatten_json_with_params(
             json,
             false,
             false,
@@ -1738,7 +1989,7 @@ mod tests {
             ),
             ("inactive".to_string(), "disabled".to_string()),
         ]);
-        let result = flatten_json(
+        let result = test_flatten_json_with_params(
             json,
             false,
             false,
@@ -1764,7 +2015,7 @@ mod tests {
     fn test_root_level_array() {
         let json = r#"[1, 2, {"nested": "value"}, [4, 5]]"#;
         let result =
-            flatten_json(json, false, false, false, false, None, None, None, false).unwrap();
+            test_flatten_json_with_params(json, false, false, false, false, None, None, None, false).unwrap();
         let flattened = extract_single(result);
         let parsed: Value = serde_json::from_str(&flattened).unwrap();
 
@@ -1800,7 +2051,7 @@ mod tests {
 
         let start = std::time::Instant::now();
         let result =
-            flatten_json(&json, false, false, false, false, None, None, None, false).unwrap();
+            test_flatten_json_with_params(&json, false, false, false, false, None, None, None, false).unwrap();
         let duration = start.elapsed();
 
         let flattened = extract_single(result);
@@ -1844,7 +2095,7 @@ mod tests {
 
         // Test simple prefix removal
         let key_replacements = Some(vec![("regex:^user_".to_string(), "".to_string())]);
-        let result = flatten_json(
+        let result = test_flatten_json_with_params(
             json,
             false,
             false,
@@ -1874,7 +2125,7 @@ mod tests {
             "regex:^(user|admin)_(.+)".to_string(),
             "prefix_$1_$2".to_string(),
         )]);
-        let result = flatten_json(
+        let result = test_flatten_json_with_params(
             json,
             false,
             false,
@@ -1914,7 +2165,7 @@ mod tests {
             ("regex:^admin_".to_string(), "manager_".to_string()),
             ("regex:^(temp|old)_".to_string(), "legacy_".to_string()),
         ]);
-        let result = flatten_json(
+        let result = test_flatten_json_with_params(
             json,
             false,
             false,
@@ -1941,7 +2192,7 @@ mod tests {
 
         // Test regex that doesn't match any keys
         let key_replacements = Some(vec![("regex:^user_".to_string(), "person_".to_string())]);
-        let result = flatten_json(
+        let result = test_flatten_json_with_params(
             json,
             false,
             false,
@@ -1970,7 +2221,7 @@ mod tests {
             "regex:^field_(\\d+)_(.+)".to_string(),
             "$2_id_$1".to_string(),
         )]);
-        let result = flatten_json(
+        let result = test_flatten_json_with_params(
             json,
             false,
             false,
@@ -2007,7 +2258,7 @@ mod tests {
             "regex:@example\\.com".to_string(),
             "@company.org".to_string(),
         )]);
-        let result = flatten_json(
+        let result = test_flatten_json_with_params(
             json,
             false,
             false,
@@ -2036,7 +2287,7 @@ mod tests {
             "regex:\\+(\\d)-(\\d{3})-(\\d{3})-(\\d{4})".to_string(),
             "($2) $3-$4".to_string(),
         )]);
-        let result = flatten_json(
+        let result = test_flatten_json_with_params(
             json,
             false,
             false,
@@ -2068,7 +2319,7 @@ mod tests {
             ("regex:^inactive$".to_string(), "disabled".to_string()),
             ("regex:^\\+(\\d+)".to_string(), "INTL-$1".to_string()),
         ]);
-        let result = flatten_json(
+        let result = test_flatten_json_with_params(
             json,
             false,
             false,
@@ -2099,7 +2350,7 @@ mod tests {
             "@company.org".to_string(),
         )]);
 
-        let result = flatten_json(
+        let result = test_flatten_json_with_params(
             json,
             false,
             false,
@@ -2137,7 +2388,7 @@ mod tests {
             ("regex:inactive".to_string(), "disabled".to_string()),
         ]);
 
-        let result = flatten_json(
+        let result = test_flatten_json_with_params(
             json,
             false,
             false,
@@ -2173,7 +2424,7 @@ mod tests {
             ("regex:^active$".to_string(), "enabled".to_string()),    // Regex replacement
         ]);
 
-        let result = flatten_json(
+        let result = test_flatten_json_with_params(
             json,
             false,
             false,
@@ -2218,7 +2469,7 @@ mod tests {
             ),
         ]);
 
-        let result = flatten_json(
+        let result = test_flatten_json_with_params(
             json,
             false,
             false,
@@ -2247,7 +2498,7 @@ mod tests {
             "regex:[invalid".to_string(),
             "replacement".to_string(),
         )]);
-        let result = flatten_json(
+        let result = test_flatten_json_with_params(
             json,
             false,
             false,
@@ -2273,7 +2524,7 @@ mod tests {
             "regex:*invalid".to_string(),
             "replacement".to_string(),
         )]);
-        let result = flatten_json(
+        let result = test_flatten_json_with_params(
             json,
             false,
             false,
@@ -2296,7 +2547,7 @@ mod tests {
 
         // Test case-sensitive regex matching
         let key_replacements = Some(vec![("regex:^user_".to_string(), "person_".to_string())]);
-        let result = flatten_json(
+        let result = test_flatten_json_with_params(
             json,
             false,
             false,
@@ -2324,7 +2575,7 @@ mod tests {
             "regex:(?i)^user_".to_string(),
             "person_".to_string(),
         )]);
-        let result = flatten_json(
+        let result = test_flatten_json_with_params(
             json,
             false,
             false,
@@ -2361,7 +2612,7 @@ mod tests {
             "@company.org".to_string(),
         )]);
 
-        let result = flatten_json(
+        let result = test_flatten_json_with_params(
             &json_list[..],
             false,
             false,
@@ -2407,7 +2658,7 @@ mod tests {
             "@company.org".to_string(),
         )]);
 
-        let result = flatten_json(
+        let result = test_flatten_json_with_params(
             json,
             true,
             true,
@@ -2473,7 +2724,7 @@ mod tests {
         ]);
 
         let start = std::time::Instant::now();
-        let result = flatten_json(
+        let result = test_flatten_json_with_params(
             &json,
             false,
             false,
@@ -2549,7 +2800,7 @@ mod tests {
             ),
         ]);
 
-        let result = flatten_json(
+        let result = test_flatten_json_with_params(
             json,
             false,
             false,
@@ -2589,7 +2840,7 @@ mod tests {
             (", , , , ".to_string(), "".to_string()),
         ]);
 
-        let result = flatten_json(
+        let result = test_flatten_json_with_params(
             json,
             true,
             true,
@@ -2631,7 +2882,7 @@ mod tests {
             ("admin_".to_string(), "manager_".to_string()),
         ]);
 
-        let result = flatten_json(
+        let result = test_flatten_json_with_params(
             json,
             false,
             false,
@@ -2664,7 +2915,7 @@ mod tests {
             ("inactive".to_string(), "disabled".to_string()),
         ]);
 
-        let result = flatten_json(
+        let result = test_flatten_json_with_params(
             json,
             false,
             false,
@@ -2695,7 +2946,7 @@ mod tests {
             "@company.org".to_string(),
         )]);
 
-        let result = flatten_json(
+        let result = test_flatten_json_with_params(
             json,
             false,
             false,
@@ -2724,7 +2975,7 @@ mod tests {
             "@company.org".to_string(),
         )]);
 
-        let result = flatten_json(
+        let result = test_flatten_json_with_params(
             json,
             false,
             false,
@@ -2753,7 +3004,7 @@ mod tests {
             "session__pagetimesinms__".to_string(),
         )]);
 
-        let result = flatten_json(
+        let result = test_flatten_json_with_params(
             json,
             false,
             false,
@@ -2778,7 +3029,7 @@ mod tests {
     #[test]
     fn test_custom_separator_underscore() {
         let json = r#"{"user": {"profile": {"name": "John", "age": 30}}}"#;
-        let result = flatten_json(
+        let result = test_flatten_json_with_params(
             json,
             false,
             false,
@@ -2800,7 +3051,7 @@ mod tests {
     #[test]
     fn test_custom_separator_double_colon() {
         let json = r#"{"user": {"profile": {"name": "John", "age": 30}}}"#;
-        let result = flatten_json(
+        let result = test_flatten_json_with_params(
             json,
             false,
             false,
@@ -2822,7 +3073,7 @@ mod tests {
     #[test]
     fn test_custom_separator_slash() {
         let json = r#"{"user": {"profile": {"name": "John", "age": 30}}}"#;
-        let result = flatten_json(
+        let result = test_flatten_json_with_params(
             json,
             false,
             false,
@@ -2844,7 +3095,7 @@ mod tests {
     #[test]
     fn test_custom_separator_with_arrays() {
         let json = r#"{"items": [1, 2, {"nested": "value"}], "matrix": [[1, 2], [3, 4]]}"#;
-        let result = flatten_json(
+        let result = test_flatten_json_with_params(
             json,
             false,
             false,
@@ -2876,7 +3127,7 @@ mod tests {
                 {"name": "Jane", "contacts": {"email": "jane@example.com"}}
             ]
         }"#;
-        let result = flatten_json(
+        let result = test_flatten_json_with_params(
             json,
             false,
             false,
@@ -2901,7 +3152,7 @@ mod tests {
     fn test_custom_separator_with_filtering() {
         let json = r#"{"user": {"name": "John", "email": "", "age": null}}"#;
         let result =
-            flatten_json(json, true, true, false, false, None, None, Some("_"), false).unwrap();
+            test_flatten_json_with_params(json, true, true, false, false, None, None, Some("_"), false).unwrap();
         let flattened = extract_single(result);
         let parsed: Value = serde_json::from_str(&flattened).unwrap();
 
@@ -2919,7 +3170,7 @@ mod tests {
             "@company.org".to_string(),
         )]);
 
-        let result = flatten_json(
+        let result = test_flatten_json_with_params(
             json,
             false,
             false,
@@ -2944,7 +3195,7 @@ mod tests {
         let json2 = r#"{"product": {"id": 123}}"#;
 
         let json_list = vec![json1, json2];
-        let result = flatten_json(
+        let result = test_flatten_json_with_params(
             &json_list[..],
             false,
             false,
@@ -2972,7 +3223,7 @@ mod tests {
         let json = r#"{"a": {"b": 1}}"#;
 
         // Test empty separator
-        let result = flatten_json(
+        let result = test_flatten_json_with_params(
             json,
             false,
             false,
@@ -2989,7 +3240,7 @@ mod tests {
         assert_eq!(parsed["ab"], 1);
 
         // Test multi-character separator
-        let result = flatten_json(
+        let result = test_flatten_json_with_params(
             json,
             false,
             false,
@@ -3006,7 +3257,7 @@ mod tests {
         assert_eq!(parsed["a---b"], 1);
 
         // Test special character separator
-        let result = flatten_json(
+        let result = test_flatten_json_with_params(
             json,
             false,
             false,
@@ -3029,11 +3280,11 @@ mod tests {
 
         // Test with None (should use default ".")
         let result1 =
-            flatten_json(json, false, false, false, false, None, None, None, false).unwrap();
+            test_flatten_json_with_params(json, false, false, false, false, None, None, None, false).unwrap();
         let flattened1 = extract_single(result1);
 
         // Test with explicit "."
-        let result2 = flatten_json(
+        let result2 = test_flatten_json_with_params(
             json,
             false,
             false,
@@ -3071,7 +3322,7 @@ mod tests {
 
             // Run multiple iterations to get a stable measurement
             for _ in 0..1000 {
-                let result = flatten_json(
+                let result = test_flatten_json_with_params(
                     json,
                     false,
                     false,
@@ -3127,7 +3378,7 @@ mod tests {
 
             // Run multiple iterations for stable measurement
             for _ in 0..500 {
-                let result = flatten_json(
+                let result = test_flatten_json_with_params(
                     json,
                     false,
                     false,
@@ -3168,7 +3419,7 @@ mod tests {
         let common_separators = vec![".", "_", "::", "/", "-", "|"];
 
         for separator in common_separators {
-            let result = flatten_json(
+            let result = test_flatten_json_with_params(
                 json,
                 false,
                 false,
@@ -3210,7 +3461,7 @@ mod tests {
 
             // Multiple iterations to test capacity efficiency
             for _ in 0..100 {
-                let result = flatten_json(
+                let result = test_flatten_json_with_params(
                     json,
                     false,
                     false,
@@ -3254,7 +3505,7 @@ mod tests {
         // Test cached separator performance
         let start = std::time::Instant::now();
         for _ in 0..1000 {
-            let result = flatten_json(
+            let result = test_flatten_json_with_params(
                 json,
                 false,
                 false,
@@ -3274,7 +3525,7 @@ mod tests {
         // Test custom separator performance
         let start = std::time::Instant::now();
         for _ in 0..1000 {
-            let result = flatten_json(
+            let result = test_flatten_json_with_params(
                 json,
                 false,
                 false,
@@ -3350,7 +3601,7 @@ mod tests {
 
             // Run many iterations to measure compile-time optimization impact
             for _ in 0..1000 {
-                let result = flatten_json(
+                let result = test_flatten_json_with_params(
                     json,
                     false,
                     false,
@@ -3393,7 +3644,7 @@ mod tests {
         // Test with default separator (most optimized path)
         for _ in 0..500 {
             let result =
-                flatten_json(json, false, false, false, false, None, None, None, false).unwrap();
+                test_flatten_json_with_params(json, false, false, false, false, None, None, None, false).unwrap();
             let _flattened = extract_single(result);
         }
 
@@ -3417,7 +3668,7 @@ mod tests {
 
         // Verify the result is correct
         let result =
-            flatten_json(json, false, false, false, false, None, None, None, false).unwrap();
+            test_flatten_json_with_params(json, false, false, false, false, None, None, None, false).unwrap();
         let flattened = extract_single(result);
         let parsed: Value = serde_json::from_str(&flattened).unwrap();
 
@@ -3433,7 +3684,7 @@ mod tests {
     fn test_remove_null_values() {
         let json = r#"{"a": null, "b": "value", "c": {"d": null}}"#;
         let result =
-            flatten_json(json, false, true, false, false, None, None, None, false).unwrap();
+            test_flatten_json_with_params(json, false, true, false, false, None, None, None, false).unwrap();
         let flattened = extract_single(result);
         let parsed: Value = serde_json::from_str(&flattened).unwrap();
 
@@ -3446,7 +3697,7 @@ mod tests {
     fn test_remove_empty_strings() {
         let json = r#"{"a": "", "b": "value", "c": {"d": ""}}"#;
         let result =
-            flatten_json(json, true, false, false, false, None, None, None, false).unwrap();
+            test_flatten_json_with_params(json, true, false, false, false, None, None, None, false).unwrap();
         let flattened = extract_single(result);
         let parsed: Value = serde_json::from_str(&flattened).unwrap();
 
@@ -3459,7 +3710,7 @@ mod tests {
     fn test_remove_empty_objects() {
         let json = r#"{"a": {}, "b": "value", "c": {"d": {}}}"#;
         let result =
-            flatten_json(json, false, false, true, false, None, None, None, false).unwrap();
+            test_flatten_json_with_params(json, false, false, true, false, None, None, None, false).unwrap();
         let flattened = extract_single(result);
         let parsed: Value = serde_json::from_str(&flattened).unwrap();
 
@@ -3472,7 +3723,7 @@ mod tests {
     fn test_remove_empty_arrays() {
         let json = r#"{"a": [], "b": "value", "c": {"d": []}}"#;
         let result =
-            flatten_json(json, false, false, false, true, None, None, None, false).unwrap();
+            test_flatten_json_with_params(json, false, false, false, true, None, None, None, false).unwrap();
         let flattened = extract_single(result);
         let parsed: Value = serde_json::from_str(&flattened).unwrap();
 
@@ -3485,7 +3736,7 @@ mod tests {
     fn test_key_replacement_literal() {
         let json = r#"{"user_name": "John", "user_age": 30}"#;
         let key_replacements = Some(vec![("user_".to_string(), "".to_string())]);
-        let result = flatten_json(
+        let result = test_flatten_json_with_params(
             json,
             false,
             false,
@@ -3508,7 +3759,7 @@ mod tests {
     fn test_key_replacement_regex() {
         let json = r#"{"user_name": "John", "admin_role": "super"}"#;
         let key_replacements = Some(vec![("regex:^(user|admin)_".to_string(), "".to_string())]);
-        let result = flatten_json(
+        let result = test_flatten_json_with_params(
             json,
             false,
             false,
@@ -3531,7 +3782,7 @@ mod tests {
     fn test_value_replacement_literal() {
         let json = r#"{"status": "active", "mode": "active"}"#;
         let value_replacements = Some(vec![("active".to_string(), "enabled".to_string())]);
-        let result = flatten_json(
+        let result = test_flatten_json_with_params(
             json,
             false,
             false,
@@ -3557,7 +3808,7 @@ mod tests {
             "regex:@example\\.com".to_string(),
             "@company.org".to_string(),
         )]);
-        let result = flatten_json(
+        let result = test_flatten_json_with_params(
             json,
             false,
             false,
@@ -3579,7 +3830,7 @@ mod tests {
     #[test]
     fn test_complex_example() {
         let json = r#"{"user": {"name": "John", "details": {"age": null, "city": ""}}}"#;
-        let result = flatten_json(json, true, true, false, false, None, None, None, false).unwrap();
+        let result = test_flatten_json_with_params(json, true, true, false, false, None, None, None, false).unwrap();
         let flattened = extract_single(result);
         let parsed: Value = serde_json::from_str(&flattened).unwrap();
 
@@ -3594,7 +3845,7 @@ mod tests {
     #[test]
     fn test_invalid_json() {
         let json = r#"{"invalid": json}"#;
-        let result = flatten_json(json, false, false, false, false, None, None, None, false);
+        let result = test_flatten_json_with_params(json, false, false, false, false, None, None, None, false);
         assert!(result.is_err());
     }
 
@@ -3603,7 +3854,7 @@ mod tests {
         let json = r#"{"test": "value"}"#;
         // Test with empty tuple vector (should work fine)
         let key_replacements = Some(vec![]);
-        let result = flatten_json(
+        let result = test_flatten_json_with_params(
             json,
             false,
             false,
@@ -3665,14 +3916,11 @@ mod integration_tests {
     }
 
     #[test]
-    #[should_panic(
-        expected = "Skipping test that requires test_assets in GitHub Actions environment"
-    )]
     fn test_real_json_basic_flattening() {
         let json_content = load_test_file("test_0000.json");
 
         // Test basic flattening without any filters
-        let result = flatten_json(
+        let result = test_flatten_json_with_params(
             &json_content,
             false,
             false,
@@ -3702,14 +3950,11 @@ mod integration_tests {
     }
 
     #[test]
-    #[should_panic(
-        expected = "Skipping test that requires test_assets in GitHub Actions environment"
-    )]
     fn test_real_json_remove_empty_strings() {
         let json_content = load_test_file("test_0001.json");
 
         // Test with empty string removal
-        let result_with_empty = flatten_json(
+        let result_with_empty = test_flatten_json_with_params(
             &json_content,
             false,
             false,
@@ -3720,7 +3965,7 @@ mod integration_tests {
             None,
             false,
         );
-        let result_without_empty = flatten_json(
+        let result_without_empty = test_flatten_json_with_params(
             &json_content,
             true,
             false,
@@ -3750,14 +3995,11 @@ mod integration_tests {
     }
 
     #[test]
-    #[should_panic(
-        expected = "Skipping test that requires test_assets in GitHub Actions environment"
-    )]
     fn test_real_json_remove_null_values() {
         let json_content = load_test_file("test_0002.json");
 
         // Test with null value removal
-        let result_with_nulls = flatten_json(
+        let result_with_nulls = test_flatten_json_with_params(
             &json_content,
             false,
             false,
@@ -3768,7 +4010,7 @@ mod integration_tests {
             None,
             false,
         );
-        let result_without_nulls = flatten_json(
+        let result_without_nulls = test_flatten_json_with_params(
             &json_content,
             false,
             true,
@@ -3796,14 +4038,11 @@ mod integration_tests {
     }
 
     #[test]
-    #[should_panic(
-        expected = "Skipping test that requires test_assets in GitHub Actions environment"
-    )]
     fn test_real_json_remove_empty_objects() {
         let json_content = load_test_file("test_0003.json");
 
         // Test with empty object removal
-        let result_with_empty_objects = flatten_json(
+        let result_with_empty_objects = test_flatten_json_with_params(
             &json_content,
             false,
             false,
@@ -3814,7 +4053,7 @@ mod integration_tests {
             None,
             false,
         );
-        let result_without_empty_objects = flatten_json(
+        let result_without_empty_objects = test_flatten_json_with_params(
             &json_content,
             false,
             false,
@@ -3843,14 +4082,11 @@ mod integration_tests {
     }
 
     #[test]
-    #[should_panic(
-        expected = "Skipping test that requires test_assets in GitHub Actions environment"
-    )]
     fn test_real_json_remove_empty_arrays() {
         let json_content = load_test_file("test_0004.json");
 
         // Test with empty array removal
-        let result_with_empty_arrays = flatten_json(
+        let result_with_empty_arrays = test_flatten_json_with_params(
             &json_content,
             false,
             false,
@@ -3861,7 +4097,7 @@ mod integration_tests {
             None,
             false,
         );
-        let result_without_empty_arrays = flatten_json(
+        let result_without_empty_arrays = test_flatten_json_with_params(
             &json_content,
             false,
             false,
@@ -3889,14 +4125,11 @@ mod integration_tests {
     }
 
     #[test]
-    #[should_panic(
-        expected = "Skipping test that requires test_assets in GitHub Actions environment"
-    )]
     fn test_real_json_combined_filters() {
         let json_content = load_test_file("test_0005.json");
 
         // Test with all filters enabled
-        let result_no_filters = flatten_json(
+        let result_no_filters = test_flatten_json_with_params(
             &json_content,
             false,
             false,
@@ -3907,7 +4140,7 @@ mod integration_tests {
             None,
             false,
         );
-        let result_all_filters = flatten_json(
+        let result_all_filters = test_flatten_json_with_params(
             &json_content,
             true,
             true,
@@ -3935,9 +4168,6 @@ mod integration_tests {
     }
 
     #[test]
-    #[should_panic(
-        expected = "Skipping test that requires test_assets in GitHub Actions environment"
-    )]
     fn test_real_json_key_replacement() {
         let json_content = load_test_file("test_0006.json");
 
@@ -3947,7 +4177,7 @@ mod integration_tests {
             ("customerSession.".to_string(), "session.".to_string()),
         ]);
 
-        let result = flatten_json(
+        let result = test_flatten_json_with_params(
             &json_content,
             false,
             false,
@@ -3991,9 +4221,6 @@ mod integration_tests {
     }
 
     #[test]
-    #[should_panic(
-        expected = "Skipping test that requires test_assets in GitHub Actions environment"
-    )]
     fn test_real_json_regex_key_replacement() {
         let json_content = load_test_file("test_0007.json");
 
@@ -4003,7 +4230,7 @@ mod integration_tests {
             ("regex:\\d+hr$".to_string(), "hr".to_string()),
         ]);
 
-        let result = flatten_json(
+        let result = test_flatten_json_with_params(
             &json_content,
             false,
             false,
@@ -4041,9 +4268,6 @@ mod integration_tests {
     }
 
     #[test]
-    #[should_panic(
-        expected = "Skipping test that requires test_assets in GitHub Actions environment"
-    )]
     fn test_real_json_value_replacement() {
         let json_content = load_test_file("test_0008.json");
 
@@ -4053,7 +4277,7 @@ mod integration_tests {
             ("true".to_string(), "1".to_string()),
         ]);
 
-        let result = flatten_json(
+        let result = test_flatten_json_with_params(
             &json_content,
             false,
             false,
@@ -4086,15 +4310,12 @@ mod integration_tests {
     }
 
     #[test]
-    #[should_panic(
-        expected = "Skipping test that requires test_assets in GitHub Actions environment"
-    )]
     fn test_real_json_performance_large_file() {
         let json_content = load_test_file("test_0009.json");
 
         // Test performance with large real JSON file
         let start = std::time::Instant::now();
-        let result = flatten_json(
+        let result = test_flatten_json_with_params(
             &json_content,
             true,
             true,
@@ -4127,9 +4348,6 @@ mod integration_tests {
     }
 
     #[test]
-    #[should_panic(
-        expected = "Skipping test that requires test_assets in GitHub Actions environment"
-    )]
     fn test_real_json_edge_cases() {
         // Test with the largest file
         let json_content = load_test_file("test_0010.json");
@@ -4149,7 +4367,7 @@ mod integration_tests {
         for (remove_empty_strings, remove_nulls, remove_empty_objects, remove_empty_arrays) in
             test_cases
         {
-            let result = flatten_json(
+            let result = test_flatten_json_with_params(
                 &json_content,
                 remove_empty_strings,
                 remove_nulls,
@@ -4178,9 +4396,6 @@ mod integration_tests {
     }
 
     #[test]
-    #[should_panic(
-        expected = "Skipping test that requires test_assets in GitHub Actions environment"
-    )]
     fn test_real_json_complex_replacements() {
         let json_content = load_test_file("test_0000.json");
 
@@ -4201,7 +4416,7 @@ mod integration_tests {
             ("regex:@.*\\.com$".to_string(), "@company.com".to_string()), // Email domains
         ]);
 
-        let result = flatten_json(
+        let result = test_flatten_json_with_params(
             &json_content,
             true,
             true,
@@ -4238,9 +4453,6 @@ mod integration_tests {
     }
 
     #[test]
-    #[should_panic(
-        expected = "Skipping test that requires test_assets in GitHub Actions environment"
-    )]
     fn test_real_json_deep_nesting_analysis() {
         let json_content = load_test_file("test_0000.json");
 
@@ -4248,7 +4460,7 @@ mod integration_tests {
         let original: Value = serde_json::from_str(&json_content).unwrap();
 
         // Flatten and analyze the result
-        let result = flatten_json(
+        let result = test_flatten_json_with_params(
             &json_content,
             false,
             false,
@@ -4296,14 +4508,11 @@ mod integration_tests {
     }
 
     #[test]
-    #[should_panic(
-        expected = "Skipping test that requires test_assets in GitHub Actions environment"
-    )]
     fn test_real_json_array_handling() {
         let json_content = load_test_file("test_0001.json");
 
         // Test array flattening specifically
-        let result = flatten_json(
+        let result = test_flatten_json_with_params(
             &json_content,
             false,
             false,
@@ -4348,9 +4557,6 @@ mod integration_tests {
     }
 
     #[test]
-    #[should_panic(
-        expected = "Skipping test that requires test_assets in GitHub Actions environment"
-    )]
     fn test_real_json_memory_efficiency() {
         let json_content = load_test_file("test_0002.json");
 
@@ -4363,7 +4569,7 @@ mod integration_tests {
             .and_then(|s| s.trim().parse::<u64>().ok())
             .unwrap_or(0);
 
-        let result = flatten_json(
+        let result = test_flatten_json_with_params(
             &json_content,
             true,
             true,
@@ -4396,14 +4602,11 @@ mod integration_tests {
     }
 
     #[test]
-    #[should_panic(
-        expected = "Skipping test that requires test_assets in GitHub Actions environment"
-    )]
     fn test_real_json_special_characters() {
         let json_content = load_test_file("test_0003.json");
 
         // Test handling of special characters in keys and values
-        let result = flatten_json(
+        let result = test_flatten_json_with_params(
             &json_content,
             false,
             false,
@@ -4445,9 +4648,6 @@ mod integration_tests {
     }
 
     #[test]
-    #[should_panic(
-        expected = "Skipping test that requires test_assets in GitHub Actions environment"
-    )]
     fn test_real_json_comprehensive_benchmark() {
         // Test all files for performance and correctness
         let test_files = [
@@ -4471,7 +4671,7 @@ mod integration_tests {
             let json_content = load_test_file(filename);
 
             let start = std::time::Instant::now();
-            let result = flatten_json(
+            let result = test_flatten_json_with_params(
                 &json_content,
                 true,
                 true,
@@ -4511,9 +4711,6 @@ mod integration_tests {
     }
 
     #[test]
-    #[should_panic(
-        expected = "Skipping test that requires test_assets in GitHub Actions environment"
-    )]
     fn test_performance_profiling() {
         let json_content = load_test_file("test_0000.json");
 
@@ -4551,9 +4748,6 @@ mod integration_tests {
     }
 
     #[test]
-    #[should_panic(
-        expected = "Skipping test that requires test_assets in GitHub Actions environment"
-    )]
     fn test_performance_comparison() {
         let json_content = load_test_file("test_0000.json");
         let value: Value = serde_json::from_str(&json_content).unwrap();
@@ -4596,9 +4790,6 @@ mod integration_tests {
     }
 
     #[test]
-    #[should_panic(
-        expected = "Skipping test that requires test_assets in GitHub Actions environment"
-    )]
     fn test_detailed_performance_analysis() {
         let json_content = load_test_file("test_0000.json");
 
@@ -4655,15 +4846,12 @@ mod integration_tests {
     }
 
     #[test]
-    #[should_panic(
-        expected = "Skipping test that requires test_assets in GitHub Actions environment"
-    )]
     fn test_final_performance_summary() {
         let json_content = load_test_file("test_0000.json");
 
         // Test the complete optimized pipeline
         let start = std::time::Instant::now();
-        let result = flatten_json(
+        let result = test_flatten_json_with_params(
             &json_content,
             true,
             true,
@@ -4709,7 +4897,7 @@ mod integration_tests {
 
         // Test unified function with single input
         let result =
-            flatten_json(json, false, false, false, false, None, None, None, false).unwrap();
+            test_flatten_json_with_params(json, false, false, false, false, None, None, None, false).unwrap();
         let single_result = extract_single(result);
 
         let parsed: Value = serde_json::from_str(&single_result).unwrap();
@@ -4726,7 +4914,7 @@ mod integration_tests {
         let json_list = vec![json1, json2, json3];
 
         // Test unified function with multiple inputs
-        let result = flatten_json(
+        let result = test_flatten_json_with_params(
             &json_list[..],
             false,
             false,
@@ -4764,7 +4952,7 @@ mod integration_tests {
         let json2 = r#"{"x": {"y": 2}}"#;
 
         let json_list = vec![json1, json2];
-        let result = flatten_json(
+        let result = test_flatten_json_with_params(
             &json_list[..],
             false,
             false,
@@ -4793,7 +4981,7 @@ mod integration_tests {
         let json2 = r#"{"product": {"name": "Widget", "price": null, "category": ""}}"#;
 
         let json_list = vec![json1, json2];
-        let result = flatten_json(
+        let result = test_flatten_json_with_params(
             &json_list[..],
             true,
             true,
@@ -4837,7 +5025,7 @@ mod integration_tests {
             "@company.org".to_string(),
         )]);
 
-        let result = flatten_json(
+        let result = test_flatten_json_with_params(
             &json_list[..],
             false,
             false,
@@ -4871,7 +5059,7 @@ mod integration_tests {
         let json3 = r#"{"another": "valid"}"#;
 
         let json_list = vec![json1, json2, json3];
-        let result = flatten_json(
+        let result = test_flatten_json_with_params(
             &json_list[..],
             false,
             false,
@@ -4906,9 +5094,6 @@ mod integration_tests {
     }
 
     #[test]
-    #[should_panic(
-        expected = "Skipping test that requires test_assets in GitHub Actions environment"
-    )]
     fn test_unified_real_json_batch_processing() {
         let json_content1 = load_test_file("test_0000.json");
         let json_content2 = load_test_file("test_0001.json");
@@ -4916,7 +5101,7 @@ mod integration_tests {
         let json_list = vec![json_content1.as_str(), json_content2.as_str()];
 
         let start = std::time::Instant::now();
-        let result = flatten_json(
+        let result = test_flatten_json_with_params(
             &json_list[..],
             true,
             true,
@@ -4948,9 +5133,6 @@ mod integration_tests {
     }
 
     #[test]
-    #[should_panic(
-        expected = "Skipping test that requires test_assets in GitHub Actions environment"
-    )]
     fn test_order_of_operations_performance_impact() {
         use std::time::Instant;
 
@@ -4966,7 +5148,7 @@ mod integration_tests {
             )]);
             let value_replacements = Some(vec![("regex:^-$".to_string(), "".to_string())]);
 
-            let _ = flatten_json(
+            let _ = test_flatten_json_with_params(
                 &json_content,
                 true,  // remove_empty_string_values
                 true,  // remove_null_values
@@ -4984,7 +5166,7 @@ mod integration_tests {
         // Benchmark without replacements (baseline)
         let start = Instant::now();
         for _ in 0..iterations {
-            let _ = flatten_json(
+            let _ = test_flatten_json_with_params(
                 &json_content,
                 true,  // remove_empty_string_values
                 true,  // remove_null_values

@@ -1,4 +1,4 @@
-use json_tools_rs::{flatten_json, JsonOutput};
+use json_tools_rs::{flatten_json_with_params, JsonOutput};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Example from the requirements
@@ -15,7 +15,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ("@example.com".to_string(), "@company.org".to_string()), // Replace email domain
     ]);
 
-    let result = flatten_json(
+    let result = flatten_json_with_params(
         json_input,
         true,               // remove_empty_string_values
         true,               // remove_null_values

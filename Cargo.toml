@@ -25,7 +25,7 @@ path = "examples/basic_usage.rs"
 regex = "1.11.1"
 simd-json = { version = "0.15.1", features = ["serde_impl"] }
 serde_json = "1.0.141"
-pyo3 = { version = "0.21", features = ["extension-module"], optional = true }
+pyo3 = { version = "0.22", features = ["extension-module"], optional = true }
 
 [features]
 default = []
