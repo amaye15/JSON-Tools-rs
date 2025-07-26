@@ -1,17 +1,17 @@
 //! Python bindings for JSON Tools RS
 //!
 //! This module provides Python bindings for the JSON flattening functionality
-//! using PyO3. It exposes the `flatten_json` function and related types to Python.
+//! using PyO3. It exposes the `JsonFlattener` builder pattern API to Python.
 
 #[cfg(feature = "python")]
-use pyo3::exceptions::{PyRuntimeError, PyValueError};
+use pyo3::exceptions::PyValueError;
 #[cfg(feature = "python")]
 use pyo3::prelude::*;
 #[cfg(feature = "python")]
 use pyo3::types::PyModule;
 
 #[cfg(feature = "python")]
-use crate::{flatten_json_with_params as rust_flatten_json_with_params, JsonFlattener, FlattenError, JsonOutput};
+use crate::{JsonFlattener, JsonOutput};
 
 /// Python exception for JSON flattening errors
 #[cfg(feature = "python")]
@@ -21,23 +21,7 @@ pyo3::create_exception!(
     pyo3::exceptions::PyException
 );
 
-/// Convert Rust FlattenError to Python exception
-#[cfg(feature = "python")]
-fn flatten_error_to_py_err(err: &FlattenError) -> PyErr {
-    match err {
-        FlattenError::JsonParseError(e) => {
-            PyValueError::new_err(format!("JSON parse error: {}", e))
-        }
-        FlattenError::RegexError(e) => PyValueError::new_err(format!("Regex error: {}", e)),
-        FlattenError::InvalidReplacementPattern(msg) => {
-            PyValueError::new_err(format!("Invalid replacement pattern: {}", msg))
-        }
-        FlattenError::BatchError { index, error } => PyRuntimeError::new_err(format!(
-            "Error processing JSON at index {}: {}",
-            index, error
-        )),
-    }
-}
+
 
 /// Python wrapper for JsonOutput enum
 #[cfg(feature = "python")]
@@ -120,143 +104,59 @@ impl PyJsonOutput {
     }
 }
 
-/// Flatten JSON with comprehensive options
-///
-/// Args:
-///     json_input: JSON string or list of JSON strings to flatten
-///     remove_empty_string_values: Remove keys with empty string values
-///     remove_null_values: Remove keys with null values
-///     remove_empty_dict: Remove keys with empty object values
-///     remove_empty_list: Remove keys with empty array values
-///     key_replacements: List of (old, new) tuples for key replacements
-///     value_replacements: List of (old, new) tuples for value replacements
-///     separator: Custom separator for flattened keys (default: ".")
-///     lower_case_keys: Convert all keys to lowercase (default: False)
-///
-/// Returns:
-///     JsonOutput: Object containing flattened JSON result(s)
-///
-/// Raises:
-///     JsonFlattenError: If JSON parsing or processing fails
-///     ValueError: If arguments are invalid
-///
-/// Examples:
-///     >>> result = flatten_json_with_params('{"a": {"b": 1}}')
-///     >>> result.get_single()
-///     '{"a.b": 1}'
-///
-///     >>> result = flatten_json_with_params('{"User": {"Name": "John"}}', lower_case_keys=True)
-///     >>> result.get_single()
-///     '{"user.name": "John"}'
-///
-///     >>> result = flatten_json_with_params(['{"a": 1}', '{"b": 2}'])
-///     >>> result.get_multiple()
-///     ['{"a": 1}', '{"b": 2}']
-#[cfg(feature = "python")]
-#[pyfunction]
-#[pyo3(signature = (
-    json_input,
-    remove_empty_string_values = false,
-    remove_null_values = false,
-    remove_empty_dict = false,
-    remove_empty_list = false,
-    key_replacements = None,
-    value_replacements = None,
-    separator = None,
-    lower_case_keys = false
-))]
-pub fn flatten_json_with_params(
-    json_input: &Bound<'_, PyAny>,
-    remove_empty_string_values: bool,
-    remove_null_values: bool,
-    remove_empty_dict: bool,
-    remove_empty_list: bool,
-    key_replacements: Option<Vec<(String, String)>>,
-    value_replacements: Option<Vec<(String, String)>>,
-    separator: Option<&str>,
-    lower_case_keys: bool,
-) -> PyResult<PyJsonOutput> {
-    // Handle different input types
-    if let Ok(json_str) = json_input.extract::<String>() {
-        // Single JSON string
-        let result = rust_flatten_json_with_params(
-            json_str.as_str(),
-            remove_empty_string_values,
-            remove_null_values,
-            remove_empty_dict,
-            remove_empty_list,
-            key_replacements,
-            value_replacements,
-            separator,
-            lower_case_keys,
-        )
-        .map_err(|e| {
-            if let Some(flatten_err) = e.downcast_ref::<FlattenError>() {
-                flatten_error_to_py_err(flatten_err)
-            } else if let Some(json_err) = e.downcast_ref::<simd_json::Error>() {
-                PyValueError::new_err(format!("JSON parse error: {}", json_err))
-            } else {
-                PyRuntimeError::new_err(format!("Unknown error: {}", e))
-            }
-        })?;
 
-        Ok(PyJsonOutput::from(result))
-    } else if let Ok(json_list) = json_input.extract::<Vec<String>>() {
-        // Multiple JSON strings
-        let json_refs: Vec<&str> = json_list.iter().map(|s| s.as_str()).collect();
-        let result = rust_flatten_json_with_params(
-            &json_refs[..],
-            remove_empty_string_values,
-            remove_null_values,
-            remove_empty_dict,
-            remove_empty_list,
-            key_replacements,
-            value_replacements,
-            separator,
-            lower_case_keys,
-        )
-        .map_err(|e| {
-            if let Some(flatten_err) = e.downcast_ref::<FlattenError>() {
-                flatten_error_to_py_err(flatten_err)
-            } else if let Some(json_err) = e.downcast_ref::<simd_json::Error>() {
-                PyValueError::new_err(format!("JSON parse error: {}", json_err))
-            } else {
-                PyRuntimeError::new_err(format!("Unknown error: {}", e))
-            }
-        })?;
 
-        Ok(PyJsonOutput::from(result))
-    } else {
-        Err(PyValueError::new_err(
-            "json_input must be a string or list of strings",
-        ))
-    }
-}
-
-/// Python JsonFlattener class with builder pattern
+/// Python JsonFlattener class - the unified API for JSON flattening
 ///
-/// This provides the same fluent builder API as the Rust version.
+/// This is the single entry point for all JSON flattening operations in Python.
+/// It provides a fluent builder pattern API that matches the Rust implementation.
+/// The flatten() method accepts various Python types and returns matching output types.
+///
+/// # Input/Output Type Mapping
+/// - str input → str output (JSON string)
+/// - dict input → dict output (Python dictionary)
+/// - list[str] input → list[str] output (list of JSON strings)
+/// - list[dict] input → list[dict] output (list of Python dictionaries)
+/// - Mixed list preserves original types in output
 ///
 /// # Examples
 ///
 /// ```python
 /// import json_tools_rs
 ///
-/// # Basic usage
+/// # JSON string input → JSON string output
 /// result = json_tools_rs.JsonFlattener().flatten('{"a": {"b": 1}}')
+/// print(result)  # '{"a.b": 1}' (string)
+/// print(type(result))  # <class 'str'>
 ///
-/// # Builder pattern
-/// result = (json_tools_rs.JsonFlattener()
+/// # Python dict input → Python dict output (more convenient!)
+/// result = json_tools_rs.JsonFlattener().flatten({"a": {"b": 1}})
+/// print(result)  # {'a.b': 1} (dict)
+/// print(type(result))  # <class 'dict'>
+///
+/// # Advanced configuration with builder pattern
+/// flattener = (json_tools_rs.JsonFlattener()
 ///     .remove_empty_strings(True)
 ///     .remove_nulls(True)
 ///     .separator("_")
 ///     .lowercase_keys(True)
 ///     .key_replacement("regex:^user_", "")
-///     .value_replacement("@example.com", "@company.org")
-///     .flatten(json))
+///     .value_replacement("@example.com", "@company.org"))
+///
+/// result = flattener.flatten({"user_name": "john@example.com"})
+/// print(result)  # {"name": "john@company.org"} (dict)
+///
+/// # Batch processing with type preservation
+/// str_list = ['{"a": 1}', '{"b": 2}']
+/// results = json_tools_rs.JsonFlattener().flatten(str_list)
+/// print(results)  # ['{"a": 1}', '{"b": 2}'] (list of strings)
+///
+/// dict_list = [{"a": 1}, {"b": 2}]
+/// results = json_tools_rs.JsonFlattener().flatten(dict_list)
+/// print(results)  # [{'a': 1}, {'b': 2}] (list of dicts)
 /// ```
 #[cfg(feature = "python")]
-#[pyclass]
+#[pyclass(name = "JsonFlattener")]
 pub struct PyJsonFlattener {
     inner: JsonFlattener,
 }
@@ -338,56 +238,217 @@ impl PyJsonFlattener {
     /// Flatten the JSON input
     ///
     /// # Arguments
-    /// * `json_input` - JSON input as string or list of strings
+    /// * `json_input` - JSON input as:
+    ///   - str: JSON string
+    ///   - dict: Python dictionary (will be serialized to JSON)
+    ///   - list[str]: List of JSON strings
+    ///   - list[dict]: List of Python dictionaries (will be serialized to JSON)
     ///
     /// # Returns
-    /// * `PyJsonOutput` - Single flattened JSON string or multiple results
-    pub fn flatten(&self, json_input: &Bound<'_, PyAny>) -> PyResult<PyJsonOutput> {
-        // Handle different input types
+    /// * str input → str output (flattened JSON string)
+    /// * dict input → dict output (flattened Python dictionary)
+    /// * list[str] input → list[str] output (list of flattened JSON strings)
+    /// * list[dict] input → list[dict] output (list of flattened Python dictionaries)
+    pub fn flatten(&self, json_input: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        let py = json_input.py();
+        let json_module = py.import_bound("json")?;
+
+        // Try to handle as single input first
+        if let Ok(json_str) = json_input.extract::<String>() {
+            // Single JSON string → return JSON string
+            let result = self.inner.clone().flatten(json_str.as_str())
+                .map_err(|e| JsonFlattenError::new_err(format!("Failed to flatten JSON string: {}", e)))?;
+
+            match result {
+                JsonOutput::Single(flattened) => Ok(flattened.to_object(py)),
+                JsonOutput::Multiple(_) => Err(PyValueError::new_err(
+                    "Unexpected multiple results for single JSON input"
+                )),
+            }
+        } else if json_input.is_instance_of::<pyo3::types::PyDict>() {
+            // Single Python dictionary → return Python dictionary
+            let json_str: String = json_module
+                .getattr("dumps")?
+                .call1((json_input,))?
+                .extract()?;
+
+            let result = self.inner.clone().flatten(json_str.as_str())
+                .map_err(|e| JsonFlattenError::new_err(format!("Failed to flatten Python dict: {}", e)))?;
+
+            match result {
+                JsonOutput::Single(flattened) => {
+                    // Parse the flattened JSON string back to a Python dict
+                    let flattened_dict = json_module
+                        .getattr("loads")?
+                        .call1((flattened,))?;
+                    Ok(flattened_dict.to_object(py))
+                },
+                JsonOutput::Multiple(_) => Err(PyValueError::new_err(
+                    "Unexpected multiple results for single dict input"
+                )),
+            }
+        } else if json_input.is_instance_of::<pyo3::types::PyList>() {
+            // Handle list input - could be list[str] or list[dict]
+            let list = json_input.downcast::<pyo3::types::PyList>()?;
+            let mut json_strings = Vec::new();
+            let mut input_types = Vec::new(); // Track whether each item was str or dict
+
+            for item in list.iter() {
+                if let Ok(json_str) = item.extract::<String>() {
+                    // Item is a JSON string
+                    json_strings.push(json_str);
+                    input_types.push("str");
+                } else if item.is_instance_of::<pyo3::types::PyDict>() {
+                    // Item is a Python dictionary - serialize to JSON
+                    let json_str: String = json_module
+                        .getattr("dumps")?
+                        .call1((item,))?
+                        .extract()?;
+                    json_strings.push(json_str);
+                    input_types.push("dict");
+                } else {
+                    return Err(PyValueError::new_err(
+                        "List items must be either JSON strings or Python dictionaries"
+                    ));
+                }
+            }
+
+            // Process the list of JSON strings
+            let json_refs: Vec<&str> = json_strings.iter().map(|s| s.as_str()).collect();
+            let result = self.inner.clone().flatten(&json_refs[..])
+                .map_err(|e| JsonFlattenError::new_err(format!("Failed to flatten JSON list: {}", e)))?;
+
+            match result {
+                JsonOutput::Single(_) => Err(PyValueError::new_err(
+                    "Unexpected single result for multiple input"
+                )),
+                JsonOutput::Multiple(flattened_list) => {
+                    // Determine output type based on input types
+                    let all_strings = input_types.iter().all(|&t| t == "str");
+                    let all_dicts = input_types.iter().all(|&t| t == "dict");
+
+                    if all_strings {
+                        // list[str] input → list[str] output
+                        Ok(flattened_list.to_object(py))
+                    } else if all_dicts {
+                        // list[dict] input → list[dict] output
+                        let mut dict_results = Vec::new();
+                        for flattened_json in flattened_list {
+                            let dict_result = json_module
+                                .getattr("loads")?
+                                .call1((flattened_json,))?;
+                            dict_results.push(dict_result);
+                        }
+                        Ok(dict_results.to_object(py))
+                    } else {
+                        // Mixed input → preserve original types
+                        let mut mixed_results = Vec::new();
+                        for (flattened_json, &input_type) in flattened_list.iter().zip(input_types.iter()) {
+                            if input_type == "str" {
+                                mixed_results.push(flattened_json.to_object(py));
+                            } else {
+                                let dict_result = json_module
+                                    .getattr("loads")?
+                                    .call1((flattened_json,))?;
+                                mixed_results.push(dict_result.to_object(py));
+                            }
+                        }
+                        Ok(mixed_results.to_object(py))
+                    }
+                }
+            }
+        } else {
+            Err(PyValueError::new_err(
+                "json_input must be a JSON string, Python dict, list of JSON strings, or list of Python dicts"
+            ))
+        }
+    }
+
+    /// Flatten the JSON input and return a JsonOutput object
+    ///
+    /// This method returns the full JsonOutput object for advanced use cases
+    /// where you need to check the result type or handle both single and multiple
+    /// results in a unified way.
+    ///
+    /// # Arguments
+    /// * `json_input` - JSON input as:
+    ///   - str: JSON string
+    ///   - dict: Python dictionary (will be serialized to JSON)
+    ///   - list[str]: List of JSON strings
+    ///   - list[dict]: List of Python dictionaries (will be serialized to JSON)
+    ///
+    /// # Returns
+    /// * `PyJsonOutput` - JsonOutput object with is_single/is_multiple methods
+    pub fn flatten_to_output(&self, json_input: &Bound<'_, PyAny>) -> PyResult<PyJsonOutput> {
+        let py = json_input.py();
+
+        // Try to handle as single input first
         if let Ok(json_str) = json_input.extract::<String>() {
             // Single JSON string
             let result = self.inner.clone().flatten(json_str.as_str())
-                .map_err(|e| JsonFlattenError::new_err(format!("Failed to flatten JSON: {}", e)))?;
+                .map_err(|e| JsonFlattenError::new_err(format!("Failed to flatten JSON string: {}", e)))?;
             Ok(PyJsonOutput::from_rust_output(result))
-        } else if let Ok(json_list) = json_input.extract::<Vec<String>>() {
-            // List of JSON strings
-            let json_refs: Vec<&str> = json_list.iter().map(|s| s.as_str()).collect();
+        } else if json_input.is_instance_of::<pyo3::types::PyDict>() {
+            // Single Python dictionary - serialize to JSON first
+            let json_module = py.import_bound("json")?;
+            let json_str: String = json_module
+                .getattr("dumps")?
+                .call1((json_input,))?
+                .extract()?;
+
+            let result = self.inner.clone().flatten(json_str.as_str())
+                .map_err(|e| JsonFlattenError::new_err(format!("Failed to flatten Python dict: {}", e)))?;
+            Ok(PyJsonOutput::from_rust_output(result))
+        } else if json_input.is_instance_of::<pyo3::types::PyList>() {
+            // Handle list input - could be list[str] or list[dict]
+            let list = json_input.downcast::<pyo3::types::PyList>()?;
+            let mut json_strings = Vec::new();
+
+            for item in list.iter() {
+                if let Ok(json_str) = item.extract::<String>() {
+                    // Item is a JSON string
+                    json_strings.push(json_str);
+                } else if item.is_instance_of::<pyo3::types::PyDict>() {
+                    // Item is a Python dictionary - serialize to JSON
+                    let json_module = py.import_bound("json")?;
+                    let json_str: String = json_module
+                        .getattr("dumps")?
+                        .call1((item,))?
+                        .extract()?;
+                    json_strings.push(json_str);
+                } else {
+                    return Err(PyValueError::new_err(
+                        "List items must be either JSON strings or Python dictionaries"
+                    ));
+                }
+            }
+
+            // Process the list of JSON strings
+            let json_refs: Vec<&str> = json_strings.iter().map(|s| s.as_str()).collect();
             let result = self.inner.clone().flatten(&json_refs[..])
                 .map_err(|e| JsonFlattenError::new_err(format!("Failed to flatten JSON list: {}", e)))?;
             Ok(PyJsonOutput::from_rust_output(result))
         } else {
             Err(PyValueError::new_err(
-                "json_input must be a string or list of strings",
+                "json_input must be a JSON string, Python dict, list of JSON strings, or list of Python dicts"
             ))
         }
     }
 }
 
-/// Convenience function for simple JSON flattening with default settings
-///
-/// For more advanced configuration, use `JsonFlattener()` with the builder pattern.
-///
-/// # Examples
-///
-/// ```python
-/// import json_tools_rs
-///
-/// result = json_tools_rs.flatten_json('{"user": {"name": "John"}}')
-/// ```
-#[cfg(feature = "python")]
-#[pyfunction]
-pub fn flatten_json(json_input: &Bound<'_, PyAny>) -> PyResult<PyJsonOutput> {
-    PyJsonFlattener::new().flatten(json_input)
-}
+
 
 /// Python module definition
 #[cfg(feature = "python")]
 #[pymodule]
 fn json_tools_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    // Add the main JsonFlattener class
     m.add_class::<PyJsonFlattener>()?;
-    m.add_function(wrap_pyfunction!(flatten_json, m)?)?;
-    m.add_function(wrap_pyfunction!(flatten_json_with_params, m)?)?;
+
+    // Add the JsonOutput class for results
     m.add_class::<PyJsonOutput>()?;
+
+    // Add the custom exception
     m.add("JsonFlattenError", m.py().get_type_bound::<JsonFlattenError>())?;
 
     // Add module metadata
@@ -395,7 +456,7 @@ fn json_tools_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("__author__", "JSON Tools RS Contributors")?;
     m.add(
         "__description__",
-        "Python bindings for JSON Tools RS - Advanced JSON manipulation library",
+        "Python bindings for JSON Tools RS - Advanced JSON manipulation library with unified JsonFlattener API",
     )?;
 
     Ok(())

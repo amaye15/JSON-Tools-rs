@@ -30,3 +30,4 @@ pyo3 = { version = "0.22", features = ["extension-module"], optional = true }
 [features]
 default = []
 python = ["pyo3"]
+test-assets-performance = []

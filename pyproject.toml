@@ -4,13 +4,13 @@ build-backend = "maturin"
 
 [project]
 name = "json-tools-rs"
-description = "Python bindings for JSON Tools RS - Advanced JSON manipulation library"
+description = "High-performance JSON manipulation library with unified JsonFlattener API and SIMD-accelerated parsing"
 readme = "README.md"
 license = {text = "MIT OR Apache-2.0"}
 authors = [
     {name = "JSON Tools RS Contributors"},
 ]
-keywords = ["json", "flatten", "manipulation", "parsing", "rust"]
+keywords = ["json", "flatten", "manipulation", "parsing", "rust", "simd", "performance"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
@@ -33,15 +33,16 @@ requires-python = ">=3.8"
 dynamic = ["version"]
 
 [project.urls]
-Homepage = "https://github.com/your-username/json-tools-rs"
-Repository = "https://github.com/your-username/json-tools-rs"
-Documentation = "https://github.com/your-username/json-tools-rs#readme"
-"Bug Tracker" = "https://github.com/your-username/json-tools-rs/issues"
+Homepage = "https://github.com/amaye15/JSON-Tools-rs"
+Repository = "https://github.com/amaye15/JSON-Tools-rs"
+Documentation = "https://github.com/amaye15/JSON-Tools-rs#readme"
+"Bug Tracker" = "https://github.com/amaye15/JSON-Tools-rs/issues"
 
 [tool.maturin]
-features = ["pyo3/extension-module", "python"]
+features = ["python"]
 python-source = "python"
 module-name = "json_tools_rs"
+strip = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

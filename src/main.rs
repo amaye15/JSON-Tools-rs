@@ -1,20 +1,20 @@
-use json_tools_rs::{flatten_json, JsonFlattener, JsonOutput};
+use json_tools_rs::{JsonFlattener, JsonOutput};
 
 fn main() {
     println!("JSON Tools RS - JsonFlattener Builder API Examples\n");
 
-    // Example 1: Basic flattening with simple function
-    println!("Example 1: Basic flattening (Simple Function)");
+    // Example 1: Basic flattening with JsonFlattener
+    println!("Example 1: Basic flattening (JsonFlattener)");
     let json1 =
         r#"{"user": {"profile": {"name": "John", "age": 30}, "settings": {"theme": "dark"}}}"#;
-    match flatten_json(json1) {
+    match JsonFlattener::new().flatten(json1) {
         Ok(JsonOutput::Single(result)) => println!("Input:  {}\nOutput: {}\n", json1, result),
         Ok(JsonOutput::Multiple(_)) => println!("Unexpected multiple results\n"),
         Err(e) => eprintln!("Error: {}\n", e),
     }
 
-    // Example 2: Using JsonFlattener builder pattern
-    println!("Example 2: JsonFlattener Builder Pattern");
+    // Example 2: Using JsonFlattener builder pattern with filtering
+    println!("Example 2: JsonFlattener Builder Pattern with Filtering");
     let json2 = r#"{"user": {"name": "John", "details": {"age": null, "city": "", "tags": []}}}"#;
     match JsonFlattener::new()
         .remove_empty_strings(true)

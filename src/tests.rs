@@ -1,4 +1,7 @@
 
+use crate::{JsonFlattener, JsonInput, JsonOutput};
+use std::error::Error;
+
 // Helper function for tests that need the old parameter-based API
 #[cfg(test)]
 #[allow(clippy::too_many_arguments)]
@@ -3207,140 +3210,11 @@ mod integration_tests {
         assert!(total_keys_processed > 0, "Should have processed some keys");
     }
 
-    #[test]
-    fn test_performance_profiling() {
-        let json_content = load_test_file("test_0000.json");
 
-        // Profile each step individually
-        let start = std::time::Instant::now();
-        let value: Value = serde_json::from_str(&json_content).unwrap();
-        let parse_time = start.elapsed();
 
-        let start = std::time::Instant::now();
-        let estimated_capacity = estimate_flattened_size(&value);
-        let mut flattened = HashMap::with_capacity(estimated_capacity);
-        flatten_value_optimized(&value, &mut String::new(), &mut flattened);
-        let flatten_time = start.elapsed();
 
-        let start = std::time::Instant::now();
-        flattened.retain(|_, v| !v.is_null() && !(v.is_string() && v.as_str().unwrap_or("") == ""));
-        let filter_time = start.elapsed();
 
-        let start = std::time::Instant::now();
-        let result_map: Map<String, Value> = flattened.into_iter().collect();
-        let result = Value::Object(result_map);
-        let _final_json = simd_json::serde::to_string(&result).unwrap();
-        let serialize_time = start.elapsed();
 
-        println!("Performance breakdown (optimized):");
-        println!("  Parse JSON: {:?}", parse_time);
-        println!("  Flatten: {:?}", flatten_time);
-        println!("  Filter: {:?}", filter_time);
-        println!("  Serialize: {:?}", serialize_time);
-        println!(
-            "  Total: {:?}",
-            parse_time + flatten_time + filter_time + serialize_time
-        );
-        println!("  Estimated capacity: {}", estimated_capacity);
-    }
-
-    #[test]
-    fn test_performance_comparison() {
-        let json_content = load_test_file("test_0000.json");
-        let value: Value = serde_json::from_str(&json_content).unwrap();
-
-        // Test legacy implementation
-        let start = std::time::Instant::now();
-        let mut flattened_legacy = HashMap::new();
-        flatten_value(&value, String::new(), &mut flattened_legacy);
-        let legacy_time = start.elapsed();
-
-        // Test optimized implementation
-        let start = std::time::Instant::now();
-        let estimated_capacity = estimate_flattened_size(&value);
-        let mut flattened_optimized = HashMap::with_capacity(estimated_capacity);
-        flatten_value_optimized(&value, &mut String::new(), &mut flattened_optimized);
-        let optimized_time = start.elapsed();
-
-        // Verify results are identical
-        assert_eq!(flattened_legacy.len(), flattened_optimized.len());
-        for (key, value) in &flattened_legacy {
-            assert_eq!(flattened_optimized.get(key), Some(value));
-        }
-
-        let improvement = (legacy_time.as_nanos() as f64 - optimized_time.as_nanos() as f64)
-            / legacy_time.as_nanos() as f64
-            * 100.0;
-
-        println!("Performance comparison:");
-        println!("  Legacy flatten: {:?}", legacy_time);
-        println!("  Optimized flatten: {:?}", optimized_time);
-        println!("  Improvement: {:.1}%", improvement);
-        println!("  Keys processed: {}", flattened_optimized.len());
-
-        // Verify we have a meaningful improvement (allow for performance variance)
-        // Sometimes the optimized version may not be faster in single runs due to variance
-        println!(
-            "Performance comparison completed - improvement: {:.1}%",
-            improvement
-        );
-    }
-
-    #[test]
-    fn test_detailed_performance_analysis() {
-        let json_content = load_test_file("test_0000.json");
-
-        // Profile serialization bottleneck in detail
-        let start = std::time::Instant::now();
-        let value: Value = serde_json::from_str(&json_content).unwrap();
-        let parse_time = start.elapsed();
-
-        let start = std::time::Instant::now();
-        let estimated_capacity = estimate_flattened_size(&value);
-        let mut flattened = HashMap::with_capacity(estimated_capacity);
-        flatten_value_optimized(&value, &mut String::new(), &mut flattened);
-        let flatten_time = start.elapsed();
-
-        // Test different serialization approaches
-        let start = std::time::Instant::now();
-        let result_map: Map<String, Value> = flattened
-            .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect();
-        let collect_time = start.elapsed();
-
-        let start = std::time::Instant::now();
-        let result = Value::Object(result_map);
-        let object_creation_time = start.elapsed();
-
-        let start = std::time::Instant::now();
-        let _final_json = simd_json::serde::to_string(&result).unwrap();
-        let serialize_time = start.elapsed();
-
-        println!("Detailed performance analysis:");
-        println!("  Parse JSON: {:?}", parse_time);
-        println!("  Flatten: {:?}", flatten_time);
-        println!("  Collect to Map: {:?}", collect_time);
-        println!("  Create Object: {:?}", object_creation_time);
-        println!("  Serialize: {:?}", serialize_time);
-        println!(
-            "  Total serialization: {:?}",
-            collect_time + object_creation_time + serialize_time
-        );
-
-        // Test fast serialization
-        let start = std::time::Instant::now();
-        let _fast_json = serialize_flattened_fast(&flattened).unwrap();
-        let fast_serialize_time = start.elapsed();
-
-        println!("  Fast serialize: {:?}", fast_serialize_time);
-
-        let improvement = (serialize_time.as_nanos() as f64
-            - fast_serialize_time.as_nanos() as f64)
-            / serialize_time.as_nanos() as f64
-            * 100.0;
-        println!("  Serialization improvement: {:.1}%", improvement);
-    }
 
     #[test]
     fn test_final_performance_summary() {
@@ -3706,5 +3580,223 @@ mod integration_tests {
         // Ensure the test completes successfully - the main goal is functionality verification
         assert!(time_with_replacements.as_millis() > 0);
         assert!(time_without_replacements.as_millis() > 0);
+    }
+
+    /// Comprehensive performance test for test_assets/ directory
+    /// This test is optional and can be enabled with the "test-assets-performance" feature
+    /// Run with: cargo test --features test-assets-performance -- --nocapture test_assets_performance
+    #[test]
+    #[cfg(feature = "test-assets-performance")]
+    fn test_assets_performance_comprehensive() {
+        use std::time::Instant;
+
+        println!("=== TEST ASSETS COMPREHENSIVE PERFORMANCE BENCHMARK ===");
+        println!();
+
+        let test_files = [
+            "test_0000.json", "test_0001.json", "test_0002.json", "test_0003.json",
+            "test_0004.json", "test_0005.json", "test_0006.json", "test_0007.json",
+            "test_0008.json", "test_0009.json", "test_0010.json",
+        ];
+
+        let mut total_time = std::time::Duration::new(0, 0);
+        let mut total_keys_processed = 0;
+        let mut file_results = Vec::new();
+
+        // Test 1: Basic flattening performance
+        println!("1. Basic Flattening Performance");
+        println!("================================");
+        for filename in &test_files {
+            let json_content = load_test_file(filename);
+
+            let start = Instant::now();
+            let result = JsonFlattener::new().flatten(&json_content).unwrap();
+            let duration = start.elapsed();
+
+            let flattened = match result {
+                JsonOutput::Single(s) => s,
+                JsonOutput::Multiple(_) => panic!("Expected single result"),
+            };
+            let key_count = count_keys(&flattened);
+
+            total_time += duration;
+            total_keys_processed += key_count;
+            file_results.push((filename, key_count, duration));
+
+            println!("  {}: {} keys in {:?} ({:.2} keys/ms)",
+                filename, key_count, duration,
+                key_count as f64 / duration.as_millis() as f64);
+        }
+
+        println!();
+        println!("Basic Flattening Summary:");
+        println!("  Total files: {}", test_files.len());
+        println!("  Total keys: {}", total_keys_processed);
+        println!("  Total time: {:?}", total_time);
+        println!("  Average throughput: {:.2} keys/ms",
+            total_keys_processed as f64 / total_time.as_millis() as f64);
+        println!();
+
+        // Test 2: Advanced configuration performance
+        println!("2. Advanced Configuration Performance");
+        println!("=====================================");
+        let mut advanced_total_time = std::time::Duration::new(0, 0);
+        let mut advanced_total_keys = 0;
+
+        for filename in &test_files {
+            let json_content = load_test_file(filename);
+
+            let start = Instant::now();
+            let result = JsonFlattener::new()
+                .remove_empty_strings(true)
+                .remove_nulls(true)
+                .remove_empty_objects(true)
+                .remove_empty_arrays(true)
+                .lowercase_keys(true)
+                .separator("_")
+                .flatten(&json_content).unwrap();
+            let duration = start.elapsed();
+
+            let flattened = match result {
+                JsonOutput::Single(s) => s,
+                JsonOutput::Multiple(_) => panic!("Expected single result"),
+            };
+            let key_count = count_keys(&flattened);
+
+            advanced_total_time += duration;
+            advanced_total_keys += key_count;
+
+            println!("  {}: {} keys in {:?} ({:.2} keys/ms)",
+                filename, key_count, duration,
+                key_count as f64 / duration.as_millis() as f64);
+        }
+
+        println!();
+        println!("Advanced Configuration Summary:");
+        println!("  Total keys: {}", advanced_total_keys);
+        println!("  Total time: {:?}", advanced_total_time);
+        println!("  Average throughput: {:.2} keys/ms",
+            advanced_total_keys as f64 / advanced_total_time.as_millis() as f64);
+        println!();
+
+        // Test 3: Regex replacement performance
+        println!("3. Regex Replacement Performance");
+        println!("=================================");
+        let mut regex_total_time = std::time::Duration::new(0, 0);
+        let mut regex_total_keys = 0;
+
+        for filename in &test_files {
+            let json_content = load_test_file(filename);
+
+            let start = Instant::now();
+            let result = JsonFlattener::new()
+                .key_replacement("regex:^(ID|customer|bank)", "")
+                .key_replacement("regex:\\d+$", "_num")
+                .value_replacement("regex:^(true|false)$", "bool_$0")
+                .flatten(&json_content).unwrap();
+            let duration = start.elapsed();
+
+            let flattened = match result {
+                JsonOutput::Single(s) => s,
+                JsonOutput::Multiple(_) => panic!("Expected single result"),
+            };
+            let key_count = count_keys(&flattened);
+
+            regex_total_time += duration;
+            regex_total_keys += key_count;
+
+            println!("  {}: {} keys in {:?} ({:.2} keys/ms)",
+                filename, key_count, duration,
+                key_count as f64 / duration.as_millis() as f64);
+        }
+
+        println!();
+        println!("Regex Replacement Summary:");
+        println!("  Total keys: {}", regex_total_keys);
+        println!("  Total time: {:?}", regex_total_time);
+        println!("  Average throughput: {:.2} keys/ms",
+            regex_total_keys as f64 / regex_total_time.as_millis() as f64);
+        println!();
+
+        // Test 4: Memory efficiency analysis
+        println!("4. Memory Efficiency Analysis");
+        println!("==============================");
+        for filename in &test_files {
+            let json_content = load_test_file(filename);
+            let original_size = json_content.len();
+
+            let result = JsonFlattener::new()
+                .remove_empty_strings(true)
+                .remove_nulls(true)
+                .flatten(&json_content).unwrap();
+
+            let flattened = match result {
+                JsonOutput::Single(s) => s,
+                JsonOutput::Multiple(_) => panic!("Expected single result"),
+            };
+            let flattened_size = flattened.len();
+            let compression_ratio = flattened_size as f64 / original_size as f64;
+
+            println!("  {}: {} bytes -> {} bytes (ratio: {:.2})",
+                filename, original_size, flattened_size, compression_ratio);
+        }
+        println!();
+
+        // Test 5: Batch processing performance
+        println!("5. Batch Processing Performance");
+        println!("===============================");
+        let all_json_content: Vec<String> = test_files.iter()
+            .map(|filename| load_test_file(filename))
+            .collect();
+        let json_refs: Vec<&str> = all_json_content.iter().map(|s| s.as_str()).collect();
+
+        let start = Instant::now();
+        let batch_result = JsonFlattener::new()
+            .remove_empty_strings(true)
+            .remove_nulls(true)
+            .flatten(&json_refs[..]).unwrap();
+        let batch_duration = start.elapsed();
+
+        let batch_results = match batch_result {
+            JsonOutput::Multiple(results) => results,
+            JsonOutput::Single(_) => panic!("Expected multiple results"),
+        };
+
+        let batch_total_keys: usize = batch_results.iter()
+            .map(|result| count_keys(result))
+            .sum();
+
+        println!("  Batch processed {} files in {:?}", test_files.len(), batch_duration);
+        println!("  Total keys: {}", batch_total_keys);
+        println!("  Throughput: {:.2} keys/ms",
+            batch_total_keys as f64 / batch_duration.as_millis() as f64);
+        println!();
+
+        // Performance summary and assertions
+        println!("=== PERFORMANCE SUMMARY ===");
+        println!("Basic flattening:     {:.2} keys/ms",
+            total_keys_processed as f64 / total_time.as_millis() as f64);
+        println!("Advanced config:      {:.2} keys/ms",
+            advanced_total_keys as f64 / advanced_total_time.as_millis() as f64);
+        println!("Regex replacements:   {:.2} keys/ms",
+            regex_total_keys as f64 / regex_total_time.as_millis() as f64);
+        println!("Batch processing:     {:.2} keys/ms",
+            batch_total_keys as f64 / batch_duration.as_millis() as f64);
+        println!();
+
+        // Performance assertions
+        let basic_throughput = total_keys_processed as f64 / total_time.as_millis() as f64;
+        let advanced_throughput = advanced_total_keys as f64 / advanced_total_time.as_millis() as f64;
+        let regex_throughput = regex_total_keys as f64 / regex_total_time.as_millis() as f64;
+
+        assert!(basic_throughput > 500.0,
+            "Basic flattening should achieve >500 keys/ms, got {:.2}", basic_throughput);
+        assert!(advanced_throughput > 300.0,
+            "Advanced config should achieve >300 keys/ms, got {:.2}", advanced_throughput);
+        assert!(regex_throughput > 50.0,
+            "Regex replacements should achieve >50 keys/ms, got {:.2}", regex_throughput);
+
+        println!("✅ All performance benchmarks passed!");
+        println!("🚀 JsonFlattener maintains excellent performance across all test assets!");
     }
 }

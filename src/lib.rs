@@ -9,15 +9,26 @@
 //! - Remove empty values (strings, objects, arrays, null values)
 //! - Replace keys and values using literal strings or regex patterns
 //! - Comprehensive error handling
+//! - Builder pattern API for easy configuration
 //!
 //! ## Example
 //!
 //! ```rust
-//! use json_tools_rs::flatten_json;
+//! use json_tools_rs::{JsonFlattener, JsonOutput};
 //!
 //! let json = r#"{"user": {"name": "John", "details": {"age": null, "city": ""}}}"#;
-//! let result = test_flatten_json_with_params(json, true, true, false, false, None, None, None, false).unwrap();
-//! // Result: {"user.name": "John"}
+//! let result = JsonFlattener::new()
+//!     .remove_empty_strings(true)
+//!     .remove_nulls(true)
+//!     .flatten(json).unwrap();
+//!
+//! match result {
+//!     JsonOutput::Single(flattened) => {
+//!         // Result: {"user.name": "John"}
+//!         assert!(flattened.contains("user.name"));
+//!     }
+//!     JsonOutput::Multiple(_) => unreachable!(),
+//! }
 //! ```
 
 use regex::Regex;
@@ -30,6 +41,10 @@ use std::fmt;
 // Python bindings module
 #[cfg(feature = "python")]
 pub mod python;
+
+// Tests module
+#[cfg(test)]
+mod tests;
 
 /// Input type for JSON flattening operations
 #[derive(Debug, Clone)]
@@ -144,201 +159,8 @@ impl From<regex::Error> for FlattenError {
     }
 }
 
-/// Flattens a nested JSON structure into a single-level structure with dot-notation keys
-///
-/// # Arguments
-///
-/// * `json` - A JSON string to be flattened
-/// * `remove_empty_string_values` - If true, remove key-value pairs where the value is an empty string `""`
-/// * `remove_null_values` - If true, remove key-value pairs where the value is `null`
-/// * `remove_empty_dict` - If true, remove key-value pairs where the value is an empty object `{}`
-/// * `remove_empty_list` - If true, remove key-value pairs where the value is an empty array `[]`
-/// * `key_replacements` - Optional vector of replacement patterns for keys. Each pattern can be either a literal string or a regex pattern (prefixed with "regex:")
-/// * `value_replacements` - Optional vector of replacement patterns for values. Each pattern can be either a literal string or a regex pattern (prefixed with "regex:")
-/// * `lower_case_keys` - If true, convert all uppercase characters in the flattened JSON keys to lowercase. This transformation is applied after flattening and regex transformations but before value replacements.
-///
-/// # Returns
-///
-/// Returns a `Result` containing the flattened JSON as a string, or an error if the operation fails.
-///
-/// # Errors
-///
-/// This function will return an error if:
-/// - The input JSON is invalid
-/// - Regex patterns are malformed
-/// - Replacement patterns are not provided in pairs
-///
-/// # Examples
-///
-/// ## Basic flattening
-/// ```rust
-/// use json_tools_rs::flatten_json;
-///
-/// let json = r#"{"a": {"b": {"c": 1}}}"#;
-/// let result = test_flatten_json_with_params(json, false, false, false, false, None, None, None, false).unwrap();
-/// // Result: {"a.b.c": 1}
-/// ```
-///
-/// ## Removing empty values
-/// ```rust
-/// use json_tools_rs::flatten_json;
-///
-/// let json = r#"{"user": {"name": "John", "details": {"age": null, "city": ""}}}"#;
-/// let result = test_flatten_json_with_params(json, true, true, false, false, None, None, None, false).unwrap();
-/// // Result: {"user.name": "John"}
-/// ```
-///
-/// ## Key replacement with regex
-/// ```rust
-/// use json_tools_rs::flatten_json;
-///
-/// let json = r#"{"user_name": "John", "admin_role": "super"}"#;
-/// let key_replacements = Some(vec![("regex:^(user|admin)_".to_string(), "".to_string())]);
-/// let result = test_flatten_json_with_params(json, false, false, false, false, key_replacements, None, None, false).unwrap();
-/// // Result: {"name": "John", "role": "super"}
-/// ```
-///
-/// ## Lowercase key conversion
-/// ```rust
-/// use json_tools_rs::flatten_json;
-///
-/// let json = r#"{"User": {"Name": "John", "Email": "john@example.com"}}"#;
-/// let result = test_flatten_json_with_params(json, false, false, false, false, None, None, None, true).unwrap();
-/// // Result: {"user.name": "John", "user.email": "john@example.com"}
-/// ```
-/// Unified flatten_json function that accepts either single or multiple JSON strings
-///
-/// This function can process either a single JSON string or multiple JSON strings,
-/// automatically detecting the input type and returning the appropriate output format.
-/// It flattens nested JSON structures using configurable key separators, including comprehensive
-/// array flattening with numeric indices.
-///
-/// # Arguments
-///
-/// * `json_input` - Either a single JSON string (&str) or multiple JSON strings (&[&str])
-/// * `remove_empty_string_values` - If true, remove key-value pairs where the value is an empty string `""`
-/// * `remove_null_values` - If true, remove key-value pairs where the value is `null`
-/// * `remove_empty_dict` - If true, remove key-value pairs where the value is an empty object `{}`
-/// * `remove_empty_list` - If true, remove key-value pairs where the value is an empty array `[]`
-/// * `key_replacements` - Optional vector of (pattern, replacement) tuples for keys
-/// * `value_replacements` - Optional vector of (pattern, replacement) tuples for values
-/// * `separator` - Optional key separator (defaults to "." if None)
-///
-/// # Array Flattening
-///
-/// Arrays are flattened using numeric indices in dot notation:
-/// - `{"items": [1, 2, 3]}` becomes `{"items.0": 1, "items.1": 2, "items.2": 3}`
-/// - `{"users": [{"name": "John"}]}` becomes `{"users.0.name": "John"}`
-/// - `{"matrix": [[1, 2], [3, 4]]}` becomes `{"matrix.0.0": 1, "matrix.0.1": 2, "matrix.1.0": 3, "matrix.1.1": 4}`
-///
-/// # Returns
-///
-/// Returns `JsonOutput::Single(String)` for single JSON input or `JsonOutput::Multiple(Vec<String>)` for multiple JSON inputs.
-///
-/// # Examples
-///
-/// ## Basic object flattening
-/// ```rust
-/// use json_tools_rs::{flatten_json, JsonOutput};
-///
-/// let json = r#"{"user": {"name": "John", "age": 30}}"#;
-/// let result = test_flatten_json_with_params(json, false, false, false, false, None, None, None, false).unwrap();
-/// match result {
-///     JsonOutput::Single(flattened) => println!("Result: {}", flattened),
-///     JsonOutput::Multiple(_) => unreachable!(),
-/// }
-/// // Result: {"user.name": "John", "user.age": 30}
-/// ```
-///
-/// ## Array flattening
-/// ```rust
-/// use json_tools_rs::{flatten_json, JsonOutput};
-///
-/// let json = r#"{"items": [1, 2, {"nested": "value"}], "matrix": [[1, 2], [3, 4]]}"#;
-/// let result = test_flatten_json_with_params(json, false, false, false, false, None, None, None, false).unwrap();
-/// match result {
-///     JsonOutput::Single(flattened) => println!("Result: {}", flattened),
-///     JsonOutput::Multiple(_) => unreachable!(),
-/// }
-/// // Result: {"items.0": 1, "items.1": 2, "items.2.nested": "value", "matrix.0.0": 1, "matrix.0.1": 2, "matrix.1.0": 3, "matrix.1.1": 4}
-/// ```
-///
-/// ## Multiple JSON strings
-/// ```rust
-/// use json_tools_rs::{flatten_json, JsonOutput};
-///
-/// let json_list = vec![
-///     r#"{"user1": {"name": "Alice"}}"#,
-///     r#"{"user2": {"name": "Bob"}}"#,
-/// ];
-/// let result = test_flatten_json_with_params(&json_list[..], false, false, false, false, None, None, None, false).unwrap();
-/// match result {
-///     JsonOutput::Single(_) => unreachable!(),
-///     JsonOutput::Multiple(results) => {
-///         for (i, flattened) in results.iter().enumerate() {
-///             println!("Result {}: {}", i + 1, flattened);
-///         }
-///     }
-/// }
-/// ```
-///
-/// ## Filtering and array handling
-/// ```rust
-/// use json_tools_rs::{flatten_json, JsonOutput};
-///
-/// let json = r#"{"data": [{"name": "John", "email": ""}, null, [], {"name": "Jane"}]}"#;
-/// let result = test_flatten_json_with_params(json, true, true, false, true, None, None, None, false).unwrap();
-/// match result {
-///     JsonOutput::Single(flattened) => println!("Result: {}", flattened),
-///     JsonOutput::Multiple(_) => unreachable!(),
-/// }
-/// // Result: {"data.0.name": "John", "data.3.name": "Jane"} (empty strings, nulls, and empty arrays removed)
-/// ```
-///
-/// ## Key and value replacements with new tuple format
-/// ```rust
-/// use json_tools_rs::{flatten_json, JsonOutput};
-///
-/// let json = r#"{"user_name": "John", "user_email": "john@example.com"}"#;
-///
-/// // New intuitive tuple format: (pattern, replacement)
-/// let key_replacements = Some(vec![
-///     ("regex:^user_".to_string(), "person_".to_string()),
-/// ]);
-/// let value_replacements = Some(vec![
-///     ("regex:@example\\.com".to_string(), "@company.org".to_string()),
-/// ]);
-///
-/// let result = test_flatten_json_with_params(json, false, false, false, false, key_replacements, value_replacements, None, false).unwrap();
-/// match result {
-///     JsonOutput::Single(flattened) => println!("Result: {}", flattened),
-///     JsonOutput::Multiple(_) => unreachable!(),
-/// }
-/// // Result: {"person_name": "John", "person_email": "john@company.org"}
-/// ```
-///
-/// ## Custom separators
-/// ```rust
-/// use json_tools_rs::{flatten_json, JsonOutput};
-///
-/// let json = r#"{"user": {"profile": {"name": "John"}}}"#;
-///
-/// // Using underscore separator
-/// let result = test_flatten_json_with_params(json, false, false, false, false, None, None, Some("_"), false).unwrap();
-/// match result {
-///     JsonOutput::Single(flattened) => println!("Result: {}", flattened),
-///     JsonOutput::Multiple(_) => unreachable!(),
-/// }
-/// // Result: {"user_profile_name": "John"}
-///
-/// // Using double colon separator
-/// let result = test_flatten_json_with_params(json, false, false, false, false, None, None, Some("::"), false).unwrap();
-/// match result {
-///     JsonOutput::Single(flattened) => println!("Result: {}", flattened),
-///     JsonOutput::Multiple(_) => unreachable!(),
-/// }
-/// // Result: {"user::profile::name": "John"}
-/// ```
+
+
 /// JSON Flattener with builder pattern for easy configuration
 ///
 /// This is the main interface for flattening JSON data. It provides a fluent
@@ -347,13 +169,21 @@ impl From<regex::Error> for FlattenError {
 /// # Examples
 ///
 /// ```rust
-/// use json_tools_rs::JsonFlattener;
+/// use json_tools_rs::{JsonFlattener, JsonOutput};
 ///
 /// // Basic flattening
 /// let result = JsonFlattener::new()
-///     .flatten(r#"{"user": {"name": "John"}}"#)?;
+///     .flatten(r#"{"user": {"name": "John"}}"#).unwrap();
+///
+/// match result {
+///     JsonOutput::Single(flattened) => {
+///         assert!(flattened.contains("user.name"));
+///     }
+///     JsonOutput::Multiple(_) => unreachable!(),
+/// }
 ///
 /// // Advanced configuration
+/// let json = r#"{"user_email": "john@example.com"}"#;
 /// let result = JsonFlattener::new()
 ///     .remove_empty_strings(true)
 ///     .remove_nulls(true)
@@ -361,7 +191,15 @@ impl From<regex::Error> for FlattenError {
 ///     .lowercase_keys(true)
 ///     .key_replacement("regex:^user_", "")
 ///     .value_replacement("@example.com", "@company.org")
-///     .flatten(json)?;
+///     .flatten(json).unwrap();
+///
+/// match result {
+///     JsonOutput::Single(flattened) => {
+///         assert!(flattened.contains("email"));
+///         assert!(flattened.contains("@company.org"));
+///     }
+///     JsonOutput::Multiple(_) => unreachable!(),
+/// }
 /// ```
 #[derive(Debug, Clone)]
 pub struct JsonFlattener {
@@ -471,139 +309,75 @@ impl JsonFlattener {
     where
         T: Into<JsonInput<'a>>,
     {
-        flatten_json_with_params(
-            json_input,
-            self.remove_empty_string_values,
-            self.remove_null_values,
-            self.remove_empty_dict,
-            self.remove_empty_list,
-            if self.key_replacements.is_empty() { None } else { Some(self.key_replacements) },
-            if self.value_replacements.is_empty() { None } else { Some(self.value_replacements) },
-            Some(&self.separator),
-            self.lower_case_keys,
-        )
-    }
-}
+        let input = json_input.into();
+        let key_replacements = if self.key_replacements.is_empty() {
+            None
+        } else {
+            Some(self.key_replacements)
+        };
+        let value_replacements = if self.value_replacements.is_empty() {
+            None
+        } else {
+            Some(self.value_replacements)
+        };
 
-/// Convenience function for simple JSON flattening with default settings
-///
-/// For more advanced configuration, use `JsonFlattener::new()` with the builder pattern.
-///
-/// # Examples
-///
-/// ```rust
-/// use json_tools_rs::flatten_json;
-///
-/// let result = flatten_json(r#"{"user": {"name": "John"}}"#)?;
-/// ```
-#[inline]
-pub fn flatten_json<'a, T>(json_input: T) -> Result<JsonOutput, Box<dyn Error>>
-where
-    T: Into<JsonInput<'a>>,
-{
-    JsonFlattener::new().flatten(json_input)
-}
-
-/// Backward compatibility function with individual parameters
-///
-/// This function maintains the original API for existing code.
-/// For new code, prefer using `JsonFlattener::new()` with the builder pattern.
-#[inline]
-#[allow(clippy::too_many_arguments)]
-pub fn flatten_json_with_params<'a, T>(
-    json_input: T,
-    remove_empty_string_values: bool,
-    remove_null_values: bool,
-    remove_empty_dict: bool,
-    remove_empty_list: bool,
-    key_replacements: Option<Vec<(String, String)>>,
-    value_replacements: Option<Vec<(String, String)>>,
-    separator: Option<&str>,
-    lower_case_keys: bool,
-) -> Result<JsonOutput, Box<dyn Error>>
-where
-    T: Into<JsonInput<'a>>,
-{
-    let separator = separator.unwrap_or(".");
-    let input = json_input.into();
-
-    match input {
-        JsonInput::Single(json) => {
-            let result = process_single_json(
-                json,
-                remove_empty_string_values,
-                remove_null_values,
-                remove_empty_dict,
-                remove_empty_list,
-                key_replacements.as_deref(),
-                value_replacements.as_deref(),
-                separator,
-                lower_case_keys,
-            )?;
-            Ok(JsonOutput::Single(result))
-        }
-        JsonInput::Multiple(json_list) => {
-            let mut results = Vec::with_capacity(json_list.len());
-
-            for (index, json) in json_list.iter().enumerate() {
-                match process_single_json(
+        match input {
+            JsonInput::Single(json) => {
+                let result = process_single_json(
                     json,
-                    remove_empty_string_values,
-                    remove_null_values,
-                    remove_empty_dict,
-                    remove_empty_list,
+                    self.remove_empty_string_values,
+                    self.remove_null_values,
+                    self.remove_empty_dict,
+                    self.remove_empty_list,
                     key_replacements.as_deref(),
                     value_replacements.as_deref(),
-                    separator,
-                    lower_case_keys,
-                ) {
-                    Ok(result) => results.push(result),
-                    Err(e) => {
-                        return Err(Box::new(FlattenError::BatchError {
-                            index,
-                            error: Box::new(match e.downcast::<FlattenError>() {
-                                Ok(flatten_err) => *flatten_err,
-                                Err(other_err) => FlattenError::InvalidReplacementPattern(format!(
-                                    "Unknown error: {}",
-                                    other_err
-                                )),
-                            }),
-                        }));
+                    &self.separator,
+                    self.lower_case_keys,
+                )?;
+                Ok(JsonOutput::Single(result))
+            }
+            JsonInput::Multiple(json_list) => {
+                let mut results = Vec::with_capacity(json_list.len());
+
+                for (index, json) in json_list.iter().enumerate() {
+                    match process_single_json(
+                        json,
+                        self.remove_empty_string_values,
+                        self.remove_null_values,
+                        self.remove_empty_dict,
+                        self.remove_empty_list,
+                        key_replacements.as_deref(),
+                        value_replacements.as_deref(),
+                        &self.separator,
+                        self.lower_case_keys,
+                    ) {
+                        Ok(result) => results.push(result),
+                        Err(e) => {
+                            return Err(Box::new(FlattenError::BatchError {
+                                index,
+                                error: Box::new(match e.downcast::<FlattenError>() {
+                                    Ok(flatten_err) => *flatten_err,
+                                    Err(other_err) => FlattenError::InvalidReplacementPattern(format!(
+                                        "Unknown error: {}",
+                                        other_err
+                                    )),
+                                }),
+                            }));
+                        }
                     }
                 }
-            }
 
-            Ok(JsonOutput::Multiple(results))
+                Ok(JsonOutput::Multiple(results))
+            }
         }
     }
 }
 
-/// Convenience function that uses the default "." separator
-#[inline]
-pub fn flatten_json_default<'a, T>(
-    json_input: T,
-    remove_empty_string_values: bool,
-    remove_null_values: bool,
-    remove_empty_dict: bool,
-    remove_empty_list: bool,
-    key_replacements: Option<Vec<(String, String)>>,
-    value_replacements: Option<Vec<(String, String)>>,
-) -> Result<JsonOutput, Box<dyn Error>>
-where
-    T: Into<JsonInput<'a>>,
-{
-    flatten_json_with_params(
-        json_input,
-        remove_empty_string_values,
-        remove_null_values,
-        remove_empty_dict,
-        remove_empty_list,
-        key_replacements,
-        value_replacements,
-        None,  // Use default "." separator
-        false, // Default to not lowercasing keys
-    )
-}
+
+
+
+
+
 
 /// Core flattening logic for a single JSON string
 #[inline]
@@ -718,118 +492,11 @@ fn apply_lowercase_to_keys(flattened: HashMap<String, Value>) -> HashMap<String,
     result
 }
 
-/// Legacy flatten function - kept for reference and comparison
-#[allow(dead_code)]
-fn flatten_value(value: &Value, prefix: String, result: &mut HashMap<String, Value>) {
-    match value {
-        Value::Object(obj) => {
-            if obj.is_empty() {
-                // Keep empty objects as they might be filtered later
-                result.insert(prefix, Value::Object(Map::new()));
-            } else {
-                for (key, val) in obj {
-                    let new_key = if prefix.is_empty() {
-                        key.clone()
-                    } else {
-                        format!("{}.{}", prefix, key)
-                    };
-                    flatten_value(val, new_key, result);
-                }
-            }
-        }
-        Value::Array(arr) => {
-            if arr.is_empty() {
-                // Keep empty arrays as they might be filtered later
-                result.insert(prefix, Value::Array(vec![]));
-            } else {
-                for (index, val) in arr.iter().enumerate() {
-                    let new_key = if prefix.is_empty() {
-                        index.to_string()
-                    } else {
-                        format!("{}.{}", prefix, index)
-                    };
-                    flatten_value(val, new_key, result);
-                }
-            }
-        }
-        _ => {
-            result.insert(prefix, value.clone());
-        }
-    }
-}
 
-/// Legacy key replacement function - kept for reference and comparison
-#[allow(dead_code)]
-fn apply_key_replacements(
-    mut flattened: HashMap<String, Value>,
-    patterns: &[String],
-) -> Result<HashMap<String, Value>, FlattenError> {
-    if patterns.len() % 2 != 0 {
-        return Err(FlattenError::InvalidReplacementPattern(
-            "Key replacement patterns must be provided in pairs (pattern, replacement)".to_string(),
-        ));
-    }
 
-    let mut new_flattened = HashMap::new();
 
-    for (old_key, value) in flattened.drain() {
-        let mut new_key = old_key;
 
-        // Apply each replacement pattern pair
-        for chunk in patterns.chunks(2) {
-            let pattern = &chunk[0];
-            let replacement = &chunk[1];
 
-            if let Some(regex_pattern) = pattern.strip_prefix("regex:") {
-                let regex = Regex::new(regex_pattern)?;
-                new_key = regex.replace_all(&new_key, replacement).to_string();
-            } else {
-                new_key = new_key.replace(pattern, replacement);
-            }
-        }
-
-        new_flattened.insert(new_key, value);
-    }
-
-    Ok(new_flattened)
-}
-
-/// Legacy value replacement function - kept for reference and comparison
-#[allow(dead_code)]
-fn apply_value_replacements(
-    flattened: &mut HashMap<String, Value>,
-    patterns: &[String],
-) -> Result<(), FlattenError> {
-    if patterns.len() % 2 != 0 {
-        return Err(FlattenError::InvalidReplacementPattern(
-            "Value replacement patterns must be provided in pairs (pattern, replacement)"
-                .to_string(),
-        ));
-    }
-
-    for (_, value) in flattened.iter_mut() {
-        if let Value::String(s) = value {
-            let mut new_value = s.clone();
-
-            // Apply each replacement pattern pair
-            for chunk in patterns.chunks(2) {
-                let pattern = &chunk[0];
-                let replacement = &chunk[1];
-
-                if let Some(regex_pattern) = pattern.strip_prefix("regex:") {
-                    let regex = Regex::new(regex_pattern)?;
-                    new_value = regex.replace_all(&new_value, replacement).to_string();
-                } else {
-                    new_value = new_value.replace(pattern, replacement);
-                }
-            }
-
-            *value = Value::String(new_value);
-        }
-    }
-
-    Ok(())
-}
 
 /// Estimates the flattened size to pre-allocate HashMap capacity
 fn estimate_flattened_size(value: &Value) -> usize {
@@ -893,79 +560,7 @@ fn estimate_max_key_length(value: &Value) -> usize {
     max_depth * (max_width + 1) + 50
 }
 
-/// Optimized recursive flattening with reduced string allocations and better capacity management
-/// Used in performance comparison tests
-#[allow(dead_code)]
-#[inline]
-fn flatten_value_optimized(
-    value: &Value,
-    prefix: &mut String,
-    result: &mut HashMap<String, Value>,
-) {
-    match value {
-        Value::Object(obj) => {
-            if obj.is_empty() {
-                result.insert(prefix.clone(), Value::Object(Map::new()));
-            } else {
-                let prefix_len = prefix.len();
-                let needs_dot = !prefix.is_empty();
 
-                for (key, val) in obj {
-                    // Reserve capacity for the new key to avoid reallocations
-                    let needed_capacity = prefix_len + if needs_dot { 1 } else { 0 } + key.len();
-                    if prefix.capacity() < needed_capacity {
-                        prefix.reserve(needed_capacity - prefix.len());
-                    }
-
-                    if needs_dot {
-                        prefix.push('.');
-                    }
-                    prefix.push_str(key);
-                    flatten_value_optimized(val, prefix, result);
-                    prefix.truncate(prefix_len);
-                }
-            }
-        }
-        Value::Array(arr) => {
-            if arr.is_empty() {
-                result.insert(prefix.clone(), Value::Array(vec![]));
-            } else {
-                let prefix_len = prefix.len();
-                let needs_dot = !prefix.is_empty();
-
-                for (index, val) in arr.iter().enumerate() {
-                    // Reserve capacity for the new key first
-                    let index_len = if index < 10 {
-                        1
-                    } else {
-                        index.to_string().len()
-                    };
-                    let needed_capacity = prefix_len + if needs_dot { 1 } else { 0 } + index_len;
-                    if prefix.capacity() < needed_capacity {
-                        prefix.reserve(needed_capacity - prefix.len());
-                    }
-
-                    if needs_dot {
-                        prefix.push('.');
-                    }
-
-                    // Fast path for single digits - avoid string allocation
-                    if index < 10 {
-                        prefix.push(char::from(b'0' + index as u8));
-                    } else {
-                        prefix.push_str(&index.to_string());
-                    }
-
-                    flatten_value_optimized(val, prefix, result);
-                    prefix.truncate(prefix_len);
-                }
-            }
-        }
-        _ => {
-            result.insert(prefix.clone(), value.clone());
-        }
-    }
-}
 
 /// Optimized key replacement with regex caching and in-place operations
 fn apply_key_replacements_optimized(
