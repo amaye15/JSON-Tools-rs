@@ -69,15 +69,25 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements-dev.txt
-        
+
+    - name: Create virtual environment
+      run: |
+        python -m venv .venv
+
     - name: Build Python package
-      run: maturin develop --features python
+      run: |
+        source .venv/bin/activate
+        maturin develop --features python
       
     - name: Run Python tests with coverage
-      run: pytest tests/ -v --cov=json_tools_rs --cov-report=xml --cov-report=term
-      
+      run: |
+        source .venv/bin/activate
+        pytest tests/ -v --cov=json_tools_rs --cov-report=xml --cov-report=term
+
     - name: Run Python examples
-      run: python python/examples/basic_usage.py
+      run: |
+        source .venv/bin/activate
+        python python/examples/basic_usage.py
 
   lint:
     name: Lint

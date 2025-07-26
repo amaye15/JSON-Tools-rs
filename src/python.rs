@@ -1,30 +1,41 @@
 //! Python bindings for JSON Tools RS
-//! 
+//!
 //! This module provides Python bindings for the JSON flattening functionality
 //! using PyO3. It exposes the `flatten_json` function and related types to Python.
 
 #[cfg(feature = "python")]
-use pyo3::prelude::*;
+use pyo3::exceptions::{PyRuntimeError, PyValueError};
 #[cfg(feature = "python")]
-use pyo3::exceptions::{PyValueError, PyRuntimeError};
+use pyo3::prelude::*;
 #[cfg(feature = "python")]
 use pyo3::types::PyModule;
 
 #[cfg(feature = "python")]
-use crate::{flatten_json as rust_flatten_json, JsonOutput, FlattenError};
+use crate::{flatten_json as rust_flatten_json, FlattenError, JsonOutput};
 
 /// Python exception for JSON flattening errors
 #[cfg(feature = "python")]
-pyo3::create_exception!(json_tools_rs, JsonFlattenError, pyo3::exceptions::PyException);
+pyo3::create_exception!(
+    json_tools_rs,
+    JsonFlattenError,
+    pyo3::exceptions::PyException
+);
 
 /// Convert Rust FlattenError to Python exception
 #[cfg(feature = "python")]
 fn flatten_error_to_py_err(err: &FlattenError) -> PyErr {
     match err {
-        FlattenError::JsonParseError(e) => PyValueError::new_err(format!("JSON parse error: {}", e)),
+        FlattenError::JsonParseError(e) => {
+            PyValueError::new_err(format!("JSON parse error: {}", e))
+        }
         FlattenError::RegexError(e) => PyValueError::new_err(format!("Regex error: {}", e)),
-        FlattenError::InvalidReplacementPattern(msg) => PyValueError::new_err(format!("Invalid replacement pattern: {}", msg)),
-        FlattenError::BatchError { index, error } => PyRuntimeError::new_err(format!("Error processing JSON at index {}: {}", index, error)),
+        FlattenError::InvalidReplacementPattern(msg) => {
+            PyValueError::new_err(format!("Invalid replacement pattern: {}", msg))
+        }
+        FlattenError::BatchError { index, error } => PyRuntimeError::new_err(format!(
+            "Error processing JSON at index {}: {}",
+            index, error
+        )),
     }
 }
 
@@ -44,29 +55,33 @@ impl PyJsonOutput {
     fn is_single(&self) -> bool {
         matches!(self.inner, JsonOutput::Single(_))
     }
-    
+
     /// Check if this is a multiple result
     #[getter]
     fn is_multiple(&self) -> bool {
         matches!(self.inner, JsonOutput::Multiple(_))
     }
-    
+
     /// Get the single result (raises ValueError if multiple)
     fn get_single(&self) -> PyResult<String> {
         match &self.inner {
             JsonOutput::Single(result) => Ok(result.clone()),
-            JsonOutput::Multiple(_) => Err(PyValueError::new_err("Result contains multiple JSON strings, use get_multiple() instead")),
+            JsonOutput::Multiple(_) => Err(PyValueError::new_err(
+                "Result contains multiple JSON strings, use get_multiple() instead",
+            )),
         }
     }
-    
+
     /// Get the multiple results (raises ValueError if single)
     fn get_multiple(&self) -> PyResult<Vec<String>> {
         match &self.inner {
-            JsonOutput::Single(_) => Err(PyValueError::new_err("Result contains single JSON string, use get_single() instead")),
+            JsonOutput::Single(_) => Err(PyValueError::new_err(
+                "Result contains single JSON string, use get_single() instead",
+            )),
             JsonOutput::Multiple(results) => Ok(results.clone()),
         }
     }
-    
+
     /// Get the result as a Python object (string for single, list for multiple)
     fn to_python(&self, py: Python) -> PyResult<PyObject> {
         match &self.inner {
@@ -74,14 +89,14 @@ impl PyJsonOutput {
             JsonOutput::Multiple(results) => Ok(results.to_object(py)),
         }
     }
-    
+
     fn __repr__(&self) -> String {
         match &self.inner {
             JsonOutput::Single(result) => format!("JsonOutput.Single('{}')", result),
             JsonOutput::Multiple(results) => format!("JsonOutput.Multiple({:?})", results),
         }
     }
-    
+
     fn __str__(&self) -> String {
         match &self.inner {
             JsonOutput::Single(result) => result.clone(),
@@ -166,7 +181,8 @@ pub fn flatten_json(
             value_replacements,
             separator,
             lower_case_keys,
-        ).map_err(|e| {
+        )
+        .map_err(|e| {
             if let Some(flatten_err) = e.downcast_ref::<FlattenError>() {
                 flatten_error_to_py_err(flatten_err)
             } else if let Some(json_err) = e.downcast_ref::<simd_json::Error>() {
@@ -175,7 +191,7 @@ pub fn flatten_json(
                 PyRuntimeError::new_err(format!("Unknown error: {}", e))
             }
         })?;
-        
+
         Ok(PyJsonOutput::from(result))
     } else if let Ok(json_list) = json_input.extract::<Vec<String>>() {
         // Multiple JSON strings
@@ -190,7 +206,8 @@ pub fn flatten_json(
             value_replacements,
             separator,
             lower_case_keys,
-        ).map_err(|e| {
+        )
+        .map_err(|e| {
             if let Some(flatten_err) = e.downcast_ref::<FlattenError>() {
                 flatten_error_to_py_err(flatten_err)
             } else if let Some(json_err) = e.downcast_ref::<simd_json::Error>() {
@@ -199,10 +216,12 @@ pub fn flatten_json(
                 PyRuntimeError::new_err(format!("Unknown error: {}", e))
             }
         })?;
-        
+
         Ok(PyJsonOutput::from(result))
     } else {
-        Err(PyValueError::new_err("json_input must be a string or list of strings"))
+        Err(PyValueError::new_err(
+            "json_input must be a string or list of strings",
+        ))
     }
 }
 
@@ -217,7 +236,10 @@ fn json_tools_rs(py: Python, m: &PyModule) -> PyResult<()> {
     // Add module metadata
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     m.add("__author__", "JSON Tools RS Contributors")?;
-    m.add("__description__", "Python bindings for JSON Tools RS - Advanced JSON manipulation library")?;
+    m.add(
+        "__description__",
+        "Python bindings for JSON Tools RS - Advanced JSON manipulation library",
+    )?;
 
     Ok(())
 }
