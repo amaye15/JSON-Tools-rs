@@ -1,10 +1,11 @@
 # JSON Tools RS
 
-A high-performance Rust library for advanced JSON manipulation with SIMD-accelerated parsing, including flattening nested JSON structures.
+A high-performance Rust library for advanced JSON manipulation with SIMD-accelerated parsing, including flattening and unflattening nested JSON structures.
 
 ## Features
 
-- **Unified JsonFlattener API**: Single entry point for all JSON flattening operations
+- **Unified APIs**: JsonFlattener and JsonUnflattener with matching builder patterns
+- **Complete Roundtrip Support**: Flatten JSON and unflatten it back to original structure
 - **High Performance**: SIMD-accelerated JSON parsing with optimized algorithms
 - **Builder Pattern**: Fluent, chainable API for easy configuration
 - **Comprehensive Filtering**: Remove empty values, nulls, empty objects/arrays
@@ -15,6 +16,8 @@ A high-performance Rust library for advanced JSON manipulation with SIMD-acceler
 ## Quick Start
 
 ### Rust
+
+#### Flattening JSON
 
 ```rust
 use json_tools_rs::{JsonFlattener, JsonOutput};
@@ -32,7 +35,43 @@ match result {
 // Output: {"user.name": "John"}
 ```
 
+#### Unflattening JSON
+
+```rust
+use json_tools_rs::{JsonUnflattener, JsonOutput};
+
+let flattened = r#"{"user.name": "John", "user.age": 30, "items.0": "first", "items.1": "second"}"#;
+let result = JsonUnflattener::new().unflatten(flattened)?;
+
+match result {
+    JsonOutput::Single(unflattened) => println!("{}", unflattened),
+    JsonOutput::Multiple(_) => unreachable!(),
+}
+// Output: {"user": {"name": "John", "age": 30}, "items": ["first", "second"]}
+```
+
+#### Roundtrip Example
+
+```rust
+use json_tools_rs::{JsonFlattener, JsonUnflattener, JsonOutput};
+
+let original = r#"{"user": {"name": "John", "age": 30}, "items": [1, 2, {"nested": "value"}]}"#;
+
+// Flatten
+let flattened = JsonFlattener::new().flatten(original)?.into_single();
+// Unflatten back
+let restored = JsonUnflattener::new().unflatten(&flattened)?.into_single();
+
+// original and restored are equivalent JSON structures
+assert_eq!(
+    serde_json::from_str::<serde_json::Value>(original)?,
+    serde_json::from_str::<serde_json::Value>(&restored)?
+);
+```
+
 ### Python
+
+#### Flattening
 
 ```python
 import json_tools_rs
@@ -57,18 +96,58 @@ flattener = (json_tools_rs.JsonFlattener()
 
 result = flattener.flatten({"User": {"Name": "John", "Email": ""}})
 print(result)  # {'user_name': 'John'} (dict)
+```
 
-# List[str] input → List[str] output
+#### Unflattening
+
+```python
+import json_tools_rs
+
+# JSON string input → JSON string output
+unflattener = json_tools_rs.JsonUnflattener()
+result = unflattener.unflatten('{"user.name": "John", "user.age": 30}')
+print(result)  # '{"user": {"name": "John", "age": 30}}' (str)
+
+# Python dict input → Python dict output
+result = unflattener.unflatten({"user.name": "John", "items.0": "first", "items.1": "second"})
+print(result)  # {'user': {'name': 'John'}, 'items': ['first', 'second']} (dict)
+
+# Advanced configuration with builder pattern
+unflattener = (json_tools_rs.JsonUnflattener()
+    .separator("_")
+    .lowercase_keys(True)
+    .key_replacement("prefix_", "user_")
+    .value_replacement("@company.org", "@example.com"))
+
+result = unflattener.unflatten({"PREFIX_NAME": "john@company.org"})
+print(result)  # {'user': {'name': 'john@example.com'}} (dict)
+
+# Roundtrip example
+original = {"user": {"name": "John", "age": 30}, "items": [1, 2, {"nested": "value"}]}
+flattened = json_tools_rs.JsonFlattener().flatten(original)
+restored = json_tools_rs.JsonUnflattener().unflatten(flattened)
+assert original == restored  # Perfect roundtrip!
+```
+
+#### Batch Processing
+
+```python
+# Flattening: List[str] input → List[str] output
 results = flattener.flatten(['{"a": 1}', '{"b": 2}'])
 print(results)  # ['{"a": 1}', '{"b": 2}'] (list of strings)
 
-# List[dict] input → List[dict] output
+# Flattening: List[dict] input → List[dict] output
 results = flattener.flatten([{"a": 1}, {"b": 2}])
 print(results)  # [{'a': 1}, {'b': 2}] (list of dicts)
 
-# Mixed types preserve original types
-results = flattener.flatten(['{"a": 1}', {"b": 2}])
-print(results)  # ['{"a": 1}', {'b': 2}] (mixed list)
+# Unflattening: List[str] input → List[str] output
+unflattener = json_tools_rs.JsonUnflattener()
+results = unflattener.unflatten(['{"a.b": 1}', '{"c.d": 2}'])
+print(results)  # ['{"a": {"b": 1}}', '{"c": {"d": 2}}'] (list of strings)
+
+# Unflattening: List[dict] input → List[dict] output
+results = unflattener.unflatten([{"a.b": 1}, {"c.d": 2}])
+print(results)  # [{'a': {'b': 1}}, {'c': {'d': 2}}] (list of dicts)
 ```
 
 ## Installation
@@ -122,6 +201,16 @@ The main entry point for all JSON flattening operations. Provides a builder patt
 - `separator(sep)` - Set separator for nested keys (default: ".")
 - `lowercase_keys(bool)` - Convert all keys to lowercase
 - `flatten(input)` - Flatten the JSON input
+
+### JsonUnflattener
+
+The companion to JsonFlattener that provides the inverse operation - converting flattened JSON back to nested JSON structure. Provides the same builder pattern API:
+
+- `key_replacement(find, replace)` - Add key replacement pattern (applied before unflattening)
+- `value_replacement(find, replace)` - Add value replacement pattern (applied before unflattening)
+- `separator(sep)` - Set separator for nested keys (default: ".")
+- `lowercase_keys(bool)` - Convert all keys to lowercase before processing
+- `unflatten(input)` - Unflatten the JSON input
 
 ## License
 

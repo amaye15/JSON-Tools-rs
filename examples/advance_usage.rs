@@ -274,11 +274,9 @@ fn multiple_json_example() -> Result<(), Box<dyn Error>> {
     println!("8. Multiple JSON Inputs");
     println!("=======================");
 
-    let json_list = vec![
-        r#"{"user1": {"name": "Alice", "age": 25}}"#,
+    let json_list = [r#"{"user1": {"name": "Alice", "age": 25}}"#,
         r#"{"user2": {"name": "Bob", "age": 30}}"#,
-        r#"{"user3": {"name": "Charlie", "age": 35}}"#,
-    ];
+        r#"{"user3": {"name": "Charlie", "age": 35}}"#];
 
     let result = JsonFlattener::new().flatten(&json_list[..])?;
 
