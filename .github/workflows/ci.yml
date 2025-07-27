@@ -70,6 +70,7 @@ jobs:
     - uses: actions/checkout@v4
 
     - name: Verify test_assets directory is excluded
+      shell: bash
       run: |
         if [ -d "test_assets" ]; then
           echo "ERROR: test_assets directory found in repository!"
