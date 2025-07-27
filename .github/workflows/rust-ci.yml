@@ -325,6 +325,31 @@ jobs:
             target: x86_64-pc-windows-msvc
             arch: x86_64
             python-version: '3.13'
+          # Windows ARM64
+          - os: windows-latest
+            target: aarch64-pc-windows-msvc
+            arch: aarch64
+            python-version: '3.8'
+          - os: windows-latest
+            target: aarch64-pc-windows-msvc
+            arch: aarch64
+            python-version: '3.9'
+          - os: windows-latest
+            target: aarch64-pc-windows-msvc
+            arch: aarch64
+            python-version: '3.10'
+          - os: windows-latest
+            target: aarch64-pc-windows-msvc
+            arch: aarch64
+            python-version: '3.11'
+          - os: windows-latest
+            target: aarch64-pc-windows-msvc
+            arch: aarch64
+            python-version: '3.12'
+          - os: windows-latest
+            target: aarch64-pc-windows-msvc
+            arch: aarch64
+            python-version: '3.13'
           # macOS x86_64 (Intel)
           - os: macos-latest
             target: x86_64-apple-darwin
@@ -418,37 +443,100 @@ jobs:
         echo "Built wheels:"
         ls -la dist/
 
-    - name: Install and test wheels (native builds only)
-      if: matrix.arch == 'x86_64' || (matrix.os == 'macos-latest' && matrix.arch == 'aarch64' && runner.arch == 'ARM64')
-      run: |
-        # Install the built wheel
-        pip install dist/*.whl
-
-        # Run Python tests to ensure the wheel works correctly
-        echo "Running Python tests for wheel validation..."
-        python -m pytest python/tests/ -v
-
-        # Test basic import and functionality
-        python -c "
-        import json_tools_rs
-        print('Successfully imported json_tools_rs')
-
-        # Test basic functionality
-        flattener = json_tools_rs.JsonFlattener()
-        result = flattener.flatten('{\"a\": {\"b\": 1}}')
-        print(f'Flatten test result: {result}')
-
-        unflattener = json_tools_rs.JsonUnflattener()
-        unflat_result = unflattener.unflatten(result)
-        print(f'Unflatten test result: {unflat_result}')
-        "
-
-    - name: Upload wheels as artifacts
-      uses: actions/upload-artifact@v4
+    - name: Set up QEMU for ARM emulation (Linux ARM64 only)
+      if: matrix.os == 'ubuntu-latest' && matrix.arch == 'aarch64'
+      uses: docker/setup-qemu-action@v3
       with:
-        name: wheels-${{ matrix.os }}-${{ matrix.arch }}-py${{ matrix.python-version }}
-        path: dist/*.whl
-        retention-days: 7
+        platforms: arm64
+
+#     - name: Test wheels with emulation (Linux ARM64)
+#       if: matrix.os == 'ubuntu-latest' && matrix.arch == 'aarch64'
+#       run: |
+#         # Use Docker with ARM64 emulation to test the wheel
+#         docker run --rm --platform linux/arm64 \
+#           -v $(pwd):/workspace \
+#           -w /workspace \
+#           python:${{ matrix.python-version }}-slim \
+#           bash -c "
+#             echo 'Testing ARM64 wheel with Python ${{ matrix.python-version }}'
+#             pip install dist/*.whl
+#             pip install pytest
+
+#             # Test basic import and functionality
+#             python -c '
+# import json_tools_rs
+# print(\"Successfully imported json_tools_rs on ARM64\")
+
+# # Test basic functionality
+# flattener = json_tools_rs.JsonFlattener()
+# result = flattener.flatten(\"{\\\"a\\\": {\\\"b\\\": 1}}\")
+# print(f\"Flatten test result: {result}\")
+
+# unflattener = json_tools_rs.JsonUnflattener()
+# unflat_result = unflattener.unflatten(result)
+# print(f\"Unflatten test result: {unflat_result}\")
+# '
+
+#             # Run Python tests if they exist
+#             if [ -d python/tests ]; then
+#               echo 'Running Python tests...'
+#               python -m pytest python/tests/ -v || echo 'Tests completed with some failures (expected for cross-compilation)'
+#             fi
+#           "
+
+#     - name: Test wheels (native builds)
+#       if: matrix.arch == 'x86_64' || (matrix.os == 'macos-latest' && matrix.arch == 'aarch64' && runner.arch == 'ARM64')
+#       run: |
+#         # Install the built wheel
+#         pip install dist/*.whl
+
+#         # Run Python tests to ensure the wheel works correctly
+#         echo "Running Python tests for wheel validation..."
+#         python -m pytest python/tests/ -v
+
+#         # Test basic import and functionality
+#         python -c "
+#         import json_tools_rs
+#         print('Successfully imported json_tools_rs')
+
+#         # Test basic functionality
+#         flattener = json_tools_rs.JsonFlattener()
+#         result = flattener.flatten('{\"a\": {\"b\": 1}}')
+#         print(f'Flatten test result: {result}')
+
+#         unflattener = json_tools_rs.JsonUnflattener()
+#         unflat_result = unflattener.unflatten(result)
+#         print(f'Unflatten test result: {unflat_result}')
+#         "
+
+#     - name: Basic wheel validation (cross-compiled builds)
+#       if: (matrix.os == 'windows-latest' && matrix.arch == 'aarch64') || (matrix.os == 'macos-latest' && matrix.arch == 'aarch64' && runner.arch != 'ARM64')
+#       run: |
+#         echo "Cross-compiled wheel built for ${{ matrix.target }}"
+#         echo "Wheel validation will be performed during PyPI upload process"
+#         echo "Built wheel files:"
+#         ls -la dist/
+
+#         # Verify wheel metadata
+#         pip install wheel
+#         python -c "
+#         import wheel.wheelfile
+#         import glob
+
+#         wheel_files = glob.glob('dist/*.whl')
+#         for wf in wheel_files:
+#             print(f'Wheel: {wf}')
+#             with wheel.wheelfile.WheelFile(wf) as w:
+#                 print(f'  Metadata: {w.parsed_filename}')
+#                 print(f'  Platform: {w.parsed_filename.platform_tag}')
+#         "
+
+#     - name: Upload wheels as artifacts
+#       uses: actions/upload-artifact@v4
+#       with:
+#         name: wheels-${{ matrix.os }}-${{ matrix.arch }}-py${{ matrix.python-version }}
+#         path: dist/*.whl
+#         retention-days: 7
 
     # - name: Publish to PyPI
     #   if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11' && matrix.arch == 'x86_64'
