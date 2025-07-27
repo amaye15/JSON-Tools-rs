@@ -72,20 +72,32 @@ jobs:
     - name: Install dependencies
       shell: bash
       run: |
-        source .venv/bin/activate
+        if [[ "$RUNNER_OS" == "Windows" ]]; then
+          source .venv/Scripts/activate
+        else
+          source .venv/bin/activate
+        fi
         python -m pip install --upgrade pip
         pip install -r requirements-dev.txt
 
     - name: Build Python package
       shell: bash
       run: |
-        source .venv/bin/activate
+        if [[ "$RUNNER_OS" == "Windows" ]]; then
+          source .venv/Scripts/activate
+        else
+          source .venv/bin/activate
+        fi
         maturin develop --features python
 
     - name: Run Python tests with coverage
       shell: bash
       run: |
-        source .venv/bin/activate
+        if [[ "$RUNNER_OS" == "Windows" ]]; then
+          source .venv/Scripts/activate
+        else
+          source .venv/bin/activate
+        fi
         python -c "import json_tools_rs; print('Module imported successfully')"
         python -c "import sys; print('Python path:', sys.path)"
         pip list | grep json-tools-rs
@@ -94,7 +106,11 @@ jobs:
     - name: Run Python examples
       shell: bash
       run: |
-        source .venv/bin/activate
+        if [[ "$RUNNER_OS" == "Windows" ]]; then
+          source .venv/Scripts/activate
+        else
+          source .venv/bin/activate
+        fi
         python python/examples/basic_usage.py
 
   lint:
