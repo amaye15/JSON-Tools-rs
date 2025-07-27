@@ -82,7 +82,7 @@ jobs:
     - name: Run Python tests with coverage
       run: |
         source .venv/bin/activate
-        pytest tests/ -v --cov=json_tools_rs --cov-report=xml --cov-report=term
+        pytest python/tests/ -v --cov=json_tools_rs --cov-report=xml --cov-report=term
 
     - name: Run Python examples
       run: |

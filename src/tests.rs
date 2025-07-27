@@ -2427,10 +2427,7 @@ mod json_tools_tests {
     }
 }
 
-
-
 // ===== COMPREHENSIVE EDGE CASE TESTS =====
-
 
 #[test]
 fn test_edge_case_empty_json_object() {
