@@ -3,6 +3,9 @@
 //! This module provides Python bindings for the JSON flattening functionality
 //! using PyO3. It exposes the `JsonFlattener` builder pattern API to Python.
 
+#![allow(clippy::useless_conversion)]
+#![allow(unexpected_cfgs)]
+
 #[cfg(feature = "python")]
 use pyo3::exceptions::PyValueError;
 #[cfg(feature = "python")]
