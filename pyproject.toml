@@ -1,5 +1,10 @@
 [build-system]
-requires = ["maturin>=1.0,<2.0"]
+requires = [
+    "maturin>=1.0,<2.0",
+    # Platform-specific dependencies
+    # patchelf is only needed on Linux for building Python wheels
+    "patchelf>=0.17.0; platform_system == 'Linux'"
+]
 build-backend = "maturin"
 
 [project]

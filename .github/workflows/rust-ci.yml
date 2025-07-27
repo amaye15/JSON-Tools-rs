@@ -39,6 +39,15 @@ jobs:
       with:
         key: ${{ matrix.rust }}
 
+    - name: Configure crate-type for platform
+      shell: bash
+      run: |
+        # Update Cargo.toml with platform-specific crate-type
+        # Ubuntu runners are used for the main test job
+        sed -i 's/^crate-type = .*/crate-type = ["rlib", "cdylib"]/' Cargo.toml
+        echo "Updated Cargo.toml crate-type for Ubuntu:"
+        grep "crate-type" Cargo.toml
+
     # - name: Check code formatting
     #   run: cargo fmt --all -- --check
 
@@ -142,9 +151,16 @@ jobs:
     name: Cross Platform Build
     strategy:
       matrix:
-        os: [ubuntu-latest, windows-latest] # macos-latest
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        include:
+          - os: ubuntu-latest
+            crate_types: '["rlib", "cdylib"]'
+          - os: windows-latest
+            crate_types: '["rlib", "cdylib"]'
+          - os: macos-latest
+            crate_types: '["rlib"]'
     runs-on: ${{ matrix.os }}
-    
+
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
@@ -158,6 +174,18 @@ jobs:
       uses: Swatinem/rust-cache@v2
       with:
         key: ${{ matrix.os }}
+
+    - name: Configure crate-type for platform
+      shell: bash
+      run: |
+        # Update Cargo.toml with platform-specific crate-type
+        if [[ "${{ runner.os }}" == "macOS" ]]; then
+          sed -i '' 's/^crate-type = .*/crate-type = ["rlib"]/' Cargo.toml
+        else
+          sed -i 's/^crate-type = .*/crate-type = ["rlib", "cdylib"]/' Cargo.toml
+        fi
+        echo "Updated Cargo.toml crate-type for ${{ runner.os }}:"
+        grep "crate-type" Cargo.toml
 
     - name: Build on ${{ matrix.os }}
       run: cargo build --verbose
@@ -190,6 +218,14 @@ jobs:
       uses: Swatinem/rust-cache@v2
       with:
         key: python-${{ matrix.python-version }}
+
+    - name: Configure crate-type for Python bindings
+      shell: bash
+      run: |
+        # Update Cargo.toml with cdylib for Python bindings
+        sed -i 's/^crate-type = .*/crate-type = ["rlib", "cdylib"]/' Cargo.toml
+        echo "Updated Cargo.toml crate-type for Python bindings:"
+        grep "crate-type" Cargo.toml
 
     - name: Install maturin
       run: pip install maturin[patchelf]
@@ -243,8 +279,20 @@ jobs:
       with:
         key: pypi-${{ matrix.os }}-${{ matrix.python-version }}
 
+    - name: Configure crate-type for PyPI deployment
+      shell: bash
+      run: |
+        # Update Cargo.toml with cdylib for Python wheel building
+        if [[ "${{ runner.os }}" == "macOS" ]]; then
+          sed -i '' 's/^crate-type = .*/crate-type = ["rlib", "cdylib"]/' Cargo.toml
+        else
+          sed -i 's/^crate-type = .*/crate-type = ["rlib", "cdylib"]/' Cargo.toml
+        fi
+        echo "Updated Cargo.toml crate-type for PyPI deployment on ${{ runner.os }}:"
+        grep "crate-type" Cargo.toml
+
     - name: Install maturin
-      run: pip install maturin[patchelf]
+      run: pip install -r requirements-dev.txt
 
     - name: Build wheels
       run: maturin build --release --features python --target ${{ matrix.target }} --out dist
