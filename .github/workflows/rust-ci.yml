@@ -185,11 +185,6 @@ jobs:
       with:
         toolchain: stable
 
-    - name: Configure Rust cache
-      uses: Swatinem/rust-cache@v2
-      with:
-        key: python-${{ matrix.python-version }}
-
     - name: Install maturin
       run: pip install maturin[patchelf]
 
