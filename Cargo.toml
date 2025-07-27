@@ -11,8 +11,10 @@ categories = ["data-structures", "parsing"]
 [lib]
 name = "json_tools_rs"
 path = "src/lib.rs"
+# MACOS
 # crate-type = ["rlib"]
-crate-type = ["rlib", "cdylib"]
+# LINUX / WINDOWS
+# crate-type = ["rlib", "cdylib"]
 
 # When building with maturin for Python extensions, it will automatically add cdylib
 
