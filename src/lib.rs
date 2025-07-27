@@ -157,16 +157,16 @@ pub enum FlattenError {
 impl fmt::Display for FlattenError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            FlattenError::JsonParseError(e) => write!(f, "JSON parse error: {}", e),
-            FlattenError::RegexError(e) => write!(f, "Regex error: {}", e),
+            FlattenError::JsonParseError(e) => write!(f, "JSON parse error: {e}"),
+            FlattenError::RegexError(e) => write!(f, "Regex error: {e}"),
             FlattenError::InvalidReplacementPattern(msg) => {
-                write!(f, "Invalid replacement pattern: {}", msg)
+                write!(f, "Invalid replacement pattern: {msg}")
             }
             FlattenError::InvalidJson(msg) => {
-                write!(f, "Invalid JSON: {}", msg)
+                write!(f, "Invalid JSON: {msg}")
             }
             FlattenError::BatchError { index, error } => {
-                write!(f, "Error processing JSON at index {}: {}", index, error)
+                write!(f, "Error processing JSON at index {index}: {error}")
             }
         }
     }
@@ -391,7 +391,7 @@ impl JsonFlattener {
                                 error: Box::new(match e.downcast::<FlattenError>() {
                                     Ok(flatten_err) => *flatten_err,
                                     Err(other_err) => FlattenError::InvalidReplacementPattern(
-                                        format!("Unknown error: {}", other_err),
+                                        format!("Unknown error: {other_err}"),
                                     ),
                                 }),
                             }));
@@ -551,7 +551,7 @@ impl JsonUnflattener {
                                 error: Box::new(match e.downcast::<FlattenError>() {
                                     Ok(flatten_err) => *flatten_err,
                                     Err(other_err) => FlattenError::InvalidReplacementPattern(
-                                        format!("Unknown error: {}", other_err),
+                                        format!("Unknown error: {other_err}"),
                                     ),
                                 }),
                             }));
@@ -1051,14 +1051,14 @@ fn serialize_value_ultra_fast(value: &Value, result: &mut String) -> Result<(), 
                     result.push(char::from(b'0' + ones as u8));
                 } else {
                     use std::fmt::Write;
-                    write!(result, "{}", i).unwrap();
+                    write!(result, "{i}").unwrap();
                 }
             } else if let Some(f) = n.as_f64() {
                 use std::fmt::Write;
-                write!(result, "{}", f).unwrap();
+                write!(result, "{f}").unwrap();
             } else {
                 use std::fmt::Write;
-                write!(result, "{}", n).unwrap();
+                write!(result, "{n}").unwrap();
             }
         }
         Value::Bool(true) => {
@@ -1168,7 +1168,7 @@ fn escape_json_string(s: &str) -> Cow<str> {
             0x0C => result.push_str("\\f"),
             // Handle other control characters (0x00-0x1F)
             b if b < 0x20 => {
-                result.push_str(&format!("\\u{:04x}", b));
+                result.push_str(&format!("\\u{b:04x}"));
             }
             _ => result.push(byte as char),
         }
@@ -1342,7 +1342,7 @@ impl FastStringBuilder {
         } else {
             // Fallback for larger numbers
             use std::fmt::Write;
-            write!(self.buffer, "{}", index).unwrap();
+            write!(self.buffer, "{index}").unwrap();
         }
     }
 
@@ -1646,8 +1646,7 @@ fn set_nested_value_recursive_with_types(
                             )
                         }
                         _ => Err(FlattenError::InvalidJson(format!(
-                            "Array element at index {} has incompatible type",
-                            array_index
+                            "Array element at index {array_index} has incompatible type"
                         ))),
                     }
                 }
@@ -1679,8 +1678,7 @@ fn set_nested_value_recursive_with_types(
             }
         }
         _ => Err(FlattenError::InvalidJson(format!(
-            "Cannot navigate into non-object/non-array value at key: {}",
-            part
+            "Cannot navigate into non-object/non-array value at key: {part}"
         ))),
     }
 }
@@ -1742,15 +1740,13 @@ fn set_nested_value_recursive_for_array_with_types(
                     )
                 }
                 _ => Err(FlattenError::InvalidJson(format!(
-                    "Array element at index {} has incompatible type",
-                    array_index
+                    "Array element at index {array_index} has incompatible type"
                 ))),
             }
         }
     } else {
         Err(FlattenError::InvalidJson(format!(
-            "Expected array index but got: {}",
-            part
+            "Expected array index but got: {part}"
         )))
     }
 }

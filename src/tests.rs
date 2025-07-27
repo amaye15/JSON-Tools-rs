@@ -2433,15 +2433,19 @@ mod integration_tests {
     use super::{extract_multiple, extract_single, is_github_actions};
     use std::fs;
 
+    /// Macro to skip tests that require test assets in GitHub Actions
+    macro_rules! skip_if_no_assets {
+        () => {
+            if is_github_actions() {
+                return;
+            }
+        };
+    }
+
     /// Helper function to load test JSON files
     /// These files contain JSON strings (double-encoded), so we need to parse twice
     /// Skips tests in GitHub Actions environment where test_assets are not available
     fn load_test_file(filename: &str) -> String {
-        // Skip tests that require test_assets in GitHub Actions
-        if is_github_actions() {
-            panic!("Skipping test that requires test_assets in GitHub Actions environment");
-        }
-
         let path = format!("test_assets/{}", filename);
         let content = fs::read_to_string(&path)
             .unwrap_or_else(|_| panic!("Failed to read test file: {}", path));
@@ -2474,6 +2478,7 @@ mod integration_tests {
 
     #[test]
     fn test_real_json_basic_flattening() {
+        skip_if_no_assets!();
         let json_content = load_test_file("test_0000.json");
 
         // Test basic flattening without any filters
@@ -2508,6 +2513,7 @@ mod integration_tests {
 
     #[test]
     fn test_real_json_remove_empty_strings() {
+        skip_if_no_assets!();
         let json_content = load_test_file("test_0001.json");
 
         // Test with empty string removal
@@ -2551,6 +2557,7 @@ mod integration_tests {
 
     #[test]
     fn test_real_json_remove_null_values() {
+        skip_if_no_assets!();
         let json_content = load_test_file("test_0002.json");
 
         // Test with null value removal
