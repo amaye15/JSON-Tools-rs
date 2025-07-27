@@ -70,17 +70,20 @@ jobs:
         python -m venv .venv
 
     - name: Install dependencies
+      shell: bash
       run: |
         source .venv/bin/activate
         python -m pip install --upgrade pip
         pip install -r requirements-dev.txt
 
     - name: Build Python package
+      shell: bash
       run: |
         source .venv/bin/activate
         maturin develop --features python
 
     - name: Run Python tests with coverage
+      shell: bash
       run: |
         source .venv/bin/activate
         python -c "import json_tools_rs; print('Module imported successfully')"
@@ -89,6 +92,7 @@ jobs:
         python -m pytest python/tests/ -v --cov=json_tools_rs --cov-report=xml --cov-report=term
 
     - name: Run Python examples
+      shell: bash
       run: |
         source .venv/bin/activate
         python python/examples/basic_usage.py
