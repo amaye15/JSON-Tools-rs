@@ -67,8 +67,8 @@ impl PyJsonOutput {
     /// Get the result as a Python object (string for single, list for multiple)
     fn to_python(&self, py: Python) -> PyResult<PyObject> {
         match &self.inner {
-            JsonOutput::Single(result) => Ok(result.to_object(py)),
-            JsonOutput::Multiple(results) => Ok(results.to_object(py)),
+            JsonOutput::Single(result) => Ok(result.into_pyobject(py)?.into_any().unbind()),
+            JsonOutput::Multiple(results) => Ok(results.into_pyobject(py)?.into_any().unbind()),
         }
     }
 
@@ -258,7 +258,7 @@ impl PyJsonFlattener {
     /// * list[dict] input → list[dict] output (list of flattened Python dictionaries)
     pub fn flatten(&self, json_input: &Bound<'_, PyAny>) -> PyResult<PyObject> {
         let py = json_input.py();
-        let json_module = py.import_bound("json")?;
+        let json_module = py.import("json")?;
 
         // Try to handle as single input first
         if let Ok(json_str) = json_input.extract::<String>() {
@@ -268,7 +268,7 @@ impl PyJsonFlattener {
             })?;
 
             match result {
-                JsonOutput::Single(flattened) => Ok(flattened.to_object(py)),
+                JsonOutput::Single(flattened) => Ok(flattened.into_pyobject(py)?.into_any().unbind()),
                 JsonOutput::Multiple(_) => Err(PyValueError::new_err(
                     "Unexpected multiple results for single JSON input",
                 )),
@@ -288,7 +288,7 @@ impl PyJsonFlattener {
                 JsonOutput::Single(flattened) => {
                     // Parse the flattened JSON string back to a Python dict
                     let flattened_dict = json_module.getattr("loads")?.call1((flattened,))?;
-                    Ok(flattened_dict.to_object(py))
+                    Ok(flattened_dict.unbind())
                 }
                 JsonOutput::Multiple(_) => Err(PyValueError::new_err(
                     "Unexpected multiple results for single dict input",
@@ -302,7 +302,7 @@ impl PyJsonFlattener {
             // Empty lists are treated as empty batch
             if list.is_empty() {
                 // Empty list - return empty batch result
-                return Ok(Vec::<String>::new().to_object(py));
+                return Ok(Vec::<String>::new().into_pyobject(py)?.into_any().unbind());
             }
 
             let mut has_json_strings = false;
@@ -356,7 +356,7 @@ impl PyJsonFlattener {
 
                         if all_strings {
                             // list[str] input → list[str] output
-                            Ok(flattened_list.to_object(py))
+                            Ok(flattened_list.into_pyobject(py)?.into_any().unbind())
                         } else if all_dicts {
                             // list[dict] input → list[dict] output
                             let mut dict_results = Vec::new();
@@ -365,7 +365,7 @@ impl PyJsonFlattener {
                                     json_module.getattr("loads")?.call1((flattened_json,))?;
                                 dict_results.push(dict_result);
                             }
-                            Ok(dict_results.to_object(py))
+                            Ok(dict_results.into_pyobject(py)?.into_any().unbind())
                         } else {
                             // Mixed input → preserve original types
                             let mut mixed_results = Vec::new();
@@ -373,14 +373,14 @@ impl PyJsonFlattener {
                                 flattened_list.iter().zip(input_types.iter())
                             {
                                 if input_type == "str" {
-                                    mixed_results.push(flattened_json.to_object(py));
+                                    mixed_results.push(flattened_json.into_pyobject(py)?.into_any().unbind());
                                 } else {
                                     let dict_result =
                                         json_module.getattr("loads")?.call1((flattened_json,))?;
-                                    mixed_results.push(dict_result.to_object(py));
+                                    mixed_results.push(dict_result.unbind());
                                 }
                             }
-                            Ok(mixed_results.to_object(py))
+                            Ok(mixed_results.into_pyobject(py)?.into_any().unbind())
                         }
                     }
                 }
@@ -424,7 +424,7 @@ impl PyJsonFlattener {
             Ok(PyJsonOutput::from_rust_output(result))
         } else if json_input.is_instance_of::<pyo3::types::PyDict>() {
             // Single Python dictionary - serialize to JSON first
-            let json_module = py.import_bound("json")?;
+            let json_module = py.import("json")?;
             let json_str: String = json_module
                 .getattr("dumps")?
                 .call1((json_input,))?
@@ -470,7 +470,7 @@ impl PyJsonFlattener {
                         json_strings.push(json_str);
                     } else if item.is_instance_of::<pyo3::types::PyDict>() {
                         // Item is a Python dictionary - serialize to JSON
-                        let json_module = py.import_bound("json")?;
+                        let json_module = py.import("json")?;
                         let json_str: String =
                             json_module.getattr("dumps")?.call1((item,))?.extract()?;
                         json_strings.push(json_str);
@@ -649,7 +649,7 @@ impl PyJsonUnflattener {
     /// * `PyObject` - The unflattened result with preserved input type
     pub fn unflatten(&self, json_input: &Bound<'_, PyAny>) -> PyResult<PyObject> {
         let py = json_input.py();
-        let json_module = py.import_bound("json")?;
+        let json_module = py.import("json")?;
 
         // Try to handle as single input first
         if let Ok(json_str) = json_input.extract::<String>() {
@@ -663,7 +663,7 @@ impl PyJsonUnflattener {
                 })?;
 
             match result {
-                JsonOutput::Single(unflattened) => Ok(unflattened.to_object(py)),
+                JsonOutput::Single(unflattened) => Ok(unflattened.into_pyobject(py)?.into_any().unbind()),
                 JsonOutput::Multiple(_) => Err(PyValueError::new_err(
                     "Unexpected multiple results for single JSON input",
                 )),
@@ -687,7 +687,7 @@ impl PyJsonUnflattener {
                 JsonOutput::Single(unflattened) => {
                     // Parse back to Python dict
                     let parsed_result = json_module.getattr("loads")?.call1((unflattened,))?;
-                    Ok(parsed_result.to_object(py))
+                    Ok(parsed_result.unbind())
                 }
                 JsonOutput::Multiple(_) => Err(PyValueError::new_err(
                     "Unexpected multiple results for single dict input",
@@ -701,7 +701,7 @@ impl PyJsonUnflattener {
             // Empty lists are treated as empty batch
             if list.is_empty() {
                 // Empty list - return empty batch result
-                return Ok(pyo3::types::PyList::empty_bound(py).to_object(py));
+                return Ok(pyo3::types::PyList::empty(py).into_any().unbind());
             }
 
             // Check if all items are JSON strings
@@ -725,11 +725,11 @@ impl PyJsonUnflattener {
 
                 match result {
                     JsonOutput::Multiple(results) => {
-                        let py_list = pyo3::types::PyList::empty_bound(py);
+                        let py_list = pyo3::types::PyList::empty(py);
                         for result_str in results {
                             py_list.append(result_str)?;
                         }
-                        Ok(py_list.to_object(py))
+                        Ok(py_list.into_any().unbind())
                     }
                     JsonOutput::Single(_) => Err(PyValueError::new_err(
                         "Unexpected single result for multiple JSON inputs",
@@ -759,14 +759,14 @@ impl PyJsonUnflattener {
 
                     match result {
                         JsonOutput::Multiple(results) => {
-                            let py_list = pyo3::types::PyList::empty_bound(py);
+                            let py_list = pyo3::types::PyList::empty(py);
                             for result_str in results {
                                 // Parse back to Python dict
                                 let parsed_result =
                                     json_module.getattr("loads")?.call1((result_str,))?;
                                 py_list.append(parsed_result)?;
                             }
-                            Ok(py_list.to_object(py))
+                            Ok(py_list.into_any().unbind())
                         }
                         JsonOutput::Single(_) => Err(PyValueError::new_err(
                             "Unexpected single result for multiple dict inputs",
@@ -817,7 +817,7 @@ impl PyJsonUnflattener {
             Ok(PyJsonOutput::from_rust_output(result))
         } else if json_input.is_instance_of::<pyo3::types::PyDict>() {
             // Single Python dictionary - serialize to JSON first
-            let json_module = py.import_bound("json")?;
+            let json_module = py.import("json")?;
             let json_str: String = json_module
                 .getattr("dumps")?
                 .call1((json_input,))?
@@ -863,7 +863,7 @@ impl PyJsonUnflattener {
                 Ok(PyJsonOutput::from_rust_output(result))
             } else {
                 // Check if all items are Python dicts
-                let json_module = py.import_bound("json")?;
+                let json_module = py.import("json")?;
                 let mut json_strings = Vec::new();
                 let mut all_dicts = true;
                 for item in list.iter() {
@@ -915,7 +915,7 @@ fn json_tools_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Add the custom exception
     m.add(
         "JsonFlattenError",
-        m.py().get_type_bound::<JsonFlattenError>(),
+        m.py().get_type::<JsonFlattenError>(),
     )?;
 
     // Add module metadata
