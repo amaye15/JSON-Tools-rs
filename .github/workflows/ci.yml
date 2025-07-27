@@ -78,10 +78,11 @@ jobs:
       run: |
         source .venv/bin/activate
         maturin develop --features python
-      
+
     - name: Run Python tests with coverage
       run: |
         source .venv/bin/activate
+        python -c "import json_tools_rs; print('Module imported successfully')"
         pytest python/tests/ -v --cov=json_tools_rs --cov-report=xml --cov-report=term
 
     - name: Run Python examples

@@ -8,9 +8,9 @@ fn main() {
     let json1 =
         r#"{"user": {"profile": {"name": "John", "age": 30}, "settings": {"theme": "dark"}}}"#;
     match JsonFlattener::new().flatten(json1) {
-        Ok(JsonOutput::Single(result)) => println!("Input:  {}\nOutput: {}\n", json1, result),
+        Ok(JsonOutput::Single(result)) => println!("Input:  {json1}\nOutput: {result}\n"),
         Ok(JsonOutput::Multiple(_)) => println!("Unexpected multiple results\n"),
-        Err(e) => eprintln!("Error: {}\n", e),
+        Err(e) => eprintln!("Error: {e}\n"),
     }
 
     // Example 2: Using JsonFlattener builder pattern with filtering
@@ -22,9 +22,9 @@ fn main() {
         .remove_empty_arrays(true)
         .flatten(json2)
     {
-        Ok(JsonOutput::Single(result)) => println!("Input:  {}\nOutput: {}\n", json2, result),
+        Ok(JsonOutput::Single(result)) => println!("Input:  {json2}\nOutput: {result}\n"),
         Ok(JsonOutput::Multiple(_)) => println!("Unexpected multiple results\n"),
-        Err(e) => eprintln!("Error: {}\n", e),
+        Err(e) => eprintln!("Error: {e}\n"),
     }
 
     // Example 3: Advanced configuration with all features
@@ -41,9 +41,9 @@ fn main() {
         .lowercase_keys(true)
         .flatten(json3)
     {
-        Ok(JsonOutput::Single(result)) => println!("Input:  {}\nOutput: {}\n", json3, result),
+        Ok(JsonOutput::Single(result)) => println!("Input:  {json3}\nOutput: {result}\n"),
         Ok(JsonOutput::Multiple(_)) => println!("Unexpected multiple results\n"),
-        Err(e) => eprintln!("Error: {}\n", e),
+        Err(e) => eprintln!("Error: {e}\n"),
     }
 
     // Example 4: Regex patterns
@@ -54,9 +54,9 @@ fn main() {
         .separator("_")
         .flatten(json4)
     {
-        Ok(JsonOutput::Single(result)) => println!("Input:  {}\nOutput: {}\n", json4, result),
+        Ok(JsonOutput::Single(result)) => println!("Input:  {json4}\nOutput: {result}\n"),
         Ok(JsonOutput::Multiple(_)) => println!("Unexpected multiple results\n"),
-        Err(e) => eprintln!("Error: {}\n", e),
+        Err(e) => eprintln!("Error: {e}\n"),
     }
 
     // Example 5: Basic unflattening with JsonUnflattener
@@ -64,18 +64,18 @@ fn main() {
     let flattened1 =
         r#"{"user.profile.name": "John", "user.profile.age": 30, "user.settings.theme": "dark"}"#;
     match JsonUnflattener::new().unflatten(flattened1) {
-        Ok(JsonOutput::Single(result)) => println!("Input:  {}\nOutput: {}\n", flattened1, result),
+        Ok(JsonOutput::Single(result)) => println!("Input:  {flattened1}\nOutput: {result}\n"),
         Ok(JsonOutput::Multiple(_)) => println!("Unexpected multiple results\n"),
-        Err(e) => eprintln!("Error: {}\n", e),
+        Err(e) => eprintln!("Error: {e}\n"),
     }
 
     // Example 6: Unflattening arrays
     println!("Example 6: Unflattening Arrays");
     let flattened2 = r#"{"users.0.name": "John", "users.0.age": 30, "users.1.name": "Jane", "users.1.age": 25, "items.0": "first", "items.1": "second"}"#;
     match JsonUnflattener::new().unflatten(flattened2) {
-        Ok(JsonOutput::Single(result)) => println!("Input:  {}\nOutput: {}\n", flattened2, result),
+        Ok(JsonOutput::Single(result)) => println!("Input:  {flattened2}\nOutput: {result}\n"),
         Ok(JsonOutput::Multiple(_)) => println!("Unexpected multiple results\n"),
-        Err(e) => eprintln!("Error: {}\n", e),
+        Err(e) => eprintln!("Error: {e}\n"),
     }
 
     // Example 7: Roundtrip - Flatten then Unflatten
@@ -86,13 +86,13 @@ fn main() {
     let flattened_result = JsonFlattener::new().flatten(original);
     match flattened_result {
         Ok(JsonOutput::Single(flattened)) => {
-            println!("Original: {}", original);
-            println!("Flattened: {}", flattened);
+            println!("Original: {original}");
+            println!("Flattened: {flattened}");
 
             // Then unflatten
             match JsonUnflattener::new().unflatten(&flattened) {
                 Ok(JsonOutput::Single(unflattened)) => {
-                    println!("Unflattened: {}\n", unflattened);
+                    println!("Unflattened: {unflattened}\n");
 
                     // Verify they're equivalent
                     let original_parsed: serde_json::Value =
@@ -106,11 +106,11 @@ fn main() {
                     }
                 }
                 Ok(JsonOutput::Multiple(_)) => println!("Unexpected multiple results\n"),
-                Err(e) => eprintln!("Unflatten error: {}\n", e),
+                Err(e) => eprintln!("Unflatten error: {e}\n"),
             }
         }
         Ok(JsonOutput::Multiple(_)) => println!("Unexpected multiple results\n"),
-        Err(e) => eprintln!("Flatten error: {}\n", e),
+        Err(e) => eprintln!("Flatten error: {e}\n"),
     }
 
     // Example 8: Advanced JsonUnflattener configuration
@@ -121,9 +121,9 @@ fn main() {
         .value_replacement("@company.org", "@example.com")
         .unflatten(flattened3)
     {
-        Ok(JsonOutput::Single(result)) => println!("Input:  {}\nOutput: {}\n", flattened3, result),
+        Ok(JsonOutput::Single(result)) => println!("Input:  {flattened3}\nOutput: {result}\n"),
         Ok(JsonOutput::Multiple(_)) => println!("Unexpected multiple results\n"),
-        Err(e) => eprintln!("Error: {}\n", e),
+        Err(e) => eprintln!("Error: {e}\n"),
     }
 
     println!("✅ All examples completed successfully!");
