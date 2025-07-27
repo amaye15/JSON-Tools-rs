@@ -323,28 +323,125 @@ jobs:
     strategy:
       matrix:
         include:
-          # x86_64 Python wheels
+          # x86_64 Python wheels - Ubuntu
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            python-version: ['3.8', '3.9', '3.10', '3.11', '3.12', '3.13']
+            python-version: '3.8'
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            python-version: '3.9'
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            python-version: '3.10'
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            python-version: '3.11'
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            python-version: '3.12'
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            python-version: '3.13'
+
+          # x86_64 Python wheels - Windows
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            python-version: ['3.8', '3.9', '3.10', '3.11', '3.12', '3.13']
+            python-version: '3.8'
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            python-version: '3.9'
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            python-version: '3.10'
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            python-version: '3.11'
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            python-version: '3.12'
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            python-version: '3.13'
+
+          # x86_64 Python wheels - macOS
           - os: macos-latest
             target: x86_64-apple-darwin
-            python-version: ['3.8', '3.9', '3.10', '3.11', '3.12', '3.13']
-          
-          # ARM64 Python wheels
+            python-version: '3.8'
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            python-version: '3.9'
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            python-version: '3.10'
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            python-version: '3.11'
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            python-version: '3.12'
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            python-version: '3.13'
+
+          # ARM64 Python wheels - Ubuntu
           - os: ubuntu-latest
             target: aarch64-unknown-linux-gnu
-            python-version: ['3.8', '3.9', '3.10', '3.11', '3.12', '3.13']
+            python-version: '3.8'
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            python-version: '3.9'
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            python-version: '3.10'
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            python-version: '3.11'
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            python-version: '3.12'
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            python-version: '3.13'
+
+          # ARM64 Python wheels - macOS
           - os: macos-latest
             target: aarch64-apple-darwin
-            python-version: ['3.8', '3.9', '3.10', '3.11', '3.12', '3.13']
+            python-version: '3.8'
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            python-version: '3.9'
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            python-version: '3.10'
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            python-version: '3.11'
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            python-version: '3.12'
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            python-version: '3.13'
+
           # Windows ARM less critical, can be added later
           # - os: windows-latest
           #   target: aarch64-pc-windows-msvc
-          #   python-version: ['3.8', '3.9', '3.10', '3.11', '3.12', '3.13']
+          #   python-version: '3.8'
+          # - os: windows-latest
+          #   target: aarch64-pc-windows-msvc
+          #   python-version: '3.9'
+          # - os: windows-latest
+          #   target: aarch64-pc-windows-msvc
+          #   python-version: '3.10'
+          # - os: windows-latest
+          #   target: aarch64-pc-windows-msvc
+          #   python-version: '3.11'
+          # - os: windows-latest
+          #   target: aarch64-pc-windows-msvc
+          #   python-version: '3.12'
+          # - os: windows-latest
+          #   target: aarch64-pc-windows-msvc
+          #   python-version: '3.13'
 
     steps:
     - name: Checkout repository
