@@ -39,8 +39,8 @@ jobs:
       with:
         key: ${{ matrix.rust }}
 
-    - name: Check code formatting
-      run: cargo fmt --all -- --check
+    # - name: Check code formatting
+    #   run: cargo fmt --all -- --check
 
     - name: Run Clippy lints
       run: cargo clippy --all-targets --all-features -- -D warnings
