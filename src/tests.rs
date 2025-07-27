@@ -4,7 +4,7 @@ use std::error::Error;
 
 // Helper function for tests that need the old parameter-based API
 #[cfg(test)]
-#[allow(clippy::too_many_arguments)]
+// #[allow(clippy::too_many_arguments)]
 pub fn test_flatten_json_with_params<'a, T>(
     json_input: T,
     remove_empty_string_values: bool,
