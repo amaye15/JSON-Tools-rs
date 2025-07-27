@@ -83,7 +83,9 @@ jobs:
       run: |
         source .venv/bin/activate
         python -c "import json_tools_rs; print('Module imported successfully')"
-        pytest python/tests/ -v --cov=json_tools_rs --cov-report=xml --cov-report=term
+        python -c "import sys; print('Python path:', sys.path)"
+        pip list | grep json-tools-rs
+        python -m pytest python/tests/ -v --cov=json_tools_rs --cov-report=xml --cov-report=term
 
     - name: Run Python examples
       run: |
@@ -120,8 +122,8 @@ jobs:
         
     - name: Check Python formatting
       run: |
-        black --check python/ tests/
-        isort --check-only python/ tests/
+        black --check python/
+        isort --check-only python/
         
     - name: Run mypy
       run: mypy python/ --ignore-missing-imports
