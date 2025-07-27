@@ -12,7 +12,7 @@ categories = ["data-structures", "parsing"]
 name = "json_tools_rs"
 path = "src/lib.rs"
 # MACOS
-# crate-type = ["rlib"]
+crate-type = ["rlib"]
 # LINUX / WINDOWS
 # crate-type = ["rlib", "cdylib"]
 
@@ -25,6 +25,10 @@ path = "src/main.rs"
 [[example]]
 name = "basic_usage"
 path = "examples/basic_usage.rs"
+
+[[example]]
+name = "advance_usage"
+path = "examples/advance_usage.rs"
 
 [dependencies]
 regex = "1.11.1"

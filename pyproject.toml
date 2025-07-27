@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "json-tools-rs"
-description = "High-performance JSON manipulation library with unified JsonFlattener API and SIMD-accelerated parsing"
+description = "High-performance JSON manipulation library with SIMD-accelerated parsing"
 readme = "README.md"
 license = {text = "MIT OR Apache-2.0"}
 authors = [
