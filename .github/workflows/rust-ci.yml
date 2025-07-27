@@ -163,11 +163,13 @@ jobs:
 
     - name: Build with platform-specific crate-type (Linux/Windows)
       if: runner.os != 'macOS'
-      run: cargo rustc --lib -- --crate-type=rlib --crate-type=cdylib
+      run: |
+        cargo build --lib
+        cargo rustc --lib -- --crate-type=cdylib
 
     - name: Build with platform-specific crate-type (macOS)
       if: runner.os == 'macOS'
-      run: cargo rustc --lib -- --crate-type=rlib
+      run: cargo build --lib
 
     - name: Test on ${{ matrix.os }}
       run: cargo test --verbose
