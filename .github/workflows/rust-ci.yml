@@ -383,7 +383,7 @@ jobs:
       uses: PyO3/maturin-action@v1
       with:
         command: build
-        args: --release --features python --out dist --interpreter 3.8 3.9 3.10 3.11 3.12 3.13
+        args: --release --features python --out dist --interpreter 3.9 3.10 3.11 3.12 3.13 #3.8 
         target: ${{ matrix.target }}
         manylinux: ${{ matrix.manylinux || 'auto' }}
         # Enable sccache for faster builds
