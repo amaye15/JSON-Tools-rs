@@ -60,7 +60,7 @@ Batch Processing:
     >>> print(dict_results)  # [{'a.b': 1}, {'c.d': 2}] (list of dicts)
 """
 
-from .json_tools_rs import JSONTools, JsonFlattenError, JsonOutput
+from .json_tools_rs import JSONTools, JsonToolsError, JsonOutput
 
 __version__ = "0.1.0"
 __author__ = "JSON Tools RS Contributors"
@@ -68,5 +68,5 @@ __author__ = "JSON Tools RS Contributors"
 __all__ = [
     "JSONTools",
     "JsonOutput",
-    "JsonFlattenError",
+    "JsonToolsError",
 ]

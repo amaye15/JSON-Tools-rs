@@ -28,6 +28,8 @@ regex = "1.11.1"
 simd-json = { version = "0.15.1", features = ["serde_impl"] }
 serde_json = "1.0.141"
 pyo3 = { version = "0.25.1", features = ["extension-module"], optional = true }
+thiserror = "2.0.12"
+rustc-hash = "2.0.0"
 
 [features]
 default = []  # Add python to default features

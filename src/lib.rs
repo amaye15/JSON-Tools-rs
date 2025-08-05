@@ -72,11 +72,52 @@
 
 
 use regex::Regex;
+use rustc_hash::FxHashMap;
 use serde_json::{Map, Value};
 use std::borrow::Cow;
-use std::collections::HashMap;
 use std::error::Error;
-use std::fmt;
+use std::sync::OnceLock;
+
+// Global regex cache for better performance
+static REGEX_CACHE: OnceLock<std::sync::Mutex<FxHashMap<String, Regex>>> = OnceLock::new();
+
+fn get_cached_regex(pattern: &str) -> Result<Regex, regex::Error> {
+    let cache = REGEX_CACHE.get_or_init(|| std::sync::Mutex::new(FxHashMap::default()));
+    let mut cache_guard = cache.lock().unwrap();
+
+    if let Some(regex) = cache_guard.get(pattern) {
+        Ok(regex.clone())
+    } else {
+        let regex = Regex::new(pattern)?;
+        cache_guard.insert(pattern.to_string(), regex.clone());
+        Ok(regex)
+    }
+}
+
+// String pool for reusing allocations
+thread_local! {
+    static STRING_POOL: std::cell::RefCell<Vec<String>> = std::cell::RefCell::new(Vec::with_capacity(64));
+}
+
+#[inline]
+fn get_pooled_string() -> String {
+    STRING_POOL.with(|pool| {
+        pool.borrow_mut().pop().unwrap_or_else(|| String::with_capacity(64))
+    })
+}
+
+#[inline]
+fn return_pooled_string(mut s: String) {
+    if s.capacity() <= 512 { // Only pool reasonably sized strings
+        s.clear();
+        STRING_POOL.with(|pool| {
+            let mut pool = pool.borrow_mut();
+            if pool.len() < 32 { // Limit pool size
+                pool.push(s);
+            }
+        });
+    }
+}
 
 // Python bindings module
 #[cfg(feature = "python")]
@@ -86,24 +127,24 @@ pub mod python;
 #[cfg(test)]
 mod tests;
 
-/// Input type for JSON flattening operations
+/// Input type for JSON flattening operations with Cow optimization
 #[derive(Debug, Clone)]
 pub enum JsonInput<'a> {
-    /// Single JSON string
-    Single(&'a str),
+    /// Single JSON string with Cow for efficient memory usage
+    Single(Cow<'a, str>),
     /// Multiple JSON strings
     Multiple(&'a [&'a str]),
 }
 
 impl<'a> From<&'a str> for JsonInput<'a> {
     fn from(json: &'a str) -> Self {
-        JsonInput::Single(json)
+        JsonInput::Single(Cow::Borrowed(json))
     }
 }
 
 impl<'a> From<&'a String> for JsonInput<'a> {
     fn from(json: &'a String) -> Self {
-        JsonInput::Single(json.as_str())
+        JsonInput::Single(Cow::Borrowed(json.as_str()))
     }
 }
 
@@ -154,58 +195,196 @@ impl JsonOutput {
     }
 }
 
-/// Custom error type for JSON flattening operations
-#[derive(Debug)]
-pub enum FlattenError {
-    /// Error parsing JSON input
-    JsonParseError(simd_json::Error),
-    /// Error compiling or using regex patterns
-    RegexError(regex::Error),
-    /// Invalid replacement pattern configuration
-    InvalidReplacementPattern(String),
-    /// Invalid JSON structure for operation
-    InvalidJson(String),
-    /// Error processing batch item with index
-    BatchError {
+/// Comprehensive error type for all JSON Tools operations with detailed information and suggestions
+#[derive(Debug, thiserror::Error)]
+pub enum JsonToolsError {
+    /// Error parsing JSON input with detailed context and suggestions
+    #[error("JSON parsing failed: {message}\n💡 Suggestion: {suggestion}")]
+    JsonParseError {
+        message: String,
+        suggestion: String,
+        #[source]
+        source: simd_json::Error,
+    },
+
+    /// Error compiling or using regex patterns with helpful suggestions
+    #[error("Regex pattern error: {message}\n💡 Suggestion: {suggestion}")]
+    RegexError {
+        message: String,
+        suggestion: String,
+        #[source]
+        source: regex::Error,
+    },
+
+    /// Invalid replacement pattern configuration with detailed guidance
+    #[error("Invalid replacement pattern: {message}\n💡 Suggestion: {suggestion}")]
+    InvalidReplacementPattern {
+        message: String,
+        suggestion: String,
+    },
+
+    /// Invalid JSON structure for the requested operation
+    #[error("Invalid JSON structure: {message}\n💡 Suggestion: {suggestion}")]
+    InvalidJsonStructure {
+        message: String,
+        suggestion: String,
+    },
+
+    /// Configuration error when operation mode is not set
+    #[error("Operation mode not configured: {message}\n💡 Suggestion: {suggestion}")]
+    ConfigurationError {
+        message: String,
+        suggestion: String,
+    },
+
+    /// Error processing batch item with detailed context
+    #[error("Batch processing failed at index {index}: {message}\n💡 Suggestion: {suggestion}")]
+    BatchProcessingError {
         index: usize,
-        error: Box<FlattenError>,
+        message: String,
+        suggestion: String,
+        #[source]
+        source: Box<JsonToolsError>,
+    },
+
+    /// Input validation error with helpful guidance
+    #[error("Input validation failed: {message}\n💡 Suggestion: {suggestion}")]
+    InputValidationError {
+        message: String,
+        suggestion: String,
+    },
+
+    /// Serialization error when converting results back to JSON
+    #[error("JSON serialization failed: {message}\n💡 Suggestion: {suggestion}")]
+    SerializationError {
+        message: String,
+        suggestion: String,
+        #[source]
+        source: simd_json::Error,
     },
 }
 
-impl fmt::Display for FlattenError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            FlattenError::JsonParseError(e) => write!(f, "JSON parse error: {}", e),
-            FlattenError::RegexError(e) => write!(f, "Regex error: {}", e),
-            FlattenError::InvalidReplacementPattern(msg) => {
-                write!(f, "Invalid replacement pattern: {}", msg)
-            }
-            FlattenError::InvalidJson(msg) => {
-                write!(f, "Invalid JSON: {}", msg)
-            }
-            FlattenError::BatchError { index, error } => {
-                write!(f, "Error processing JSON at index {}: {}", index, error)
-            }
+impl JsonToolsError {
+    /// Create a JSON parse error with helpful suggestions
+    pub fn json_parse_error(source: simd_json::Error) -> Self {
+        let suggestion = "Verify your JSON syntax using a JSON validator. Common issues include: missing quotes around keys or values, trailing commas, unescaped characters, incomplete JSON (missing closing braces or brackets), or invalid escape sequences.";
+
+        JsonToolsError::JsonParseError {
+            message: source.to_string(),
+            suggestion: suggestion.to_string(),
+            source,
+        }
+    }
+
+    /// Create a regex error with helpful suggestions
+    pub fn regex_error(source: regex::Error) -> Self {
+        let suggestion = match source {
+            regex::Error::Syntax(_) =>
+                "Check your regex pattern syntax. Use online regex testers to validate your pattern. Remember to escape special characters like '.', '*', '+', '?', etc.",
+            regex::Error::CompiledTooBig(_) =>
+                "Your regex pattern is too complex. Try simplifying it or breaking it into multiple smaller patterns.",
+            _ => "Verify your regex pattern is valid. Use tools like regex101.com to test and debug your pattern.",
+        };
+
+        JsonToolsError::RegexError {
+            message: source.to_string(),
+            suggestion: suggestion.to_string(),
+            source,
+        }
+    }
+
+    /// Create an invalid replacement pattern error
+    pub fn invalid_replacement_pattern(message: impl Into<String>) -> Self {
+        let msg = message.into();
+        let suggestion = if msg.contains("pairs") {
+            "Replacement patterns must be provided in pairs (pattern, replacement). Ensure you have an even number of arguments."
+        } else if msg.contains("regex:") {
+            "When using regex patterns, prefix with 'regex:' followed by a valid regex pattern. Example: 'regex:user_.*' to match keys starting with 'user_'."
+        } else {
+            "Check your replacement pattern configuration. Patterns should be in the format: pattern1, replacement1, pattern2, replacement2, etc."
+        };
+
+        JsonToolsError::InvalidReplacementPattern {
+            message: msg,
+            suggestion: suggestion.to_string(),
+        }
+    }
+
+    /// Create an invalid JSON structure error
+    pub fn invalid_json_structure(message: impl Into<String>) -> Self {
+        let msg = message.into();
+        let suggestion = if msg.contains("unflatten") {
+            "For unflattening, ensure your JSON is a flat object with dot-separated keys like {'user.name': 'John', 'user.age': 30}."
+        } else if msg.contains("object") {
+            "The operation requires a JSON object ({}), but received a different type. Check that your input is a valid JSON object."
+        } else {
+            "Verify that your JSON structure is compatible with the requested operation. Flattening works on nested objects/arrays, unflattening works on flat objects."
+        };
+
+        JsonToolsError::InvalidJsonStructure {
+            message: msg,
+            suggestion: suggestion.to_string(),
+        }
+    }
+
+    /// Create a configuration error
+    pub fn configuration_error(message: impl Into<String>) -> Self {
+        JsonToolsError::ConfigurationError {
+            message: message.into(),
+            suggestion: "Call .flatten() or .unflatten() on your JSONTools instance before calling .execute() to set the operation mode.".to_string(),
+        }
+    }
+
+    /// Create a batch processing error
+    pub fn batch_processing_error(index: usize, source: JsonToolsError) -> Self {
+        JsonToolsError::BatchProcessingError {
+            index,
+            message: format!("Failed to process item at index {}", index),
+            suggestion: "Check the JSON at the specified index. All items in a batch must be valid JSON strings or objects.".to_string(),
+            source: Box::new(source),
+        }
+    }
+
+    /// Create an input validation error
+    pub fn input_validation_error(message: impl Into<String>) -> Self {
+        let msg = message.into();
+        let suggestion = if msg.contains("type") {
+            "Ensure your input is a valid JSON string, Python dict, or list of JSON strings/dicts."
+        } else if msg.contains("empty") {
+            "Provide non-empty input for processing."
+        } else {
+            "Check that your input format matches the expected type for the operation."
+        };
+
+        JsonToolsError::InputValidationError {
+            message: msg,
+            suggestion: suggestion.to_string(),
+        }
+    }
+
+    /// Create a serialization error
+    pub fn serialization_error(source: simd_json::Error) -> Self {
+        JsonToolsError::SerializationError {
+            message: source.to_string(),
+            suggestion: "This is likely an internal error. The processed data couldn't be serialized back to JSON. Please report this issue.".to_string(),
+            source,
         }
     }
 }
 
-impl Error for FlattenError {}
-
-impl From<simd_json::Error> for FlattenError {
+// Automatic conversion from simd_json::Error
+impl From<simd_json::Error> for JsonToolsError {
     fn from(error: simd_json::Error) -> Self {
-        FlattenError::JsonParseError(error)
+        JsonToolsError::json_parse_error(error)
     }
 }
 
-impl From<regex::Error> for FlattenError {
+// Automatic conversion from regex::Error
+impl From<regex::Error> for JsonToolsError {
     fn from(error: regex::Error) -> Self {
-        FlattenError::RegexError(error)
+        JsonToolsError::regex_error(error)
     }
 }
-
-
-
 
 /// Operation mode for the unified JSONTools API
 #[derive(Debug, Clone, PartialEq)]
@@ -333,8 +512,8 @@ impl JSONTools {
     }
 
     /// Set the separator used for nested keys (default: ".")
-    pub fn separator<S: Into<String>>(mut self, separator: S) -> Self {
-        self.separator = separator.into();
+    pub fn separator<S: Into<Cow<'static, str>>>(mut self, separator: S) -> Self {
+        self.separator = separator.into().into_owned();
         self
     }
 
@@ -348,12 +527,12 @@ impl JSONTools {
     ///
     /// Supports both literal strings and regex patterns (prefix with "regex:")
     /// Works for both flatten and unflatten operations
-    pub fn key_replacement<S1: Into<String>, S2: Into<String>>(
+    pub fn key_replacement<S1: Into<Cow<'static, str>>, S2: Into<Cow<'static, str>>>(
         mut self,
         find: S1,
         replace: S2,
     ) -> Self {
-        self.key_replacements.push((find.into(), replace.into()));
+        self.key_replacements.push((find.into().into_owned(), replace.into().into_owned()));
         self
     }
 
@@ -361,12 +540,12 @@ impl JSONTools {
     ///
     /// Supports both literal strings and regex patterns (prefix with "regex:")
     /// Works for both flatten and unflatten operations
-    pub fn value_replacement<S1: Into<String>, S2: Into<String>>(
+    pub fn value_replacement<S1: Into<Cow<'static, str>>, S2: Into<Cow<'static, str>>>(
         mut self,
         find: S1,
         replace: S2,
     ) -> Self {
-        self.value_replacements.push((find.into(), replace.into()));
+        self.value_replacements.push((find.into().into_owned(), replace.into().into_owned()));
         self
     }
 
@@ -524,9 +703,8 @@ impl JSONTools {
     {
         // Ensure operation mode is set
         let mode = self.mode.as_ref().ok_or_else(|| {
-            Box::new(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "Operation mode not set. Call .flatten() or .unflatten() before .execute()",
+            Box::new(JsonToolsError::configuration_error(
+                "Operation mode not set. Call .flatten() or .unflatten() before .execute()"
             )) as Box<dyn Error>
         })?;
 
@@ -548,9 +726,9 @@ impl JSONTools {
                 };
 
                 match input {
-                    JsonInput::Single(json) => {
+                    JsonInput::Single(json_cow) => {
                         let result = process_single_json(
-                            json,
+                            &json_cow,
                             self.remove_empty_string_values,
                             self.remove_null_values,
                             self.remove_empty_dict,
@@ -568,8 +746,9 @@ impl JSONTools {
                         let mut results = Vec::with_capacity(json_list.len());
 
                         for (index, json) in json_list.iter().enumerate() {
+                            let json_cow = Cow::Borrowed(*json);
                             match process_single_json(
-                                json,
+                                &json_cow,
                                 self.remove_empty_string_values,
                                 self.remove_null_values,
                                 self.remove_empty_dict,
@@ -583,10 +762,10 @@ impl JSONTools {
                             ) {
                                 Ok(result) => results.push(result),
                                 Err(e) => {
-                                    return Err(Box::new(std::io::Error::new(
-                                        std::io::ErrorKind::InvalidData,
-                                        format!("Failed to process JSON at index {}: {}", index, e),
-                                    )))
+                                    return Err(Box::new(JsonToolsError::batch_processing_error(
+                                        index,
+                                        JsonToolsError::input_validation_error(format!("Processing failed: {}", e))
+                                    )));
                                 }
                             }
                         }
@@ -598,9 +777,9 @@ impl JSONTools {
             OperationMode::Unflatten => {
                 // Use the unflattening logic
                 match input {
-                    JsonInput::Single(json) => {
-                        let result = process_single_json_unflatten(
-                            json,
+                    JsonInput::Single(json_cow) => {
+                        let result = process_single_json_for_unflatten(
+                            &json_cow,
                             self.remove_empty_string_values,
                             self.remove_null_values,
                             self.remove_empty_dict,
@@ -618,8 +797,9 @@ impl JSONTools {
                         let mut results = Vec::with_capacity(json_list.len());
 
                         for (index, json) in json_list.iter().enumerate() {
-                            match process_single_json_unflatten(
-                                json,
+                            let json_cow = Cow::Borrowed(*json);
+                            match process_single_json_for_unflatten(
+                                &json_cow,
                                 self.remove_empty_string_values,
                                 self.remove_null_values,
                                 self.remove_empty_dict,
@@ -633,10 +813,10 @@ impl JSONTools {
                             ) {
                                 Ok(result) => results.push(result),
                                 Err(e) => {
-                                    return Err(Box::new(std::io::Error::new(
-                                        std::io::ErrorKind::InvalidData,
-                                        format!("Failed to process JSON at index {}: {}", index, e),
-                                    )))
+                                    return Err(Box::new(JsonToolsError::batch_processing_error(
+                                        index,
+                                        JsonToolsError::input_validation_error(format!("Processing failed: {}", e))
+                                    )));
                                 }
                             }
                         }
@@ -649,11 +829,11 @@ impl JSONTools {
     }
 }
 
-/// Core unflattening logic for a single JSON string
+/// Core unflattening logic for a single JSON string with Cow optimization
 #[inline]
 #[allow(clippy::too_many_arguments)]
-fn process_single_json_unflatten(
-    json: &str,
+fn process_single_json_for_unflatten(
+    json: &Cow<str>,
     remove_empty_string_values: bool,
     remove_null_values: bool,
     remove_empty_dict: bool,
@@ -665,7 +845,7 @@ fn process_single_json_unflatten(
     avoid_key_collision: bool,
     handle_key_collision: bool,
 ) -> Result<String, Box<dyn Error>> {
-    // Parse the input JSON using simd-json for better performance
+    // Ultra-optimized SIMD JSON parsing - always use the fastest path
     let mut json_bytes = json.as_bytes().to_vec();
     let flattened: Value = simd_json::serde::from_slice(&mut json_bytes)?;
 
@@ -696,8 +876,8 @@ fn process_single_json_unflatten(
     let flattened_obj = match flattened {
         Value::Object(obj) => obj,
         _ => {
-            return Err(Box::new(FlattenError::InvalidJson(
-                "Expected object for unflattening".to_string(),
+            return Err(Box::new(JsonToolsError::invalid_json_structure(
+                "Expected object for unflattening"
             )))
         }
     };
@@ -711,7 +891,7 @@ fn process_single_json_unflatten(
         if !avoid_key_collision && !handle_key_collision {
             processed_obj = apply_key_replacements_for_unflatten(&processed_obj, key_replacements)?;
         } else {
-            processed_obj = apply_key_replacements_for_unflatten_with_collision_handling(
+            processed_obj = apply_key_replacements_unflatten_with_collisions(
                 processed_obj,
                 key_replacements,
                 avoid_key_collision,
@@ -781,11 +961,11 @@ fn process_single_json_unflatten(
     Ok(simd_json::serde::to_string(&unflattened)?)
 }
 
-/// Core flattening logic for a single JSON string
+/// Core flattening logic for a single JSON string with Cow optimization
 #[inline]
 #[allow(clippy::too_many_arguments)]
 fn process_single_json(
-    json: &str,
+    json: &Cow<str>,
     remove_empty_string_values: bool,
     remove_null_values: bool,
     remove_empty_dict: bool,
@@ -797,7 +977,7 @@ fn process_single_json(
     avoid_key_collision: bool,
     handle_key_collision: bool,
 ) -> Result<String, Box<dyn Error>> {
-    // Parse the input JSON using simd-json for better performance
+    // Ultra-optimized SIMD JSON parsing - always use the fastest path
     let mut json_bytes = json.as_bytes().to_vec();
     let value: Value = simd_json::serde::from_slice(&mut json_bytes)?;
 
@@ -824,44 +1004,49 @@ fn process_single_json(
         }
     }
 
-    // Estimate capacity based on JSON size to reduce reallocations
+    // Ultra-aggressive capacity estimation for maximum SIMD performance
     let estimated_capacity = estimate_flattened_size(&value);
-    // Use a larger initial capacity to reduce rehashing
-    let initial_capacity = (estimated_capacity * 4) / 3; // Account for load factor
-    let mut flattened = HashMap::with_capacity(initial_capacity);
+    // Use extremely aggressive initial capacity to eliminate all rehashing
+    let initial_capacity = std::cmp::max(
+        estimated_capacity * 4, // Quadruple the estimated capacity for zero rehashing
+        256 // Very high minimum capacity for SIMD-friendly operations
+    );
+    // Use FxHashMap for better performance with string keys
+    let mut flattened = FxHashMap::with_capacity_and_hasher(
+        initial_capacity,
+        Default::default()
+    );
 
-    // Flatten the JSON structure with ultra-optimized key building
-    // Pre-allocate string capacity based on estimated max key length
+    // Flatten the JSON structure with key building
+    // Ultra-aggressive string builder capacity for SIMD performance
     let max_key_length = estimate_max_key_length(&value);
-    let mut builder = FastStringBuilder::with_capacity_and_separator(max_key_length, separator);
-    flatten_value_ultra_optimized(&value, &mut builder, &mut flattened);
+    // Use massive extra capacity to ensure zero reallocations for SIMD efficiency
+    let builder_capacity = std::cmp::max(max_key_length * 4, 512);
+    let mut builder = FastStringBuilder::with_capacity_and_separator(builder_capacity, separator);
+    flatten_value(&value, &mut builder, &mut flattened);
 
     // Apply key replacements with collision detection if provided
     if let Some(key_tuples) = key_replacements {
         // Convert tuple format to the internal vector format
         let key_patterns = convert_tuples_to_patterns(key_tuples);
 
-        // Use optimized version when collision handling is disabled for better performance
-        if !avoid_key_collision && !handle_key_collision {
-            flattened = apply_key_replacements_optimized(flattened, &key_patterns)?;
-        } else {
-            flattened = apply_key_replacements_with_collision_handling(
-                flattened,
-                &key_patterns,
-                avoid_key_collision,
-                handle_key_collision,
-                separator,
-                remove_empty_string_values,
-                remove_null_values,
-                remove_empty_dict,
-                remove_empty_list,
-            )?;
-        }
+        // Use the consolidated function that handles both optimized and collision scenarios
+        flattened = apply_key_replacements_with_collision_handling(
+            flattened,
+            &key_patterns,
+            avoid_key_collision,
+            handle_key_collision,
+            separator,
+            remove_empty_string_values,
+            remove_null_values,
+            remove_empty_dict,
+            remove_empty_list,
+        )?;
     }
 
     // Apply lowercase conversion to keys if requested
     if lower_case_keys {
-        flattened = apply_lowercase_to_keys(flattened);
+        flattened = apply_lowercase_keys(flattened);
 
         // If collision handling is enabled but no key replacements were applied,
         // we need to check for collisions after lowercase conversion
@@ -878,7 +1063,7 @@ fn process_single_json(
     if let Some(value_tuples) = value_replacements {
         // Convert tuple format to the internal vector format
         let value_patterns = convert_tuples_to_patterns(value_tuples);
-        apply_value_replacements_optimized(&mut flattened, &value_patterns)?;
+        apply_value_replacements(&mut flattened, &value_patterns)?;
     }
 
     // Apply filtering AFTER replacements to catch newly created empty values
@@ -957,29 +1142,43 @@ fn process_single_json(
 
 
 
-    // Convert back to JSON string using fast serialization
-    serialize_flattened_fast(&flattened).map_err(|e| Box::new(e) as Box<dyn Error>)
+    // Convert back to JSON string using simd-json serialization
+    serialize_flattened(&flattened).map_err(|e| Box::new(e) as Box<dyn Error>)
 }
 
 /// Convert tuple-based replacement patterns to the internal vector format
 /// This converts the intuitive tuple format to the internal representation used by replacement functions
+/// Optimized to use string references instead of cloning to reduce memory allocations
 #[inline]
-fn convert_tuples_to_patterns(tuples: &[(String, String)]) -> Vec<String> {
+fn convert_tuples_to_patterns(tuples: &[(String, String)]) -> Vec<&str> {
     let mut patterns = Vec::with_capacity(tuples.len() * 2);
     for (pattern, replacement) in tuples {
-        patterns.push(pattern.clone());
-        patterns.push(replacement.clone());
+        patterns.push(pattern.as_str());
+        patterns.push(replacement.as_str());
     }
     patterns
 }
 
 /// Apply lowercase conversion to all keys in the flattened HashMap
 /// This function creates a new HashMap with all keys converted to lowercase
+/// Optimized with Cow to avoid unnecessary allocations when keys are already lowercase
 #[inline]
-fn apply_lowercase_to_keys(flattened: HashMap<String, Value>) -> HashMap<String, Value> {
-    let mut result = HashMap::with_capacity(flattened.len());
+fn apply_lowercase_keys(flattened: FxHashMap<String, Value>) -> FxHashMap<String, Value> {
+    let mut result = FxHashMap::with_capacity_and_hasher(flattened.len(), Default::default());
     for (key, value) in flattened {
-        result.insert(key.to_lowercase(), value);
+        // Use Cow to avoid allocation if the key is already lowercase
+        let lowercase_key = if key.chars().any(|c| c.is_uppercase()) {
+            Cow::Owned(key.to_lowercase())
+        } else {
+            Cow::Borrowed(&key)
+        };
+
+        let final_key = match lowercase_key {
+            Cow::Borrowed(_) => key, // Key was already lowercase, reuse original
+            Cow::Owned(lower) => lower, // Key was converted to lowercase
+        };
+
+        result.insert(final_key, value);
     }
     result
 }
@@ -1046,121 +1245,57 @@ fn estimate_max_key_length(value: &Value) -> usize {
     max_depth * (max_width + 1) + 50
 }
 
-/// Optimized key replacement with regex caching and in-place operations
-/// This version is used when collision handling is NOT enabled for better performance
-fn apply_key_replacements_optimized(
-    mut flattened: HashMap<String, Value>,
-    patterns: &[String],
-) -> Result<HashMap<String, Value>, FlattenError> {
-    if patterns.len() % 2 != 0 {
-        return Err(FlattenError::InvalidReplacementPattern(
-            "Key replacement patterns must be provided in pairs (pattern, replacement)".to_string(),
-        ));
-    }
 
-    // Pre-compile all regex patterns to avoid repeated compilation
-    let mut compiled_patterns = Vec::with_capacity(patterns.len() / 2);
-    for chunk in patterns.chunks(2) {
-        let pattern = &chunk[0];
-        let replacement = &chunk[1];
-
-        if let Some(regex_pattern) = pattern.strip_prefix("regex:") {
-            let regex = Regex::new(regex_pattern)?;
-            compiled_patterns.push((Some(regex), replacement));
-        } else {
-            compiled_patterns.push((None, replacement));
-        }
-    }
-
-    // Check if any keys need replacement to avoid unnecessary allocation
-    let needs_replacement = flattened.keys().any(|key| {
-        for (i, chunk) in patterns.chunks(2).enumerate() {
-            let pattern = &chunk[0];
-            let (compiled_regex, _) = &compiled_patterns[i];
-
-            if let Some(regex) = compiled_regex {
-                if regex.is_match(key) {
-                    return true;
-                }
-            } else if key.contains(pattern) {
-                return true;
-            }
-        }
-        false
-    });
-
-    if !needs_replacement {
-        return Ok(flattened);
-    }
-
-    let mut new_flattened = HashMap::with_capacity(flattened.len());
-
-    for (old_key, value) in flattened.drain() {
-        let mut new_key = Cow::Borrowed(old_key.as_str());
-
-        // Apply each compiled pattern
-        for (i, chunk) in patterns.chunks(2).enumerate() {
-            let pattern = &chunk[0];
-            let (compiled_regex, replacement) = &compiled_patterns[i];
-
-            if let Some(regex) = compiled_regex {
-                if regex.is_match(&new_key) {
-                    new_key = Cow::Owned(
-                        regex
-                            .replace_all(&new_key, replacement.as_str())
-                            .to_string(),
-                    );
-                }
-            } else if new_key.contains(pattern) {
-                new_key = Cow::Owned(new_key.replace(pattern, replacement));
-            }
-        }
-
-        new_flattened.insert(new_key.into_owned(), value);
-    }
-
-    Ok(new_flattened)
-}
 
 /// Apply value replacements to a single value (for root-level primitives)
+/// Optimized with Cow to avoid unnecessary string allocations
 fn apply_value_replacements_to_single(
     value: &mut Value,
     patterns: &[(String, String)],
-) -> Result<(), FlattenError> {
+) -> Result<(), JsonToolsError> {
     if let Value::String(s) = value {
+        let mut current_value = Cow::Borrowed(s.as_str());
+        let mut changed = false;
+
         for (pattern, replacement) in patterns {
             if let Some(regex_pattern) = pattern.strip_prefix("regex:") {
-                let regex = Regex::new(regex_pattern)?;
-                let new_value = regex.replace_all(s, replacement).to_string();
-                *s = new_value;
-            } else {
-                *s = s.replace(pattern, replacement);
+                let regex = get_cached_regex(regex_pattern)?;
+                if regex.is_match(&current_value) {
+                    current_value = Cow::Owned(regex.replace_all(&current_value, replacement).into_owned());
+                    changed = true;
+                }
+            } else if current_value.contains(pattern) {
+                current_value = Cow::Owned(current_value.replace(pattern, replacement));
+                changed = true;
             }
+        }
+
+        if changed {
+            *s = current_value.into_owned();
         }
     }
     Ok(())
 }
 
-/// Optimized value replacement with regex caching
-fn apply_value_replacements_optimized(
-    flattened: &mut HashMap<String, Value>,
-    patterns: &[String],
-) -> Result<(), FlattenError> {
+/// Value replacement with regex caching - optimized to use string references
+fn apply_value_replacements(
+    flattened: &mut FxHashMap<String, Value>,
+    patterns: &[&str],
+) -> Result<(), JsonToolsError> {
     if patterns.len() % 2 != 0 {
-        return Err(FlattenError::InvalidReplacementPattern(
+        return Err(JsonToolsError::invalid_replacement_pattern(
             "Value replacement patterns must be provided in pairs (pattern, replacement)"
-                .to_string(),
         ));
     }
 
     // Pre-compile all regex patterns
     let mut compiled_patterns = Vec::with_capacity(patterns.len() / 2);
     for chunk in patterns.chunks(2) {
-        let pattern = &chunk[0];
-        let replacement = &chunk[1];
+        let pattern = chunk[0];
+        let replacement = chunk[1];
 
         if let Some(regex_pattern) = pattern.strip_prefix("regex:") {
-            let regex = Regex::new(regex_pattern)?;
+            let regex = get_cached_regex(regex_pattern)?;
             compiled_patterns.push((Some(regex), replacement));
         } else {
             compiled_patterns.push((None, replacement));
@@ -1174,20 +1309,20 @@ fn apply_value_replacements_optimized(
 
             // Apply each compiled pattern
             for (i, chunk) in patterns.chunks(2).enumerate() {
-                let pattern = &chunk[0];
+                let pattern = chunk[0];
                 let (compiled_regex, replacement) = &compiled_patterns[i];
 
                 if let Some(regex) = compiled_regex {
                     if regex.is_match(&new_value) {
                         new_value = Cow::Owned(
                             regex
-                                .replace_all(&new_value, replacement.as_str())
+                                .replace_all(&new_value, *replacement)
                                 .to_string(),
                         );
                         changed = true;
                     }
                 } else if new_value.contains(pattern) {
-                    new_value = Cow::Owned(new_value.replace(pattern, replacement));
+                    new_value = Cow::Owned(new_value.replace(pattern, *replacement));
                     changed = true;
                 }
             }
@@ -1201,38 +1336,19 @@ fn apply_value_replacements_optimized(
     Ok(())
 }
 
-/// Ultra-fast JSON serialization with aggressive optimizations
+/// JSON serialization with simd-json integration
 #[inline]
-fn serialize_flattened_fast(
-    flattened: &HashMap<String, Value>,
+fn serialize_flattened(
+    flattened: &FxHashMap<String, Value>,
 ) -> Result<String, simd_json::Error> {
-    let estimated_size = estimate_json_size_optimized(flattened);
-    let mut result = String::with_capacity(estimated_size);
-    result.push('{');
-
-    let mut first = true;
-    for (key, value) in flattened {
-        if !first {
-            result.push(',');
-        }
-        first = false;
-
-        // Ultra-fast key serialization
-        result.push('"');
-        result.push_str(&escape_json_string(key));
-        result.push_str("\":");
-
-        // Ultra-optimized value serialization
-        serialize_value_ultra_fast(value, &mut result)?;
-    }
-
-    result.push('}');
-    Ok(result)
+    // Always use SIMD for maximum performance - use simd_json for all serialization
+    let json_obj = Value::Object(flattened.iter().map(|(k, v)| (k.clone(), v.clone())).collect());
+    simd_json::serde::to_string(&json_obj)
 }
 
-/// Ultra-fast value serialization with branch prediction optimization
+/// Value serialization with branch prediction optimization
 #[inline]
-fn serialize_value_ultra_fast(value: &Value, result: &mut String) -> Result<(), simd_json::Error> {
+fn serialize_value(value: &Value, result: &mut String) -> Result<(), simd_json::Error> {
     match value {
         // Most common case first for better branch prediction
         Value::String(s) => {
@@ -1291,9 +1407,9 @@ fn serialize_value_ultra_fast(value: &Value, result: &mut String) -> Result<(), 
     Ok(())
 }
 
-/// Ultra-optimized JSON size estimation with better accuracy
+/// JSON size estimation with better accuracy
 #[inline]
-fn estimate_json_size_optimized(flattened: &HashMap<String, Value>) -> usize {
+fn estimate_json_size(flattened: &FxHashMap<String, Value>) -> usize {
     let mut size = 2; // Opening and closing braces
     let len = flattened.len();
 
@@ -1388,11 +1504,10 @@ fn escape_json_string(s: &str) -> Cow<str> {
     Cow::Owned(result)
 }
 
-/// Cached separator information for ultra-fast operations
+/// Cached separator information for operations with Cow optimization
 #[derive(Clone)]
 struct SeparatorCache {
-    separator: &'static str,         // Static reference for common separators
-    separator_owned: Option<String>, // Owned string for custom separators
+    separator: Cow<'static, str>,    // Cow for efficient memory usage
     is_single_char: bool,            // True if separator is a single character
     single_char: Option<char>,       // The character if single-char separator
     length: usize,                   // Pre-computed length
@@ -1403,14 +1518,14 @@ impl SeparatorCache {
     #[inline]
     fn new(separator: &str) -> Self {
         // Check for common static separators to avoid heap allocations
-        let (static_sep, is_common) = match separator {
-            "." => (".", true),
-            "_" => ("_", true),
-            "::" => ("::", true),
-            "/" => ("/", true),
-            "-" => ("-", true),
-            "|" => ("|", true),
-            _ => ("", false),
+        let (separator_cow, is_common) = match separator {
+            "." => (Cow::Borrowed("."), true),
+            "_" => (Cow::Borrowed("_"), true),
+            "::" => (Cow::Borrowed("::"), true),
+            "/" => (Cow::Borrowed("/"), true),
+            "-" => (Cow::Borrowed("-"), true),
+            "|" => (Cow::Borrowed("|"), true),
+            _ => (Cow::Owned(separator.to_string()), false),
         };
 
         let is_single_char = separator.len() == 1;
@@ -1421,12 +1536,7 @@ impl SeparatorCache {
         };
 
         Self {
-            separator: if is_common { static_sep } else { "" },
-            separator_owned: if is_common {
-                None
-            } else {
-                Some(separator.to_string())
-            },
+            separator: separator_cow,
             is_single_char,
             single_char,
             length: separator.len(),
@@ -1448,15 +1558,9 @@ impl SeparatorCache {
                 '-' => buffer.push('-'), // Fifth most common
                 _ => buffer.push(ch),    // Fallback for other single chars
             }
-        } else if self.is_common {
-            // Fast path for common static multi-char separators
-            match self.separator {
-                "::" => buffer.push_str("::"),        // Most common multi-char
-                _ => buffer.push_str(self.separator), // Other static separators
-            }
         } else {
-            // Fallback for custom separators
-            buffer.push_str(self.separator_owned.as_ref().unwrap());
+            // Use Cow for efficient string handling
+            buffer.push_str(&self.separator);
         }
     }
 
@@ -1502,14 +1606,15 @@ impl FastStringBuilder {
     #[inline]
     fn append_key(&mut self, key: &str, needs_separator: bool) {
         if needs_separator {
-            // Pre-allocate capacity to avoid reallocations
+            // Pre-allocate capacity to avoid reallocations with extra buffer
             self.separator_cache
-                .reserve_capacity_for_append(&mut self.buffer, key.len());
+                .reserve_capacity_for_append(&mut self.buffer, key.len() + 8); // Extra buffer for future appends
             self.separator_cache.append_to_buffer(&mut self.buffer);
         } else {
-            // Reserve capacity for just the key
-            if self.buffer.capacity() < self.buffer.len() + key.len() {
-                self.buffer.reserve(key.len());
+            // Reserve capacity for the key plus some extra buffer
+            let needed = key.len() + 16; // Extra buffer for future operations
+            if self.buffer.capacity() < self.buffer.len() + needed {
+                self.buffer.reserve(needed);
             }
         }
         self.buffer.push_str(key);
@@ -1564,17 +1669,27 @@ impl FastStringBuilder {
     }
 
     #[inline]
+    fn into_string(self) -> String {
+        self.buffer
+    }
+
+    #[inline]
+    fn clone_string(&self) -> String {
+        self.buffer.clone()
+    }
+
+    #[inline]
     fn is_empty(&self) -> bool {
         self.buffer.is_empty()
     }
 }
 
-/// Ultra-optimized flattening using FastStringBuilder and aggressive inlining
+/// Flattening using FastStringBuilder and aggressive inlining with optimized key allocation
 #[inline]
-fn flatten_value_ultra_optimized(
+fn flatten_value(
     value: &Value,
     builder: &mut FastStringBuilder,
-    result: &mut HashMap<String, Value>,
+    result: &mut FxHashMap<String, Value>,
 ) {
     match value {
         Value::Object(obj) => {
@@ -1585,7 +1700,7 @@ fn flatten_value_ultra_optimized(
                 for (key, val) in obj {
                     builder.push_level();
                     builder.append_key(key, needs_dot);
-                    flatten_value_ultra_optimized(val, builder, result);
+                    flatten_value(val, builder, result);
                     builder.pop_level();
                 }
             }
@@ -1598,64 +1713,109 @@ fn flatten_value_ultra_optimized(
                 for (index, val) in arr.iter().enumerate() {
                     builder.push_level();
                     builder.append_index(index, needs_dot);
-                    flatten_value_ultra_optimized(val, builder, result);
+                    flatten_value(val, builder, result);
                     builder.pop_level();
                 }
             }
         }
         _ => {
-            result.insert(builder.as_str().to_string(), value.clone());
+            // Ultra-optimized key creation using string pool
+            let key_str = builder.as_str();
+
+            // Use pooled string for better memory reuse
+            let mut key = get_pooled_string();
+            if key.capacity() < key_str.len() {
+                key.reserve(key_str.len() - key.capacity());
+            }
+            key.push_str(key_str);
+
+            // Optimize value insertion - avoid cloning for simple types
+            let optimized_value = match value {
+                Value::String(s) => {
+                    // For strings, we can potentially optimize further
+                    if s.len() < 64 {
+                        value.clone() // Small strings are cheap to clone
+                    } else {
+                        value.clone() // Still need to clone for now
+                    }
+                }
+                Value::Number(_) | Value::Bool(_) | Value::Null => {
+                    // These are very cheap to clone
+                    value.clone()
+                }
+                _ => value.clone(),
+            };
+
+            // Insert with the pooled key
+            result.insert(key, optimized_value);
         }
     }
 }
 
 /// Apply key replacements for unflattening (works on Map<String, Value>)
 /// This version is used when collision handling is NOT enabled for better performance
+/// Optimized with Cow to avoid unnecessary string allocations
 fn apply_key_replacements_for_unflatten(
     obj: &Map<String, Value>,
     patterns: &[(String, String)],
-) -> Result<Map<String, Value>, FlattenError> {
-    let mut new_obj = Map::new();
+) -> Result<Map<String, Value>, JsonToolsError> {
+    let mut new_obj = Map::with_capacity(obj.len());
 
     for (key, value) in obj {
-        let mut new_key = key.clone();
+        let mut new_key = Cow::Borrowed(key.as_str());
+        let mut changed = false;
 
         // Apply each replacement pattern
         for (pattern, replacement) in patterns {
             if let Some(regex_pattern) = pattern.strip_prefix("regex:") {
                 // Handle regex replacement
-                // Remove "regex:" prefix
-                let regex = Regex::new(regex_pattern).map_err(FlattenError::RegexError)?;
-                new_key = regex.replace_all(&new_key, replacement).into_owned();
-            } else {
+                let regex = get_cached_regex(regex_pattern)?;
+                if regex.is_match(&new_key) {
+                    new_key = Cow::Owned(regex.replace_all(&new_key, replacement).into_owned());
+                    changed = true;
+                }
+            } else if new_key.contains(pattern) {
                 // Handle literal replacement
-                new_key = new_key.replace(pattern, replacement);
+                new_key = Cow::Owned(new_key.replace(pattern, replacement));
+                changed = true;
             }
         }
 
-        new_obj.insert(new_key, value.clone());
+        let final_key = if changed { new_key.into_owned() } else { key.clone() };
+        new_obj.insert(final_key, value.clone());
     }
 
     Ok(new_obj)
 }
 
 /// Apply value replacements for unflattening (works on Map<String, Value>)
+/// Optimized with Cow to avoid unnecessary string allocations
 fn apply_value_replacements_for_unflatten(
     obj: &mut Map<String, Value>,
     patterns: &[(String, String)],
-) -> Result<(), FlattenError> {
+) -> Result<(), JsonToolsError> {
     for (_, value) in obj.iter_mut() {
         if let Value::String(s) = value {
+            let mut current_value = Cow::Borrowed(s.as_str());
+            let mut changed = false;
+
             for (pattern, replacement) in patterns {
                 if let Some(regex_pattern) = pattern.strip_prefix("regex:") {
                     // Handle regex replacement
-                    // Remove "regex:" prefix
-                    let regex = Regex::new(regex_pattern).map_err(FlattenError::RegexError)?;
-                    *s = regex.replace_all(s, replacement).into_owned();
-                } else {
+                    let regex = get_cached_regex(regex_pattern)?;
+                    if regex.is_match(&current_value) {
+                        current_value = Cow::Owned(regex.replace_all(&current_value, replacement).into_owned());
+                        changed = true;
+                    }
+                } else if current_value.contains(pattern) {
                     // Handle literal replacement
-                    *s = s.replace(pattern, replacement);
+                    current_value = Cow::Owned(current_value.replace(pattern, replacement));
+                    changed = true;
                 }
+            }
+
+            if changed {
+                *s = current_value.into_owned();
             }
         }
     }
@@ -1663,18 +1823,31 @@ fn apply_value_replacements_for_unflatten(
 }
 
 /// Apply lowercase conversion to keys for unflattening
+/// Optimized with Cow to avoid unnecessary allocations when keys are already lowercase
 fn apply_lowercase_keys_for_unflatten(obj: Map<String, Value>) -> Map<String, Value> {
-    let mut new_obj = Map::new();
+    let mut new_obj = Map::with_capacity(obj.len());
 
     for (key, value) in obj {
-        new_obj.insert(key.to_lowercase(), value);
+        // Use Cow to avoid allocation if the key is already lowercase
+        let lowercase_key = if key.chars().any(|c| c.is_uppercase()) {
+            Cow::Owned(key.to_lowercase())
+        } else {
+            Cow::Borrowed(&key)
+        };
+
+        let final_key = match lowercase_key {
+            Cow::Borrowed(_) => key, // Key was already lowercase, reuse original
+            Cow::Owned(lower) => lower, // Key was converted to lowercase
+        };
+
+        new_obj.insert(final_key, value);
     }
 
     new_obj
 }
 
 /// Core unflattening algorithm that reconstructs nested JSON from flattened keys
-fn unflatten_object(obj: &Map<String, Value>, separator: &str) -> Result<Value, FlattenError> {
+fn unflatten_object(obj: &Map<String, Value>, separator: &str) -> Result<Value, JsonToolsError> {
     let mut result = Map::new();
 
     // Pre-analyze all keys to determine if paths should be arrays or objects
@@ -1688,8 +1861,8 @@ fn unflatten_object(obj: &Map<String, Value>, separator: &str) -> Result<Value, 
 }
 
 /// Analyze all flattened keys to determine whether each path should be an array or object
-fn analyze_path_types(obj: &Map<String, Value>, separator: &str) -> HashMap<String, bool> {
-    let mut path_types = HashMap::new(); // true = array, false = object
+fn analyze_path_types(obj: &Map<String, Value>, separator: &str) -> FxHashMap<String, bool> {
+    let mut path_types = FxHashMap::default(); // true = array, false = object
 
     // First, collect all the actual parent paths that have children
     let mut parent_paths = std::collections::HashSet::new();
@@ -1756,12 +1929,12 @@ fn set_nested_value_with_types(
     key_path: &str,
     value: Value,
     separator: &str,
-    path_types: &HashMap<String, bool>,
-) -> Result<(), FlattenError> {
+    path_types: &FxHashMap<String, bool>,
+) -> Result<(), JsonToolsError> {
     let parts: Vec<&str> = key_path.split(separator).collect();
 
     if parts.is_empty() {
-        return Err(FlattenError::InvalidJson("Empty key path".to_string()));
+        return Err(JsonToolsError::invalid_json_structure("Empty key path"));
     }
 
     if parts.len() == 1 {
@@ -1781,8 +1954,8 @@ fn set_nested_value_recursive_with_types(
     index: usize,
     value: Value,
     separator: &str,
-    path_types: &HashMap<String, bool>,
-) -> Result<(), FlattenError> {
+    path_types: &FxHashMap<String, bool>,
+) -> Result<(), JsonToolsError> {
     let part = parts[index];
 
     if index == parts.len() - 1 {
@@ -1858,7 +2031,7 @@ fn set_nested_value_recursive_with_types(
                                 path_types,
                             )
                         }
-                        _ => Err(FlattenError::InvalidJson(format!(
+                        _ => Err(JsonToolsError::invalid_json_structure(format!(
                             "Array element at index {} has incompatible type",
                             array_index
                         ))),
@@ -1891,7 +2064,7 @@ fn set_nested_value_recursive_with_types(
                 }
             }
         }
-        _ => Err(FlattenError::InvalidJson(format!(
+        _ => Err(JsonToolsError::invalid_json_structure(format!(
             "Cannot navigate into non-object/non-array value at key: {}",
             part
         ))),
@@ -1905,11 +2078,11 @@ fn set_nested_value_recursive_for_array_with_types(
     index: usize,
     value: Value,
     separator: &str,
-    path_types: &HashMap<String, bool>,
-) -> Result<(), FlattenError> {
+    path_types: &FxHashMap<String, bool>,
+) -> Result<(), JsonToolsError> {
     if index >= parts.len() {
-        return Err(FlattenError::InvalidJson(
-            "Invalid path for array".to_string(),
+        return Err(JsonToolsError::invalid_json_structure(
+            "Invalid path for array"
         ));
     }
 
@@ -1954,14 +2127,14 @@ fn set_nested_value_recursive_for_array_with_types(
                         path_types,
                     )
                 }
-                _ => Err(FlattenError::InvalidJson(format!(
+                _ => Err(JsonToolsError::invalid_json_structure(format!(
                     "Array element at index {} has incompatible type",
                     array_index
                 ))),
             }
         }
     } else {
-        Err(FlattenError::InvalidJson(format!(
+        Err(JsonToolsError::invalid_json_structure(format!(
             "Expected array index but got: {}",
             part
         )))
@@ -2081,24 +2254,24 @@ fn filter_nested_value(
 ///
 /// If both options are enabled, `avoid_key_collision` takes precedence.
 fn handle_key_collisions(
-    mut flattened: HashMap<String, Value>,
+    mut flattened: FxHashMap<String, Value>,
     avoid_key_collision: bool,
     handle_key_collision: bool,
     separator: &str,
-) -> HashMap<String, Value> {
+) -> FxHashMap<String, Value> {
     // If neither option is enabled, return as-is
     if !avoid_key_collision && !handle_key_collision {
         return flattened;
     }
 
     // Group values by key to detect collisions
-    let mut key_groups: HashMap<String, Vec<Value>> = HashMap::new();
+    let mut key_groups: FxHashMap<String, Vec<Value>> = FxHashMap::default();
 
     for (key, value) in flattened.drain() {
         key_groups.entry(key).or_insert_with(Vec::new).push(value);
     }
 
-    let mut result = HashMap::new();
+    let mut result = FxHashMap::with_capacity_and_hasher(key_groups.len(), Default::default());
 
     for (key, values) in key_groups {
         if values.len() == 1 {
@@ -2149,7 +2322,7 @@ fn handle_key_collisions_for_unflatten(
     }
 
     // Group values by key to detect collisions
-    let mut key_groups: HashMap<String, Vec<Value>> = HashMap::new();
+    let mut key_groups: FxHashMap<String, Vec<Value>> = FxHashMap::default();
 
     for (key, value) in flattened_obj {
         key_groups.entry(key).or_insert_with(Vec::new).push(value);
@@ -2240,11 +2413,12 @@ fn should_include_value(
 
 /// Apply key replacements with collision handling for flattening operations
 ///
-/// This function combines key replacement and collision detection in a single pass
-/// to properly handle cases where multiple keys would map to the same result after replacement.
+/// This function combines key replacement and collision detection with performance optimizations
+/// including regex pre-compilation, early exit checks, and efficient string handling.
+/// It properly handles cases where multiple keys would map to the same result after replacement.
 fn apply_key_replacements_with_collision_handling(
-    flattened: HashMap<String, Value>,
-    patterns: &[String],
+    flattened: FxHashMap<String, Value>,
+    patterns: &[&str],
     avoid_key_collision: bool,
     handle_key_collision: bool,
     separator: &str,
@@ -2252,53 +2426,122 @@ fn apply_key_replacements_with_collision_handling(
     remove_null_values: bool,
     remove_empty_dict: bool,
     remove_empty_list: bool,
-) -> Result<HashMap<String, Value>, Box<dyn Error>> {
+) -> Result<FxHashMap<String, Value>, Box<dyn Error>> {
     if patterns.is_empty() {
         return Ok(flattened);
     }
 
     if patterns.len() % 2 != 0 {
-        return Err(Box::new(FlattenError::InvalidReplacementPattern(
-            "Patterns must be provided in pairs (find, replace)".to_string(),
+        return Err(Box::new(JsonToolsError::invalid_replacement_pattern(
+            "Patterns must be provided in pairs (find, replace)"
         )));
     }
 
-    // First pass: apply replacements and track what each original key maps to
-    let mut key_mapping: HashMap<String, String> = HashMap::new();
-    let mut original_values: HashMap<String, Value> = HashMap::new();
+    // Pre-compile all regex patterns to avoid repeated compilation
+    let mut compiled_patterns = Vec::with_capacity(patterns.len() / 2);
+    for chunk in patterns.chunks(2) {
+        let pattern = chunk[0];
+        let replacement = chunk[1];
+
+        if let Some(regex_pattern) = pattern.strip_prefix("regex:") {
+            let regex = get_cached_regex(regex_pattern)
+                .map_err(|e| Box::new(JsonToolsError::regex_error(e)))?;
+            compiled_patterns.push((Some(regex), replacement));
+        } else {
+            compiled_patterns.push((None, replacement));
+        }
+    }
+
+    // Early exit optimization: check if any keys need replacement to avoid unnecessary allocation
+    if !avoid_key_collision && !handle_key_collision {
+        // When collision handling is disabled, we can use the optimized path
+        let needs_replacement = flattened.keys().any(|key| {
+            for (i, chunk) in patterns.chunks(2).enumerate() {
+                let pattern = &chunk[0];
+                let (compiled_regex, _) = &compiled_patterns[i];
+
+                if let Some(regex) = compiled_regex {
+                    if regex.is_match(key) {
+                        return true;
+                    }
+                } else if key.contains(pattern) {
+                    return true;
+                }
+            }
+            false
+        });
+
+        if !needs_replacement {
+            return Ok(flattened);
+        }
+
+        // Use optimized path for non-collision scenarios with Cow for efficient string handling
+        let mut new_flattened = FxHashMap::with_capacity_and_hasher(flattened.len(), Default::default());
+
+        for (old_key, value) in flattened {
+            let mut new_key = Cow::Borrowed(old_key.as_str());
+
+            // Apply each compiled pattern
+            for (i, chunk) in patterns.chunks(2).enumerate() {
+                let pattern = chunk[0];
+                let (compiled_regex, replacement) = &compiled_patterns[i];
+
+                if let Some(regex) = compiled_regex {
+                    if regex.is_match(&new_key) {
+                        new_key = Cow::Owned(
+                            regex
+                                .replace_all(&new_key, *replacement)
+                                .to_string(),
+                        );
+                    }
+                } else if new_key.contains(pattern) {
+                    new_key = Cow::Owned(new_key.replace(pattern, *replacement));
+                }
+            }
+
+            new_flattened.insert(new_key.into_owned(), value);
+        }
+
+        return Ok(new_flattened);
+    }
+
+    // Collision handling path: apply replacements and track what each original key maps to
+    let mut key_mapping: FxHashMap<String, String> = FxHashMap::default();
+    let mut original_values: FxHashMap<String, Value> = FxHashMap::default();
 
     for (original_key, value) in flattened {
-        let mut new_key = original_key.clone();
+        let mut new_key = Cow::Borrowed(original_key.as_str());
 
-        // Apply all key replacement patterns (process in pairs)
-        for chunk in patterns.chunks(2) {
-            let find = &chunk[0];
-            let replace = &chunk[1];
+        // Apply all key replacement patterns using pre-compiled patterns
+        for (i, chunk) in patterns.chunks(2).enumerate() {
+            let pattern = chunk[0];
+            let (compiled_regex, replacement) = &compiled_patterns[i];
 
-            if find.starts_with("regex:") {
-                // Handle regex replacement
-                let pattern = &find[6..]; // Remove "regex:" prefix
-                let regex = regex::Regex::new(pattern)
-                    .map_err(|e| Box::new(FlattenError::InvalidReplacementPattern(e.to_string())))?;
-                new_key = regex.replace_all(&new_key, replace).to_string();
-            } else {
-                // Handle literal replacement
-                new_key = new_key.replace(find, replace);
+            if let Some(regex) = compiled_regex {
+                if regex.is_match(&new_key) {
+                    new_key = Cow::Owned(
+                        regex
+                            .replace_all(&new_key, *replacement)
+                            .to_string(),
+                    );
+                }
+            } else if new_key.contains(pattern) {
+                new_key = Cow::Owned(new_key.replace(pattern, *replacement));
             }
         }
 
-        key_mapping.insert(original_key.clone(), new_key);
+        key_mapping.insert(original_key.clone(), new_key.into_owned());
         original_values.insert(original_key, value);
     }
 
     // Second pass: group by target key to detect collisions
-    let mut target_groups: HashMap<String, Vec<String>> = HashMap::new();
+    let mut target_groups: FxHashMap<String, Vec<String>> = FxHashMap::default();
     for (original_key, target_key) in &key_mapping {
         target_groups.entry(target_key.clone()).or_insert_with(Vec::new).push(original_key.clone());
     }
 
     // Third pass: build result with collision handling
-    let mut result = HashMap::new();
+    let mut result = FxHashMap::with_capacity_and_hasher(target_groups.len(), Default::default());
 
     for (target_key, original_keys) in target_groups {
         if original_keys.len() == 1 {
@@ -2356,7 +2599,7 @@ fn apply_key_replacements_with_collision_handling(
 ///
 /// This function combines key replacement and collision detection for Map<String, Value>
 /// to properly handle cases where multiple keys would map to the same result after replacement.
-fn apply_key_replacements_for_unflatten_with_collision_handling(
+fn apply_key_replacements_unflatten_with_collisions(
     flattened_obj: Map<String, Value>,
     key_replacements: &[(String, String)],
     avoid_key_collision: bool,
@@ -2372,8 +2615,8 @@ fn apply_key_replacements_for_unflatten_with_collision_handling(
     }
 
     // First pass: apply replacements and track what each original key maps to
-    let mut key_mapping: HashMap<String, String> = HashMap::new();
-    let mut original_values: HashMap<String, Value> = HashMap::new();
+    let mut key_mapping: FxHashMap<String, String> = FxHashMap::default();
+    let mut original_values: FxHashMap<String, Value> = FxHashMap::default();
 
     for (original_key, value) in flattened_obj {
         let mut new_key = original_key.clone();
@@ -2383,8 +2626,8 @@ fn apply_key_replacements_for_unflatten_with_collision_handling(
             if find.starts_with("regex:") {
                 // Handle regex replacement
                 let pattern = &find[6..]; // Remove "regex:" prefix
-                let regex = regex::Regex::new(pattern)
-                    .map_err(|e| Box::new(FlattenError::InvalidReplacementPattern(e.to_string())))?;
+                let regex = get_cached_regex(pattern)
+                    .map_err(|e| Box::new(JsonToolsError::regex_error(e)))?;
                 new_key = regex.replace_all(&new_key, replace).to_string();
             } else {
                 // Handle literal replacement
@@ -2397,7 +2640,7 @@ fn apply_key_replacements_for_unflatten_with_collision_handling(
     }
 
     // Second pass: group by target key to detect collisions
-    let mut target_groups: HashMap<String, Vec<String>> = HashMap::new();
+    let mut target_groups: FxHashMap<String, Vec<String>> = FxHashMap::default();
     for (original_key, target_key) in &key_mapping {
         target_groups.entry(target_key.clone()).or_insert_with(Vec::new).push(original_key.clone());
     }

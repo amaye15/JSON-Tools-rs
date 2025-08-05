@@ -18,9 +18,9 @@ use crate::{JSONTools, JsonOutput};
 #[cfg(feature = "python")]
 pyo3::create_exception!(
     json_tools_rs,
-    JsonFlattenError,
+    JsonToolsError,
     pyo3::exceptions::PyException,
-    "Python exception for JSON flattening errors"
+    "Python exception for JSON Tools operations"
 );
 
 /// Python wrapper for JsonOutput enum
@@ -315,7 +315,7 @@ impl PyJSONTools {
         if let Ok(json_str) = json_input.extract::<String>() {
             // Single JSON string → return JSON string
             let result = self.inner.clone().execute(json_str.as_str()).map_err(|e| {
-                JsonFlattenError::new_err(format!("Failed to process JSON string: {}", e))
+                JsonToolsError::new_err(format!("Failed to process JSON string: {}", e))
             })?;
 
             match result {
@@ -332,7 +332,7 @@ impl PyJSONTools {
                 .extract()?;
 
             let result = self.inner.clone().execute(json_str.as_str()).map_err(|e| {
-                JsonFlattenError::new_err(format!("Failed to process Python dict: {}", e))
+                JsonToolsError::new_err(format!("Failed to process Python dict: {}", e))
             })?;
 
             match result {
@@ -393,7 +393,7 @@ impl PyJSONTools {
                 // Process the list of JSON strings (batch processing)
                 let json_refs: Vec<&str> = json_strings.iter().map(|s| s.as_str()).collect();
                 let result = self.inner.clone().execute(&json_refs[..]).map_err(|e| {
-                    JsonFlattenError::new_err(format!("Failed to process JSON list: {}", e))
+                    JsonToolsError::new_err(format!("Failed to process JSON list: {}", e))
                 })?;
 
                 match result {
@@ -470,7 +470,7 @@ impl PyJSONTools {
         if let Ok(json_str) = json_input.extract::<String>() {
             // Single JSON string
             let result = self.inner.clone().execute(json_str.as_str()).map_err(|e| {
-                JsonFlattenError::new_err(format!("Failed to process JSON string: {}", e))
+                JsonToolsError::new_err(format!("Failed to process JSON string: {}", e))
             })?;
             Ok(PyJsonOutput::from_rust_output(result))
         } else if json_input.is_instance_of::<pyo3::types::PyDict>() {
@@ -482,7 +482,7 @@ impl PyJSONTools {
                 .extract()?;
 
             let result = self.inner.clone().execute(json_str.as_str()).map_err(|e| {
-                JsonFlattenError::new_err(format!("Failed to process Python dict: {}", e))
+                JsonToolsError::new_err(format!("Failed to process Python dict: {}", e))
             })?;
             Ok(PyJsonOutput::from_rust_output(result))
         } else if json_input.is_instance_of::<pyo3::types::PyList>() {
@@ -531,7 +531,7 @@ impl PyJSONTools {
                 // Process the list of JSON strings
                 let json_refs: Vec<&str> = json_strings.iter().map(|s| s.as_str()).collect();
                 let result = self.inner.clone().execute(&json_refs[..]).map_err(|e| {
-                    JsonFlattenError::new_err(format!("Failed to process JSON list: {}", e))
+                    JsonToolsError::new_err(format!("Failed to process JSON list: {}", e))
                 })?;
                 Ok(PyJsonOutput::from_rust_output(result))
             } else {
@@ -569,8 +569,8 @@ fn json_tools_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     // Add the custom exception
     m.add(
-        "JsonFlattenError",
-        m.py().get_type::<JsonFlattenError>(),
+        "JsonToolsError",
+        m.py().get_type::<JsonToolsError>(),
     )?;
 
     // Add module metadata

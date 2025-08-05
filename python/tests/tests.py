@@ -866,7 +866,7 @@ class TestEdgeCases:
             "null_value": None,
             "nested": {"bool_true": True, "bool_false": False, "null_nested": None},
         }
-        result = flattener.flatten(input_data)
+        result = tools.execute(input_data)
 
         assert isinstance(result, dict)
         assert result["true_value"] is True
@@ -882,7 +882,7 @@ class TestTypePreservation:
 
     def test_str_to_str_consistency(self):
         """Test JSON string input consistently produces JSON string output"""
-        flattener = json_tools_rs.JsonFlattener()
+        tools = json_tools_rs.JSONTools().flatten()
 
         test_cases = [
             '{"simple": "value"}',
@@ -892,7 +892,7 @@ class TestTypePreservation:
         ]
 
         for input_json in test_cases:
-            result = flattener.flatten(input_json)
+            result = tools.execute(input_json)
             assert isinstance(
                 result, str
             ), f"Expected str output for str input: {input_json}"
@@ -903,7 +903,7 @@ class TestTypePreservation:
 
     def test_dict_to_dict_consistency(self):
         """Test Python dict input consistently produces Python dict output"""
-        flattener = json_tools_rs.JsonFlattener()
+        tools = json_tools_rs.JSONTools().flatten()
 
         test_cases = [
             {"simple": "value"},
@@ -913,21 +913,21 @@ class TestTypePreservation:
         ]
 
         for input_dict in test_cases:
-            result = flattener.flatten(input_dict)
+            result = tools.execute(input_dict)
             assert isinstance(
                 result, dict
             ), f"Expected dict output for dict input: {input_dict}"
 
     def test_list_str_to_list_str_consistency(self):
         """Test list[str] input consistently produces list[str] output"""
-        flattener = json_tools_rs.JsonFlattener()
+        tools = json_tools_rs.JSONTools().flatten()
 
         input_list = [
             '{"item1": "value1"}',
             '{"item2": {"nested": "value2"}}',
             '{"item3": [1, 2, 3]}',
         ]
-        result = flattener.flatten(input_list)
+        result = tools.execute(input_list)
 
         assert isinstance(result, list)
         assert len(result) == len(input_list)
@@ -940,14 +940,14 @@ class TestTypePreservation:
 
     def test_list_dict_to_list_dict_consistency(self):
         """Test list[dict] input consistently produces list[dict] output"""
-        flattener = json_tools_rs.JsonFlattener()
+        tools = json_tools_rs.JSONTools().flatten()
 
         input_list = [
             {"item1": "value1"},
             {"item2": {"nested": "value2"}},
             {"item3": [1, 2, 3]},
         ]
-        result = flattener.flatten(input_list)
+        result = tools.execute(input_list)
 
         assert isinstance(result, list)
         assert len(result) == len(input_list)
@@ -955,7 +955,7 @@ class TestTypePreservation:
 
     def test_mixed_list_type_preservation_detailed(self):
         """Test detailed mixed list type preservation"""
-        flattener = json_tools_rs.JsonFlattener()
+        tools = json_tools_rs.JSONTools().flatten()
 
         # Test various mixed patterns
         mixed_patterns = [
@@ -979,7 +979,7 @@ class TestTypePreservation:
         ]
 
         for i, pattern in enumerate(mixed_patterns):
-            result = flattener.flatten(pattern)
+            result = tools.execute(pattern)
 
             assert isinstance(result, list), f"Pattern {i+1}: Expected list output"
             assert len(result) == len(pattern), f"Pattern {i+1}: Length mismatch"
@@ -995,12 +995,12 @@ class TestTypePreservation:
     def test_type_preservation_with_configurations(self):
         """Test type preservation with various configurations"""
         configurations = [
-            json_tools_rs.JsonFlattener().remove_empty_strings(True),
-            json_tools_rs.JsonFlattener().remove_nulls(True),
-            json_tools_rs.JsonFlattener().separator("_"),
-            json_tools_rs.JsonFlattener().lowercase_keys(True),
-            json_tools_rs.JsonFlattener().key_replacement("test_", ""),
-            json_tools_rs.JsonFlattener().value_replacement("old", "new"),
+            json_tools_rs.JSONTools().flatten().remove_empty_strings(True),
+            json_tools_rs.JSONTools().flatten().remove_nulls(True),
+            json_tools_rs.JSONTools().flatten().separator("_"),
+            json_tools_rs.JSONTools().flatten().lowercase_keys(True),
+            json_tools_rs.JSONTools().flatten().key_replacement("test_", ""),
+            json_tools_rs.JSONTools().flatten().value_replacement("old", "new"),
         ]
 
         test_data = {
@@ -1012,20 +1012,20 @@ class TestTypePreservation:
 
         for config in configurations:
             # Test string input → string output
-            result = config.flatten(test_data["str_input"])
+            result = config.execute(test_data["str_input"])
             assert isinstance(result, str)
 
             # Test dict input → dict output
-            result = config.flatten(test_data["dict_input"])
+            result = config.execute(test_data["dict_input"])
             assert isinstance(result, dict)
 
             # Test list[str] input → list[str] output
-            result = config.flatten(test_data["list_str_input"])
+            result = config.execute(test_data["list_str_input"])
             assert isinstance(result, list)
             assert all(isinstance(item, str) for item in result)
 
             # Test list[dict] input → list[dict] output
-            result = config.flatten(test_data["list_dict_input"])
+            result = config.execute(test_data["list_dict_input"])
             assert isinstance(result, list)
             assert all(isinstance(item, dict) for item in result)
 
@@ -1035,7 +1035,7 @@ class TestPerformance:
 
     def test_basic_flattening_performance(self):
         """Test basic flattening performance"""
-        flattener = json_tools_rs.JsonFlattener()
+        tools = json_tools_rs.JSONTools().flatten()
 
         # Create test data with varying complexity
         simple_data = {"user": {"name": "John", "age": 30}}
@@ -1055,7 +1055,7 @@ class TestPerformance:
             iterations = 1000
 
             for _ in range(iterations):
-                result = flattener.flatten(data)
+                result = tools.execute(data)
                 # Ensure the operation completes
                 if isinstance(result, dict):
                     _ = len(result)
@@ -1086,7 +1086,7 @@ class TestPerformance:
 
     def test_batch_processing_performance(self):
         """Test batch processing performance"""
-        flattener = json_tools_rs.JsonFlattener()
+        tools = json_tools_rs.JSONTools().flatten()
 
         # Create batch data
         batch_sizes = [10, 50, 100, 500]
@@ -1109,12 +1109,12 @@ class TestPerformance:
 
             # Test dict batch performance
             start_time = time.time()
-            dict_result = flattener.flatten(dict_batch)
+            dict_result = tools.execute(dict_batch)
             dict_time = time.time() - start_time
 
             # Test string batch performance
             start_time = time.time()
-            str_result = flattener.flatten(str_batch)
+            str_result = tools.execute(str_batch)
             str_time = time.time() - start_time
 
             print(f"Batch size {batch_size}:")
@@ -1145,8 +1145,9 @@ class TestPerformance:
     def test_complex_configuration_performance(self):
         """Test performance with complex configurations"""
         # Create complex flattener with all features
-        complex_flattener = (
-            json_tools_rs.JsonFlattener()
+        complex_tools = (
+            json_tools_rs.JSONTools()
+            .flatten()
             .remove_empty_strings(True)
             .remove_nulls(True)
             .remove_empty_objects(True)
@@ -1177,7 +1178,7 @@ class TestPerformance:
         iterations = 500
 
         for _ in range(iterations):
-            result = complex_flattener.flatten(complex_data)
+            result = complex_tools.execute(complex_data)
             _ = len(result)  # Ensure operation completes
 
         end_time = time.time()
@@ -1193,7 +1194,7 @@ class TestPerformance:
 
     def test_large_data_performance(self):
         """Test performance with large data structures"""
-        flattener = json_tools_rs.JsonFlattener()
+        tools = json_tools_rs.JSONTools().flatten()
 
         # Create large nested structure
         large_data = {}
@@ -1210,7 +1211,7 @@ class TestPerformance:
 
         # Benchmark large data
         start_time = time.time()
-        result = flattener.flatten(large_data)
+        result = tools.execute(large_data)
         end_time = time.time()
 
         processing_time = end_time - start_time
@@ -1239,23 +1240,24 @@ class TestPerformance:
         }
 
         # Test without regex
-        simple_flattener = json_tools_rs.JsonFlattener()
+        simple_tools = json_tools_rs.JSONTools().flatten()
         start_time = time.time()
         iterations = 100
         for _ in range(iterations):
-            result = simple_flattener.flatten(data)
+            result = simple_tools.execute(data)
             _ = len(result)
         simple_time = time.time() - start_time
 
         # Test with regex
-        regex_flattener = (
-            json_tools_rs.JsonFlattener()
+        regex_tools = (
+            json_tools_rs.JSONTools()
+            .flatten()
             .key_replacement("regex:^user_", "person_")
             .value_replacement("regex:@example\\.com", "@company.org")
         )
         start_time = time.time()
         for _ in range(iterations):
-            result = regex_flattener.flatten(data)
+            result = regex_tools.execute(data)
             _ = len(result)
         regex_time = time.time() - start_time
 
@@ -1275,7 +1277,7 @@ class TestPerformance:
         """Test memory efficiency with repeated operations"""
         import gc
 
-        flattener = json_tools_rs.JsonFlattener()
+        tools = json_tools_rs.JSONTools().flatten()
 
         # Create medium-sized data
         data = {
@@ -1289,7 +1291,7 @@ class TestPerformance:
         gc.collect()  # Clean up before test
 
         for i in range(100):
-            result = flattener.flatten(data)
+            result = tools.execute(data)
 
             # Periodically verify result and clean up
             if i % 10 == 0:
@@ -1315,20 +1317,20 @@ class TestPerformance:
         }
         test_data_str = json.dumps(test_data_dict)
 
-        flattener = json_tools_rs.JsonFlattener()
+        tools = json_tools_rs.JSONTools().flatten()
 
         # Test dict input performance
         start_time = time.time()
         iterations = 100
         for _ in range(iterations):
-            result = flattener.flatten(test_data_dict)
+            result = tools.execute(test_data_dict)
             _ = len(result)
         dict_time = time.time() - start_time
 
         # Test string input performance
         start_time = time.time()
         for _ in range(iterations):
-            result = flattener.flatten(test_data_str)
+            result = tools.execute(test_data_str)
             # For string input, we need to parse the result to count keys
             parsed = json.loads(result)
             _ = len(parsed)
@@ -1385,8 +1387,8 @@ class TestRealWorldScenarios:
             },
         }
 
-        flattener = json_tools_rs.JsonFlattener()
-        result = flattener.flatten(api_response)
+        tools = json_tools_rs.JSONTools().flatten()
+        result = tools.execute(api_response)
 
         assert isinstance(result, dict)
         assert result["data.user.id"] == 12345
@@ -1430,9 +1432,9 @@ class TestRealWorldScenarios:
         }
 
         # Use environment variable style flattening
-        flattener = json_tools_rs.JsonFlattener().separator("_").lowercase_keys(True)
+        tools = json_tools_rs.JSONTools().flatten().separator("_").lowercase_keys(True)
 
-        result = flattener.flatten(config)
+        result = tools.execute(config)
 
         assert isinstance(result, dict)
         assert result["database_host"] == "localhost"
@@ -1491,14 +1493,15 @@ class TestRealWorldScenarios:
         }
 
         # Clean up and standardize for analysis
-        flattener = (
-            json_tools_rs.JsonFlattener()
+        tools = (
+            json_tools_rs.JSONTools()
+            .flatten()
             .remove_nulls(True)
             .remove_empty_objects(True)
             .separator("__")
         )
 
-        result = flattener.flatten(analytics_data)
+        result = tools.execute(analytics_data)
 
         assert isinstance(result, dict)
         assert result["metrics__page_views__total"] == 15420
@@ -1544,15 +1547,16 @@ class TestRealWorldScenarios:
         }
 
         # Clean up form data for storage
-        flattener = (
-            json_tools_rs.JsonFlattener()
+        tools = (
+            json_tools_rs.JSONTools()
+            .flatten()
             .remove_empty_strings(True)
             .remove_nulls(True)
             .key_replacement("personal_info.", "")
             .key_replacement("submission_metadata.", "meta_")
         )
 
-        result = flattener.flatten(form_data)
+        result = tools.execute(form_data)
 
         assert isinstance(result, dict)
         assert result["first_name"] == "Jane"
@@ -1597,14 +1601,15 @@ class TestRealWorldScenarios:
         ]
 
         # Process logs for analysis
-        flattener = (
-            json_tools_rs.JsonFlattener()
+        tools = (
+            json_tools_rs.JSONTools()
+            .flatten()
             .remove_nulls(True)
             .key_replacement("context_", "")
             .separator("_")
         )
 
-        results = flattener.flatten(log_entries)
+        results = tools.execute(log_entries)
 
         assert isinstance(results, list)
         assert len(results) == 2
@@ -1680,8 +1685,9 @@ class TestRealWorldScenarios:
         }
 
         # Clean up and transform for analytics
-        flattener = (
-            json_tools_rs.JsonFlattener()
+        tools = (
+            json_tools_rs.JSONTools()
+            .flatten()
             .remove_empty_strings(True)
             .remove_nulls(True)
             .key_replacement(
@@ -1692,7 +1698,7 @@ class TestRealWorldScenarios:
             .lowercase_keys(True)
         )
 
-        result = flattener.flatten(raw_data)
+        result = tools.execute(raw_data)
 
         assert isinstance(result, dict)
         assert result["customer_id"] == "CUST_12345"
@@ -1758,8 +1764,8 @@ class TestJsonUnflattenerBasic:
             "settings.notifications.email": True,
             "settings.notifications.sms": False,
         }
-        unflattener = json_tools_rs.JsonUnflattener()
-        result = unflattener.unflatten(flattened)
+        tools = json_tools_rs.JSONTools().unflatten()
+        result = tools.execute(flattened)
 
         assert isinstance(result, dict)
         assert result["user"]["name"] == "John"
@@ -1775,8 +1781,8 @@ class TestJsonUnflattenerTypePreservation:
     def test_string_input_string_output(self):
         """Test str input → str output."""
         flattened = '{"a.b": 1, "c.d": 2}'
-        unflattener = json_tools_rs.JsonUnflattener()
-        result = unflattener.unflatten(flattened)
+        tools = json_tools_rs.JSONTools().unflatten()
+        result = tools.execute(flattened)
 
         assert isinstance(result, str)
         parsed = json.loads(result)
@@ -1785,8 +1791,8 @@ class TestJsonUnflattenerTypePreservation:
     def test_dict_input_dict_output(self):
         """Test dict input → dict output."""
         flattened = {"a.b": 1, "c.d": 2}
-        unflattener = json_tools_rs.JsonUnflattener()
-        result = unflattener.unflatten(flattened)
+        tools = json_tools_rs.JSONTools().unflatten()
+        result = tools.execute(flattened)
 
         assert isinstance(result, dict)
         assert result == {"a": {"b": 1}, "c": {"d": 2}}
@@ -1794,8 +1800,8 @@ class TestJsonUnflattenerTypePreservation:
     def test_string_list_input_string_list_output(self):
         """Test list[str] input → list[str] output."""
         flattened_list = ['{"a.b": 1}', '{"c.d": 2}', '{"e.f": 3}']
-        unflattener = json_tools_rs.JsonUnflattener()
-        result = unflattener.unflatten(flattened_list)
+        tools = json_tools_rs.JSONTools().unflatten()
+        result = tools.execute(flattened_list)
 
         assert isinstance(result, list)
         assert len(result) == 3
@@ -1810,8 +1816,8 @@ class TestJsonUnflattenerTypePreservation:
     def test_dict_list_input_dict_list_output(self):
         """Test list[dict] input → list[dict] output."""
         flattened_list = [{"a.b": 1}, {"c.d": 2}, {"e.f": 3}]
-        unflattener = json_tools_rs.JsonUnflattener()
-        result = unflattener.unflatten(flattened_list)
+        tools = json_tools_rs.JSONTools().unflatten()
+        result = tools.execute(flattened_list)
 
         assert isinstance(result, list)
         assert len(result) == 3
@@ -1824,8 +1830,8 @@ class TestJsonUnflattenerTypePreservation:
 
     def test_empty_list_handling(self):
         """Test empty list handling."""
-        unflattener = json_tools_rs.JsonUnflattener()
-        result = unflattener.unflatten([])
+        tools = json_tools_rs.JSONTools().unflatten()
+        result = tools.execute([])
 
         assert isinstance(result, list)
         assert len(result) == 0
@@ -1855,10 +1861,10 @@ class TestJsonUnflattenerBuilderPattern:
     def test_key_replacement(self):
         """Test key replacement configuration."""
         flattened = {"prefix.name": "John", "prefix.age": 30}
-        unflattener = json_tools_rs.JsonUnflattener().key_replacement(
+        tools = json_tools_rs.JSONTools().unflatten().key_replacement(
             "prefix.", "user."
         )
-        result = unflattener.unflatten(flattened)
+        result = tools.execute(flattened)
 
         assert isinstance(result, dict)
         assert result == {"user": {"name": "John", "age": 30}}
@@ -1866,10 +1872,10 @@ class TestJsonUnflattenerBuilderPattern:
     def test_value_replacement(self):
         """Test value replacement configuration."""
         flattened = {"user.email": "john@company.org", "user.name": "John"}
-        unflattener = json_tools_rs.JsonUnflattener().value_replacement(
+        tools = json_tools_rs.JSONTools().unflatten().value_replacement(
             "@company.org", "@example.com"
         )
-        result = unflattener.unflatten(flattened)
+        result = tools.execute(flattened)
 
         assert isinstance(result, dict)
         assert result["user"]["email"] == "john@example.com"
@@ -1878,10 +1884,10 @@ class TestJsonUnflattenerBuilderPattern:
     def test_regex_key_replacement(self):
         """Test regex key replacement."""
         flattened = {"user_name": "John", "admin_role": "super"}
-        unflattener = json_tools_rs.JsonUnflattener().key_replacement(
+        tools = json_tools_rs.JSONTools().unflatten().key_replacement(
             "regex:^(user|admin)_", "$1."
         )
-        result = unflattener.unflatten(flattened)
+        result = tools.execute(flattened)
 
         assert isinstance(result, dict)
         assert result == {"user": {"name": "John"}, "admin": {"role": "super"}}
@@ -1890,14 +1896,15 @@ class TestJsonUnflattenerBuilderPattern:
         """Test chained builder pattern configuration."""
         # Use lowercase input since key replacement happens before lowercase conversion
         flattened = {"prefix_name": "john@company.org", "prefix_age": 30}
-        unflattener = (
-            json_tools_rs.JsonUnflattener()
+        tools = (
+            json_tools_rs.JSONTools()
+            .unflatten()
             .separator("_")
             .key_replacement("prefix_", "user_")
             .value_replacement("@company.org", "@example.com")
             .lowercase_keys(True)
         )
-        result = unflattener.unflatten(flattened)
+        result = tools.execute(flattened)
 
         assert isinstance(result, dict)
         assert result == {"user": {"name": "john@example.com", "age": 30}}
@@ -1908,27 +1915,27 @@ class TestJsonUnflattenerErrorHandling:
 
     def test_invalid_json_string(self):
         """Test handling of invalid JSON string."""
-        unflattener = json_tools_rs.JsonUnflattener()
+        tools = json_tools_rs.JSONTools().unflatten()
         with pytest.raises(json_tools_rs.JsonFlattenError):
-            unflattener.unflatten('{"invalid": json}')
+            tools.execute('{"invalid": json}')
 
     def test_invalid_input_type(self):
         """Test handling of invalid input types."""
-        unflattener = json_tools_rs.JsonUnflattener()
+        tools = json_tools_rs.JSONTools().unflatten()
         with pytest.raises(ValueError):
-            unflattener.unflatten(123)  # Invalid type
+            tools.execute(123)  # Invalid type
 
     def test_mixed_list_types(self):
         """Test handling of mixed list types."""
-        unflattener = json_tools_rs.JsonUnflattener()
+        tools = json_tools_rs.JSONTools().unflatten()
         with pytest.raises(ValueError):
-            unflattener.unflatten(['{"a": 1}', 123, {"b": 2}])  # Mixed types
+            tools.execute(['{"a": 1}', 123, {"b": 2}])  # Mixed types
 
     def test_invalid_list_content(self):
         """Test handling of invalid list content."""
-        unflattener = json_tools_rs.JsonUnflattener()
+        tools = json_tools_rs.JSONTools().unflatten()
         with pytest.raises(ValueError):
-            unflattener.unflatten([None, "test"])  # Invalid content
+            tools.execute([None, "test"])  # Invalid content
 
 
 class TestJsonUnflattenerRoundtrip:
@@ -1939,12 +1946,12 @@ class TestJsonUnflattenerRoundtrip:
         original = {"user": {"name": "John", "age": 30}}
 
         # Flatten
-        flattener = json_tools_rs.JsonFlattener()
-        flattened = flattener.flatten(original)
+        flatten_tools = json_tools_rs.JSONTools().flatten()
+        flattened = flatten_tools.execute(original)
 
         # Unflatten
-        unflattener = json_tools_rs.JsonUnflattener()
-        restored = unflattener.unflatten(flattened)
+        unflatten_tools = json_tools_rs.JSONTools().unflatten()
+        restored = unflatten_tools.execute(flattened)
 
         # Should be equivalent to original
         assert restored == original
@@ -1961,12 +1968,12 @@ class TestJsonUnflattenerRoundtrip:
         }
 
         # Flatten
-        flattener = json_tools_rs.JsonFlattener()
-        flattened = flattener.flatten(original)
+        flatten_tools = json_tools_rs.JSONTools().flatten()
+        flattened = flatten_tools.execute(original)
 
         # Unflatten
-        unflattener = json_tools_rs.JsonUnflattener()
-        restored = unflattener.unflatten(flattened)
+        unflatten_tools = json_tools_rs.JSONTools().unflatten()
+        restored = unflatten_tools.execute(flattened)
 
         # Should be equivalent to original
         assert restored == original
@@ -1976,12 +1983,12 @@ class TestJsonUnflattenerRoundtrip:
         original = {"user": {"name": "John", "profile": {"city": "NYC"}}}
 
         # Flatten with custom separator
-        flattener = json_tools_rs.JsonFlattener().separator("_")
-        flattened = flattener.flatten(original)
+        flatten_tools = json_tools_rs.JSONTools().flatten().separator("_")
+        flattened = flatten_tools.execute(original)
 
         # Unflatten with same separator
-        unflattener = json_tools_rs.JsonUnflattener().separator("_")
-        restored = unflattener.unflatten(flattened)
+        unflatten_tools = json_tools_rs.JSONTools().unflatten().separator("_")
+        restored = unflatten_tools.execute(flattened)
 
         # Should be equivalent to original
         assert restored == original
@@ -1995,12 +2002,12 @@ class TestJsonUnflattenerRoundtrip:
         ]
 
         # Flatten batch
-        flattener = json_tools_rs.JsonFlattener()
-        flattened_batch = flattener.flatten(originals)
+        flatten_tools = json_tools_rs.JSONTools().flatten()
+        flattened_batch = flatten_tools.execute(originals)
 
         # Unflatten batch
-        unflattener = json_tools_rs.JsonUnflattener()
-        restored_batch = unflattener.unflatten(flattened_batch)
+        unflatten_tools = json_tools_rs.JSONTools().unflatten()
+        restored_batch = unflatten_tools.execute(flattened_batch)
 
         # Should be equivalent to originals
         assert restored_batch == originals
@@ -2016,12 +2023,12 @@ class TestJsonUnflattenerRoundtrip:
         }
 
         # Flatten
-        flattener = json_tools_rs.JsonFlattener()
-        flattened = flattener.flatten(original)
+        flatten_tools = json_tools_rs.JSONTools().flatten()
+        flattened = flatten_tools.execute(original)
 
         # Unflatten
-        unflattener = json_tools_rs.JsonUnflattener()
-        restored = unflattener.unflatten(flattened)
+        unflatten_tools = json_tools_rs.JSONTools().unflatten()
+        restored = unflatten_tools.execute(flattened)
 
         # Should be equivalent to original
         assert restored == original
@@ -2039,12 +2046,12 @@ class TestJsonUnflattenerRoundtrip:
         }
 
         # Flatten
-        flattener = json_tools_rs.JsonFlattener()
-        flattened = flattener.flatten(original)
+        flatten_tools = json_tools_rs.JSONTools().flatten()
+        flattened = flatten_tools.execute(original)
 
         # Unflatten
-        unflattener = json_tools_rs.JsonUnflattener()
-        restored = unflattener.unflatten(flattened)
+        unflatten_tools = json_tools_rs.JSONTools().unflatten()
+        restored = unflatten_tools.execute(flattened)
 
         # Should be equivalent to original
         assert restored == original
