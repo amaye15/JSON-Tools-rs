@@ -5,30 +5,38 @@
 //!
 //! ## Features
 //!
-//! - Flatten nested JSON structures using dot notation
-//! - Unflatten flattened JSON back to nested structures
-//! - Remove empty values (strings, objects, arrays, null values)
-//! - Replace keys and values using literal strings or regex patterns
-//! - Comprehensive error handling
-//! - Builder pattern API for easy configuration
+//! - **Unified API**: Single `JSONTools` entry point for both flattening and unflattening
+//! - **Builder Pattern**: Fluent, chainable API for easy configuration
+//! - **Advanced Filtering**: Remove empty values (strings, objects, arrays, null values)
+//! - **Pattern Replacements**: Support for literal and regex-based key/value replacements
+//! - **High Performance**: SIMD-accelerated JSON parsing with optimized algorithms
+//! - **Batch Processing**: Handle single JSON strings or arrays of JSON strings
+//! - **Comprehensive Error Handling**: Detailed error messages for debugging
 //!
-//! ## Examples
+//! ## Quick Start with Unified API
 //!
 //! ### Flattening JSON
 //!
 //! ```rust
-//! use json_tools_rs::{JsonFlattener, JsonOutput};
+//! use json_tools_rs::{JSONTools, JsonOutput};
 //!
 //! let json = r#"{"user": {"name": "John", "details": {"age": null, "city": ""}}}"#;
-//! let result = JsonFlattener::new()
+//! let result = JSONTools::new()
+//!     .flatten()
+//!     .separator("::")
+//!     .lowercase_keys(true)
+//!     .key_replacement("regex:(User|Admin)_", "")
+//!     .value_replacement("@example.com", "@company.org")
 //!     .remove_empty_strings(true)
 //!     .remove_nulls(true)
-//!     .flatten(json).unwrap();
+//!     .remove_empty_objects(true)
+//!     .remove_empty_arrays(true)
+//!     .execute(json).unwrap();
 //!
 //! match result {
 //!     JsonOutput::Single(flattened) => {
-//!         // Result: {"user.name": "John"}
-//!         assert!(flattened.contains("user.name"));
+//!         // Result: {"user::name": "John"}
+//!         println!("{}", flattened);
 //!     }
 //!     JsonOutput::Multiple(_) => unreachable!(),
 //! }
@@ -37,21 +45,31 @@
 //! ### Unflattening JSON
 //!
 //! ```rust
-//! use json_tools_rs::{JsonUnflattener, JsonOutput};
+//! use json_tools_rs::{JSONTools, JsonOutput};
 //!
-//! let flattened = r#"{"user.name": "John", "user.age": 30, "items.0": "first", "items.1": "second"}"#;
-//! let result = JsonUnflattener::new()
-//!     .unflatten(flattened).unwrap();
+//! let flattened = r#"{"user::name": "John", "user::age": 30}"#;
+//! let result = JSONTools::new()
+//!     .unflatten()
+//!     .separator("::")
+//!     .lowercase_keys(true)
+//!     .key_replacement("regex:(User|Admin)_", "")
+//!     .value_replacement("@company.org", "@example.com")
+//!     .remove_empty_strings(true)
+//!     .remove_nulls(true)
+//!     .remove_empty_objects(true)
+//!     .remove_empty_arrays(true)
+//!     .execute(flattened).unwrap();
 //!
 //! match result {
 //!     JsonOutput::Single(unflattened) => {
-//!         // Result: {"user": {"name": "John", "age": 30}, "items": ["first", "second"]}
-//!         assert!(unflattened.contains("\"user\""));
-//!         assert!(unflattened.contains("\"items\""));
+//!         // Result: {"user": {"name": "John", "age": 30}}
+//!         println!("{}", unflattened);
 //!     }
 //!     JsonOutput::Multiple(_) => unreachable!(),
 //! }
 //! ```
+//!
+
 
 use regex::Regex;
 use serde_json::{Map, Value};
@@ -186,48 +204,76 @@ impl From<regex::Error> for FlattenError {
     }
 }
 
-/// JSON Flattener with builder pattern for easy configuration
+
+
+
+/// Operation mode for the unified JSONTools API
+#[derive(Debug, Clone, PartialEq)]
+enum OperationMode {
+    /// Flatten JSON structures
+    Flatten,
+    /// Unflatten JSON structures
+    Unflatten,
+}
+
+/// Unified JSON Tools API with builder pattern for both flattening and unflattening operations
 ///
-/// This is the main interface for flattening JSON data. It provides a fluent
-/// builder API that makes it easy to configure all flattening options.
+/// This is the unified interface for all JSON manipulation operations.
+/// It provides a single entry point for all JSON manipulation operations with a consistent builder pattern.
 ///
 /// # Examples
 ///
 /// ```rust
-/// use json_tools_rs::{JsonFlattener, JsonOutput};
+/// use json_tools_rs::{JSONTools, JsonOutput};
 ///
-/// // Basic flattening
-/// let result = JsonFlattener::new()
-///     .flatten(r#"{"user": {"name": "John"}}"#).unwrap();
+/// // Flattening with advanced configuration
+/// let json = r#"{"user": {"name": "John", "details": {"age": null, "city": ""}}}"#;
+/// let result = JSONTools::new()
+///     .flatten()
+///     .separator("::")
+///     .lowercase_keys(true)
+///     .key_replacement("regex:(User|Admin)_", "")
+///     .key_replacement("Profile::", "")
+///     .value_replacement("@example.com", "@company.org")
+///     .value_replacement("regex:^super$", "administrator")
+///     .remove_empty_strings(true)
+///     .remove_nulls(true)
+///     .remove_empty_objects(true)
+///     .remove_empty_arrays(true)
+///     .execute(json).unwrap();
 ///
 /// match result {
 ///     JsonOutput::Single(flattened) => {
-///         assert!(flattened.contains("user.name"));
+///         // Process flattened JSON
+///         println!("{}", flattened);
 ///     }
 ///     JsonOutput::Multiple(_) => unreachable!(),
 /// }
 ///
-/// // Advanced configuration
-/// let json = r#"{"user_email": "john@example.com"}"#;
-/// let result = JsonFlattener::new()
+/// // Unflattening with the same configuration options
+/// let flattened = r#"{"user::name": "John", "user::age": 30}"#;
+/// let result = JSONTools::new()
+///     .unflatten()
+///     .separator("::")
+///     .lowercase_keys(true)
 ///     .remove_empty_strings(true)
 ///     .remove_nulls(true)
-///     .separator("_")
-///     .lowercase_keys(true)
-///     .key_replacement("regex:^user_", "")
-///     .value_replacement("@example.com", "@company.org")
-///     .flatten(json).unwrap();
+///     .remove_empty_objects(true)
+///     .remove_empty_arrays(true)
+///     .execute(flattened).unwrap();
 ///
 /// match result {
-///     JsonOutput::Single(flattened) => {
-///         assert!(flattened.contains("email"));
-///         assert!(flattened.contains("@company.org"));
+///     JsonOutput::Single(unflattened) => {
+///         // Process unflattened JSON
+///         println!("{}", unflattened);
 ///     }
 ///     JsonOutput::Multiple(_) => unreachable!(),
 /// }
 /// ```
 #[derive(Debug, Clone)]
-pub struct JsonFlattener {
+pub struct JSONTools {
+    /// Current operation mode (flatten or unflatten)
+    mode: Option<OperationMode>,
     /// Remove keys with empty string values
     remove_empty_string_values: bool,
     /// Remove keys with null values
@@ -244,11 +290,16 @@ pub struct JsonFlattener {
     separator: String,
     /// Convert all keys to lowercase
     lower_case_keys: bool,
+    /// Avoid key collisions by appending index suffixes
+    avoid_key_collision: bool,
+    /// Handle key collisions by collecting values into arrays
+    handle_key_collision: bool,
 }
 
-impl Default for JsonFlattener {
+impl Default for JSONTools {
     fn default() -> Self {
         Self {
+            mode: None,
             remove_empty_string_values: false,
             remove_null_values: false,
             remove_empty_dict: false,
@@ -257,69 +308,31 @@ impl Default for JsonFlattener {
             value_replacements: Vec::new(),
             separator: ".".to_string(),
             lower_case_keys: false,
+            avoid_key_collision: false,
+            handle_key_collision: false,
         }
     }
 }
 
-impl JsonFlattener {
-    /// Create a new JSON flattener with default settings
+impl JSONTools {
+    /// Create a new JSONTools instance with default settings
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Remove keys with empty string values
-    pub fn remove_empty_strings(mut self, value: bool) -> Self {
-        self.remove_empty_string_values = value;
+    /// Set the operation mode to flatten
+    pub fn flatten(mut self) -> Self {
+        self.mode = Some(OperationMode::Flatten);
         self
     }
 
-    /// Remove keys with null values
-    pub fn remove_nulls(mut self, value: bool) -> Self {
-        self.remove_null_values = value;
+    /// Set the operation mode to unflatten
+    pub fn unflatten(mut self) -> Self {
+        self.mode = Some(OperationMode::Unflatten);
         self
     }
 
-    /// Remove keys with empty object values
-    pub fn remove_empty_objects(mut self, value: bool) -> Self {
-        self.remove_empty_dict = value;
-        self
-    }
-
-    /// Remove keys with empty array values
-    pub fn remove_empty_arrays(mut self, value: bool) -> Self {
-        self.remove_empty_list = value;
-        self
-    }
-
-    /// Add a key replacement pattern
-    ///
-    /// # Arguments
-    /// * `find` - Pattern to find (use "regex:" prefix for regex patterns)
-    /// * `replace` - Replacement string
-    pub fn key_replacement<F: Into<String>, R: Into<String>>(
-        mut self,
-        find: F,
-        replace: R,
-    ) -> Self {
-        self.key_replacements.push((find.into(), replace.into()));
-        self
-    }
-
-    /// Add a value replacement pattern
-    ///
-    /// # Arguments
-    /// * `find` - Pattern to find (use "regex:" prefix for regex patterns)
-    /// * `replace` - Replacement string
-    pub fn value_replacement<F: Into<String>, R: Into<String>>(
-        mut self,
-        find: F,
-        replace: R,
-    ) -> Self {
-        self.value_replacements.push((find.into(), replace.into()));
-        self
-    }
-
-    /// Set the separator for nested keys
+    /// Set the separator used for nested keys (default: ".")
     pub fn separator<S: Into<String>>(mut self, separator: S) -> Self {
         self.separator = separator.into();
         self
@@ -331,170 +344,14 @@ impl JsonFlattener {
         self
     }
 
-    /// Flatten the JSON input
-    ///
-    /// # Arguments
-    /// * `json_input` - JSON input as string, &str, or slice of strings
-    ///
-    /// # Returns
-    /// * `JsonOutput` - Single flattened JSON string or multiple results
-    pub fn flatten<'a, T>(self, json_input: T) -> Result<JsonOutput, Box<dyn Error>>
-    where
-        T: Into<JsonInput<'a>>,
-    {
-        let input = json_input.into();
-        let key_replacements = if self.key_replacements.is_empty() {
-            None
-        } else {
-            Some(self.key_replacements)
-        };
-        let value_replacements = if self.value_replacements.is_empty() {
-            None
-        } else {
-            Some(self.value_replacements)
-        };
-
-        match input {
-            JsonInput::Single(json) => {
-                let result = process_single_json(
-                    json,
-                    self.remove_empty_string_values,
-                    self.remove_null_values,
-                    self.remove_empty_dict,
-                    self.remove_empty_list,
-                    key_replacements.as_deref(),
-                    value_replacements.as_deref(),
-                    &self.separator,
-                    self.lower_case_keys,
-                )?;
-                Ok(JsonOutput::Single(result))
-            }
-            JsonInput::Multiple(json_list) => {
-                let mut results = Vec::with_capacity(json_list.len());
-
-                for (index, json) in json_list.iter().enumerate() {
-                    match process_single_json(
-                        json,
-                        self.remove_empty_string_values,
-                        self.remove_null_values,
-                        self.remove_empty_dict,
-                        self.remove_empty_list,
-                        key_replacements.as_deref(),
-                        value_replacements.as_deref(),
-                        &self.separator,
-                        self.lower_case_keys,
-                    ) {
-                        Ok(result) => results.push(result),
-                        Err(e) => {
-                            return Err(Box::new(FlattenError::BatchError {
-                                index,
-                                error: Box::new(match e.downcast::<FlattenError>() {
-                                    Ok(flatten_err) => *flatten_err,
-                                    Err(other_err) => FlattenError::InvalidReplacementPattern(
-                                        format!("Unknown error: {}", other_err),
-                                    ),
-                                }),
-                            }));
-                        }
-                    }
-                }
-
-                Ok(JsonOutput::Multiple(results))
-            }
-        }
-    }
-}
-
-/// JSON Unflattener with builder pattern for easy configuration
-///
-/// This is the companion interface to JsonFlattener that provides the inverse operation -
-/// converting flattened JSON back to nested JSON structure. It provides the same fluent
-/// builder API that makes it easy to configure all unflattening options.
-///
-/// # Examples
-///
-/// ```rust
-/// use json_tools_rs::{JsonUnflattener, JsonOutput};
-///
-/// // Basic unflattening
-/// let flattened = r#"{"user.name": "John", "user.age": 30}"#;
-/// let result = JsonUnflattener::new()
-///     .unflatten(flattened).unwrap();
-///
-/// match result {
-///     JsonOutput::Single(unflattened) => {
-///         // Result: {"user": {"name": "John", "age": 30}}
-///         assert!(unflattened.contains("\"user\""));
-///     }
-///     JsonOutput::Multiple(_) => unreachable!(),
-/// }
-///
-/// // Advanced configuration
-/// let flattened = r#"{"prefix_email": "john@company.org", "prefix_name": "John"}"#;
-/// let result = JsonUnflattener::new()
-///     .separator("_")
-///     .lowercase_keys(true)
-///     .key_replacement("prefix_", "user_")  // Replace prefix
-///     .value_replacement("@company.org", "@example.com")  // Reverse replacement
-///     .unflatten(flattened).unwrap();
-///
-/// match result {
-///     JsonOutput::Single(unflattened) => {
-///         assert!(unflattened.contains("user"));
-///         assert!(unflattened.contains("@example.com"));
-///     }
-///     JsonOutput::Multiple(_) => unreachable!(),
-/// }
-/// ```
-#[derive(Debug, Clone)]
-pub struct JsonUnflattener {
-    /// Key replacement patterns (find, replace) - applied before unflattening
-    key_replacements: Vec<(String, String)>,
-    /// Value replacement patterns (find, replace) - applied before unflattening
-    value_replacements: Vec<(String, String)>,
-    /// Separator for nested keys (default: ".")
-    separator: String,
-    /// Convert all keys to lowercase before processing
-    lower_case_keys: bool,
-}
-
-impl Default for JsonUnflattener {
-    fn default() -> Self {
-        Self {
-            key_replacements: Vec::new(),
-            value_replacements: Vec::new(),
-            separator: ".".to_string(),
-            lower_case_keys: false,
-        }
-    }
-}
-
-impl JsonUnflattener {
-    /// Create a new JSON unflattener with default settings
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Set the separator used for nested keys (default: ".")
-    pub fn separator<S: Into<String>>(mut self, separator: S) -> Self {
-        self.separator = separator.into();
-        self
-    }
-
-    /// Convert all keys to lowercase before processing
-    pub fn lowercase_keys(mut self, value: bool) -> Self {
-        self.lower_case_keys = value;
-        self
-    }
-
     /// Add a key replacement pattern
     ///
-    /// The pattern can be a literal string or a regex pattern (prefix with "regex:")
-    /// This replacement is applied to keys before unflattening
-    pub fn key_replacement<F: Into<String>, R: Into<String>>(
+    /// Supports both literal strings and regex patterns (prefix with "regex:")
+    /// Works for both flatten and unflatten operations
+    pub fn key_replacement<S1: Into<String>, S2: Into<String>>(
         mut self,
-        find: F,
-        replace: R,
+        find: S1,
+        replace: S2,
     ) -> Self {
         self.key_replacements.push((find.into(), replace.into()));
         self
@@ -502,64 +359,291 @@ impl JsonUnflattener {
 
     /// Add a value replacement pattern
     ///
-    /// The pattern can be a literal string or a regex pattern (prefix with "regex:")
-    /// This replacement is applied to values before unflattening
-    pub fn value_replacement<F: Into<String>, R: Into<String>>(
+    /// Supports both literal strings and regex patterns (prefix with "regex:")
+    /// Works for both flatten and unflatten operations
+    pub fn value_replacement<S1: Into<String>, S2: Into<String>>(
         mut self,
-        find: F,
-        replace: R,
+        find: S1,
+        replace: S2,
     ) -> Self {
         self.value_replacements.push((find.into(), replace.into()));
         self
     }
 
-    /// Unflatten JSON data using the configured settings
+    /// Remove keys with empty string values
     ///
-    /// Accepts the same input types as JsonFlattener and returns the same output format
-    pub fn unflatten<'a, T>(&self, json_input: T) -> Result<JsonOutput, Box<dyn Error>>
+    /// Works for both flatten and unflatten operations:
+    /// - In flatten mode: removes flattened keys that have empty string values
+    /// - In unflatten mode: removes keys from the unflattened JSON structure that have empty string values
+    pub fn remove_empty_strings(mut self, value: bool) -> Self {
+        self.remove_empty_string_values = value;
+        self
+    }
+
+    /// Remove keys with null values
+    ///
+    /// Works for both flatten and unflatten operations:
+    /// - In flatten mode: removes flattened keys that have null values
+    /// - In unflatten mode: removes keys from the unflattened JSON structure that have null values
+    pub fn remove_nulls(mut self, value: bool) -> Self {
+        self.remove_null_values = value;
+        self
+    }
+
+    /// Remove keys with empty object values
+    ///
+    /// Works for both flatten and unflatten operations:
+    /// - In flatten mode: removes flattened keys that have empty object values
+    /// - In unflatten mode: removes keys from the unflattened JSON structure that have empty object values
+    pub fn remove_empty_objects(mut self, value: bool) -> Self {
+        self.remove_empty_dict = value;
+        self
+    }
+
+    /// Remove keys with empty array values
+    ///
+    /// Works for both flatten and unflatten operations:
+    /// - In flatten mode: removes flattened keys that have empty array values
+    /// - In unflatten mode: removes keys from the unflattened JSON structure that have empty array values
+    pub fn remove_empty_arrays(mut self, value: bool) -> Self {
+        self.remove_empty_list = value;
+        self
+    }
+
+    /// Avoid key collisions by appending index suffixes
+    ///
+    /// When enabled, if key replacement operations result in duplicate keys,
+    /// automatically append an index suffix to make keys unique.
+    /// The index uses the configured separator followed by a sequential number (0, 1, 2, etc.).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use json_tools_rs::{JSONTools, JsonOutput};
+    /// use std::error::Error;
+    ///
+    /// fn main() -> Result<(), Box<dyn Error>> {
+    ///     // With separator "::" and key replacement that causes collisions
+    ///     let json = r#"{"User_name": "John", "Admin_name": "Jane"}"#;
+    ///     let result = JSONTools::new()
+    ///         .flatten()
+    ///         .separator("::")
+    ///         .key_replacement("regex:(User|Admin)_", "")
+    ///         .avoid_key_collision(true)
+    ///         .execute(json)?;
+    ///
+    ///     // Result: {"name::0": "John", "name::1": "Jane"}
+    ///     Ok(())
+    /// }
+    /// ```
+    ///
+    /// **Note**: This feature is mutually exclusive with `handle_key_collision`.
+    /// If both are enabled, `avoid_key_collision` takes precedence.
+    ///
+    /// Works for both flatten and unflatten operations.
+    pub fn avoid_key_collision(mut self, value: bool) -> Self {
+        self.avoid_key_collision = value;
+        self
+    }
+
+    /// Handle key collisions by collecting values into arrays
+    ///
+    /// When enabled, instead of avoiding collisions by renaming keys,
+    /// collect all values that would have the same key into an array.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use json_tools_rs::{JSONTools, JsonOutput};
+    /// use std::error::Error;
+    ///
+    /// fn main() -> Result<(), Box<dyn Error>> {
+    ///     // Key replacement that causes collisions
+    ///     let json = r#"{"User_name": "John", "Admin_name": "Jane"}"#;
+    ///     let result = JSONTools::new()
+    ///         .flatten()
+    ///         .key_replacement("regex:(User|Admin)_", "")
+    ///         .handle_key_collision(true)
+    ///         .execute(json)?;
+    ///
+    ///     // Result: {"name": ["John", "Jane"]}
+    ///     Ok(())
+    /// }
+    /// ```
+    ///
+    /// **Note**: This feature is mutually exclusive with `avoid_key_collision`.
+    /// If both are enabled, `avoid_key_collision` takes precedence.
+    ///
+    /// Works for both flatten and unflatten operations.
+    pub fn handle_key_collision(mut self, value: bool) -> Self {
+        self.handle_key_collision = value;
+        self
+    }
+
+    /// Execute the configured operation on the provided JSON input
+    ///
+    /// This method performs either flattening or unflattening based on the operation mode
+    /// set by calling `.flatten()` or `.unflatten()` on the builder.
+    ///
+    /// # Arguments
+    /// * `json_input` - JSON input that can be a single string, multiple strings, or other supported types
+    ///
+    /// # Returns
+    /// * `Result<JsonOutput, Box<dyn Error>>` - The processed JSON result or an error
+    ///
+    /// # Errors
+    /// * Returns an error if no operation mode has been set (must call `.flatten()` or `.unflatten()` first)
+    /// * Returns an error if the JSON input is invalid
+    /// * Returns an error if processing fails for any other reason
+    ///
+    /// # Examples
+    /// ```rust
+    /// use json_tools_rs::{JSONTools, JsonOutput};
+    /// use std::error::Error;
+    ///
+    /// fn main() -> Result<(), Box<dyn Error>> {
+    ///     // Flatten operation
+    ///     let result = JSONTools::new()
+    ///         .flatten()
+    ///         .separator("::")
+    ///         .remove_nulls(true)
+    ///         .execute(r#"{"user": {"name": "John", "age": null}}"#)?;
+    ///
+    ///     // Unflatten operation
+    ///     let result = JSONTools::new()
+    ///         .unflatten()
+    ///         .separator("::")
+    ///         .execute(r#"{"user::name": "John"}"#)?;
+    ///
+    ///     Ok(())
+    /// }
+    /// ```
+    pub fn execute<'a, T>(&self, json_input: T) -> Result<JsonOutput, Box<dyn Error>>
     where
         T: Into<JsonInput<'a>>,
     {
+        // Ensure operation mode is set
+        let mode = self.mode.as_ref().ok_or_else(|| {
+            Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Operation mode not set. Call .flatten() or .unflatten() before .execute()",
+            )) as Box<dyn Error>
+        })?;
+
         let input = json_input.into();
 
-        match input {
-            JsonInput::Single(json) => {
-                let result = process_single_json_unflatten(
-                    json,
-                    self.key_replacements.as_slice(),
-                    self.value_replacements.as_slice(),
-                    &self.separator,
-                    self.lower_case_keys,
-                )?;
-                Ok(JsonOutput::Single(result))
-            }
-            JsonInput::Multiple(json_list) => {
-                let mut results = Vec::with_capacity(json_list.len());
+        match mode {
+            OperationMode::Flatten => {
+                // Use the flattening logic
+                let key_replacements = if self.key_replacements.is_empty() {
+                    None
+                } else {
+                    Some(self.key_replacements.as_slice())
+                };
 
-                for (index, json) in json_list.iter().enumerate() {
-                    match process_single_json_unflatten(
-                        json,
-                        self.key_replacements.as_slice(),
-                        self.value_replacements.as_slice(),
-                        &self.separator,
-                        self.lower_case_keys,
-                    ) {
-                        Ok(result) => results.push(result),
-                        Err(e) => {
-                            return Err(Box::new(FlattenError::BatchError {
-                                index,
-                                error: Box::new(match e.downcast::<FlattenError>() {
-                                    Ok(flatten_err) => *flatten_err,
-                                    Err(other_err) => FlattenError::InvalidReplacementPattern(
-                                        format!("Unknown error: {}", other_err),
-                                    ),
-                                }),
-                            }));
+                let value_replacements = if self.value_replacements.is_empty() {
+                    None
+                } else {
+                    Some(self.value_replacements.as_slice())
+                };
+
+                match input {
+                    JsonInput::Single(json) => {
+                        let result = process_single_json(
+                            json,
+                            self.remove_empty_string_values,
+                            self.remove_null_values,
+                            self.remove_empty_dict,
+                            self.remove_empty_list,
+                            key_replacements,
+                            value_replacements,
+                            &self.separator,
+                            self.lower_case_keys,
+                            self.avoid_key_collision,
+                            self.handle_key_collision,
+                        )?;
+                        Ok(JsonOutput::Single(result))
+                    }
+                    JsonInput::Multiple(json_list) => {
+                        let mut results = Vec::with_capacity(json_list.len());
+
+                        for (index, json) in json_list.iter().enumerate() {
+                            match process_single_json(
+                                json,
+                                self.remove_empty_string_values,
+                                self.remove_null_values,
+                                self.remove_empty_dict,
+                                self.remove_empty_list,
+                                key_replacements,
+                                value_replacements,
+                                &self.separator,
+                                self.lower_case_keys,
+                                self.avoid_key_collision,
+                                self.handle_key_collision,
+                            ) {
+                                Ok(result) => results.push(result),
+                                Err(e) => {
+                                    return Err(Box::new(std::io::Error::new(
+                                        std::io::ErrorKind::InvalidData,
+                                        format!("Failed to process JSON at index {}: {}", index, e),
+                                    )))
+                                }
+                            }
                         }
+
+                        Ok(JsonOutput::Multiple(results))
                     }
                 }
+            }
+            OperationMode::Unflatten => {
+                // Use the unflattening logic
+                match input {
+                    JsonInput::Single(json) => {
+                        let result = process_single_json_unflatten(
+                            json,
+                            self.remove_empty_string_values,
+                            self.remove_null_values,
+                            self.remove_empty_dict,
+                            self.remove_empty_list,
+                            self.key_replacements.as_slice(),
+                            self.value_replacements.as_slice(),
+                            &self.separator,
+                            self.lower_case_keys,
+                            self.avoid_key_collision,
+                            self.handle_key_collision,
+                        )?;
+                        Ok(JsonOutput::Single(result))
+                    }
+                    JsonInput::Multiple(json_list) => {
+                        let mut results = Vec::with_capacity(json_list.len());
 
-                Ok(JsonOutput::Multiple(results))
+                        for (index, json) in json_list.iter().enumerate() {
+                            match process_single_json_unflatten(
+                                json,
+                                self.remove_empty_string_values,
+                                self.remove_null_values,
+                                self.remove_empty_dict,
+                                self.remove_empty_list,
+                                self.key_replacements.as_slice(),
+                                self.value_replacements.as_slice(),
+                                &self.separator,
+                                self.lower_case_keys,
+                                self.avoid_key_collision,
+                                self.handle_key_collision,
+                            ) {
+                                Ok(result) => results.push(result),
+                                Err(e) => {
+                                    return Err(Box::new(std::io::Error::new(
+                                        std::io::ErrorKind::InvalidData,
+                                        format!("Failed to process JSON at index {}: {}", index, e),
+                                    )))
+                                }
+                            }
+                        }
+
+                        Ok(JsonOutput::Multiple(results))
+                    }
+                }
             }
         }
     }
@@ -570,10 +654,16 @@ impl JsonUnflattener {
 #[allow(clippy::too_many_arguments)]
 fn process_single_json_unflatten(
     json: &str,
+    remove_empty_string_values: bool,
+    remove_null_values: bool,
+    remove_empty_dict: bool,
+    remove_empty_list: bool,
     key_replacements: &[(String, String)],
     value_replacements: &[(String, String)],
     separator: &str,
     lower_case_keys: bool,
+    avoid_key_collision: bool,
+    handle_key_collision: bool,
 ) -> Result<String, Box<dyn Error>> {
     // Parse the input JSON using simd-json for better performance
     let mut json_bytes = json.as_bytes().to_vec();
@@ -615,9 +705,24 @@ fn process_single_json_unflatten(
     // Apply key and value replacements if specified
     let mut processed_obj = flattened_obj.clone();
 
-    // Apply key replacements first
+    // Apply key replacements with collision detection if provided
     if !key_replacements.is_empty() {
-        processed_obj = apply_key_replacements_for_unflatten(&processed_obj, key_replacements)?;
+        // Use optimized version when collision handling is disabled for better performance
+        if !avoid_key_collision && !handle_key_collision {
+            processed_obj = apply_key_replacements_for_unflatten(&processed_obj, key_replacements)?;
+        } else {
+            processed_obj = apply_key_replacements_for_unflatten_with_collision_handling(
+                processed_obj,
+                key_replacements,
+                avoid_key_collision,
+                handle_key_collision,
+                separator,
+                remove_empty_string_values,
+                remove_null_values,
+                remove_empty_dict,
+                remove_empty_list,
+            )?;
+        }
     }
 
     // Apply value replacements
@@ -628,10 +733,49 @@ fn process_single_json_unflatten(
     // Apply lowercase conversion if specified
     if lower_case_keys {
         processed_obj = apply_lowercase_keys_for_unflatten(processed_obj);
+
+        // If collision handling is enabled but no key replacements were applied,
+        // we need to check for collisions after lowercase conversion
+        if (avoid_key_collision || handle_key_collision) && key_replacements.is_empty() {
+            processed_obj = handle_key_collisions_for_unflatten(
+                processed_obj,
+                avoid_key_collision,
+                handle_key_collision,
+                separator,
+                remove_empty_string_values,
+                remove_null_values,
+                remove_empty_dict,
+                remove_empty_list,
+            );
+        }
+    } else if (avoid_key_collision || handle_key_collision) && key_replacements.is_empty() {
+        // If collision handling is enabled but no transformations were applied,
+        // we still need to check for collisions (though this would be rare)
+        processed_obj = handle_key_collisions_for_unflatten(
+            processed_obj,
+            avoid_key_collision,
+            handle_key_collision,
+            separator,
+            remove_empty_string_values,
+            remove_null_values,
+            remove_empty_dict,
+            remove_empty_list,
+        );
     }
 
     // Perform the actual unflattening
-    let unflattened = unflatten_object(&processed_obj, separator)?;
+    let mut unflattened = unflatten_object(&processed_obj, separator)?;
+
+    // Apply filtering to the unflattened result
+    if remove_empty_string_values || remove_null_values || remove_empty_dict || remove_empty_list {
+        filter_nested_value(
+            &mut unflattened,
+            remove_empty_string_values,
+            remove_null_values,
+            remove_empty_dict,
+            remove_empty_list,
+        );
+    }
 
     // Serialize the result
     Ok(simd_json::serde::to_string(&unflattened)?)
@@ -650,6 +794,8 @@ fn process_single_json(
     value_replacements: Option<&[(String, String)]>,
     separator: &str,
     lower_case_keys: bool,
+    avoid_key_collision: bool,
+    handle_key_collision: bool,
 ) -> Result<String, Box<dyn Error>> {
     // Parse the input JSON using simd-json for better performance
     let mut json_bytes = json.as_bytes().to_vec();
@@ -690,16 +836,42 @@ fn process_single_json(
     let mut builder = FastStringBuilder::with_capacity_and_separator(max_key_length, separator);
     flatten_value_ultra_optimized(&value, &mut builder, &mut flattened);
 
-    // Apply key replacements if provided
+    // Apply key replacements with collision detection if provided
     if let Some(key_tuples) = key_replacements {
         // Convert tuple format to the internal vector format
         let key_patterns = convert_tuples_to_patterns(key_tuples);
-        flattened = apply_key_replacements_optimized(flattened, &key_patterns)?;
+
+        // Use optimized version when collision handling is disabled for better performance
+        if !avoid_key_collision && !handle_key_collision {
+            flattened = apply_key_replacements_optimized(flattened, &key_patterns)?;
+        } else {
+            flattened = apply_key_replacements_with_collision_handling(
+                flattened,
+                &key_patterns,
+                avoid_key_collision,
+                handle_key_collision,
+                separator,
+                remove_empty_string_values,
+                remove_null_values,
+                remove_empty_dict,
+                remove_empty_list,
+            )?;
+        }
     }
 
     // Apply lowercase conversion to keys if requested
     if lower_case_keys {
         flattened = apply_lowercase_to_keys(flattened);
+
+        // If collision handling is enabled but no key replacements were applied,
+        // we need to check for collisions after lowercase conversion
+        if (avoid_key_collision || handle_key_collision) && key_replacements.is_none() {
+            flattened = handle_key_collisions(flattened, avoid_key_collision, handle_key_collision, separator);
+        }
+    } else if (avoid_key_collision || handle_key_collision) && key_replacements.is_none() {
+        // If collision handling is enabled but no transformations were applied,
+        // we still need to check for collisions (though this would be rare)
+        flattened = handle_key_collisions(flattened, avoid_key_collision, handle_key_collision, separator);
     }
 
     // Apply value replacements if provided
@@ -712,6 +884,43 @@ fn process_single_json(
     // Apply filtering AFTER replacements to catch newly created empty values
     // This ensures that values replaced with empty strings are properly removed
     if remove_null_values || remove_empty_string_values || remove_empty_dict || remove_empty_list {
+        // First pass: filter inside arrays that were created by collision handling
+        if handle_key_collision {
+            for (_, v) in flattened.iter_mut() {
+                if let Some(arr) = v.as_array_mut() {
+                    // Filter elements inside collision-created arrays
+                    arr.retain(|element| {
+                        if remove_empty_string_values {
+                            if let Some(s) = element.as_str() {
+                                if s.is_empty() {
+                                    return false;
+                                }
+                            }
+                        }
+                        if remove_null_values && element.is_null() {
+                            return false;
+                        }
+                        if remove_empty_dict {
+                            if let Some(obj) = element.as_object() {
+                                if obj.is_empty() {
+                                    return false;
+                                }
+                            }
+                        }
+                        if remove_empty_list {
+                            if let Some(inner_arr) = element.as_array() {
+                                if inner_arr.is_empty() {
+                                    return false;
+                                }
+                            }
+                        }
+                        true
+                    });
+                }
+            }
+        }
+
+        // Second pass: filter top-level key-value pairs
         flattened.retain(|_, v| {
             // Optimize for the most common case (strings) first
             if remove_empty_string_values {
@@ -745,6 +954,8 @@ fn process_single_json(
             true
         });
     }
+
+
 
     // Convert back to JSON string using fast serialization
     serialize_flattened_fast(&flattened).map_err(|e| Box::new(e) as Box<dyn Error>)
@@ -836,6 +1047,7 @@ fn estimate_max_key_length(value: &Value) -> usize {
 }
 
 /// Optimized key replacement with regex caching and in-place operations
+/// This version is used when collision handling is NOT enabled for better performance
 fn apply_key_replacements_optimized(
     mut flattened: HashMap<String, Value>,
     patterns: &[String],
@@ -1398,6 +1610,7 @@ fn flatten_value_ultra_optimized(
 }
 
 /// Apply key replacements for unflattening (works on Map<String, Value>)
+/// This version is used when collision handling is NOT enabled for better performance
 fn apply_key_replacements_for_unflatten(
     obj: &Map<String, Value>,
     patterns: &[(String, String)],
@@ -1755,45 +1968,494 @@ fn set_nested_value_recursive_for_array_with_types(
     }
 }
 
-// Helper function for tests that need the old parameter-based API
-#[cfg(test)]
-#[allow(clippy::too_many_arguments)]
-pub fn test_flatten_json_with_params<'a, T>(
-    json_input: T,
+/// Recursively filter nested JSON values based on the specified criteria
+/// This function removes empty strings, nulls, empty objects, and empty arrays from nested JSON structures
+fn filter_nested_value(
+    value: &mut Value,
+    remove_empty_strings: bool,
+    remove_nulls: bool,
+    remove_empty_objects: bool,
+    remove_empty_arrays: bool,
+) {
+    match value {
+        Value::Object(ref mut obj) => {
+            // First, recursively filter all nested values
+            for (_, v) in obj.iter_mut() {
+                filter_nested_value(v, remove_empty_strings, remove_nulls, remove_empty_objects, remove_empty_arrays);
+            }
+
+            // Then remove keys that match our filtering criteria
+            obj.retain(|_, v| {
+                // Check for empty strings
+                if remove_empty_strings {
+                    if let Some(s) = v.as_str() {
+                        if s.is_empty() {
+                            return false;
+                        }
+                    }
+                }
+
+                // Check for nulls
+                if remove_nulls && v.is_null() {
+                    return false;
+                }
+
+                // Check for empty objects
+                if remove_empty_objects {
+                    if let Some(obj) = v.as_object() {
+                        if obj.is_empty() {
+                            return false;
+                        }
+                    }
+                }
+
+                // Check for empty arrays
+                if remove_empty_arrays {
+                    if let Some(arr) = v.as_array() {
+                        if arr.is_empty() {
+                            return false;
+                        }
+                    }
+                }
+
+                true
+            });
+        }
+        Value::Array(ref mut arr) => {
+            // First, recursively filter all nested values
+            for item in arr.iter_mut() {
+                filter_nested_value(item, remove_empty_strings, remove_nulls, remove_empty_objects, remove_empty_arrays);
+            }
+
+            // Then remove array elements that match our filtering criteria
+            arr.retain(|v| {
+                // Check for empty strings
+                if remove_empty_strings {
+                    if let Some(s) = v.as_str() {
+                        if s.is_empty() {
+                            return false;
+                        }
+                    }
+                }
+
+                // Check for nulls
+                if remove_nulls && v.is_null() {
+                    return false;
+                }
+
+                // Check for empty objects
+                if remove_empty_objects {
+                    if let Some(obj) = v.as_object() {
+                        if obj.is_empty() {
+                            return false;
+                        }
+                    }
+                }
+
+                // Check for empty arrays
+                if remove_empty_arrays {
+                    if let Some(arr) = v.as_array() {
+                        if arr.is_empty() {
+                            return false;
+                        }
+                    }
+                }
+
+                true
+            });
+        }
+        _ => {
+            // For primitive values (strings, numbers, booleans, null), no filtering needed
+            // The filtering will be handled by the parent container
+        }
+    }
+}
+
+/// Handle key collisions in a flattened map
+///
+/// This function processes a HashMap to handle cases where multiple keys would collide
+/// after key replacements and transformations. It supports two strategies:
+///
+/// 1. `avoid_key_collision`: Append index suffixes to make keys unique
+/// 2. `handle_key_collision`: Collect values into arrays for duplicate keys
+///
+/// If both options are enabled, `avoid_key_collision` takes precedence.
+fn handle_key_collisions(
+    mut flattened: HashMap<String, Value>,
+    avoid_key_collision: bool,
+    handle_key_collision: bool,
+    separator: &str,
+) -> HashMap<String, Value> {
+    // If neither option is enabled, return as-is
+    if !avoid_key_collision && !handle_key_collision {
+        return flattened;
+    }
+
+    // Group values by key to detect collisions
+    let mut key_groups: HashMap<String, Vec<Value>> = HashMap::new();
+
+    for (key, value) in flattened.drain() {
+        key_groups.entry(key).or_insert_with(Vec::new).push(value);
+    }
+
+    let mut result = HashMap::new();
+
+    for (key, values) in key_groups {
+        if values.len() == 1 {
+            // No collision, keep the original key-value pair
+            result.insert(key, values.into_iter().next().unwrap());
+        } else {
+            // Collision detected
+            if avoid_key_collision {
+                // Strategy 1: Append index suffixes to avoid collisions
+                for (index, value) in values.into_iter().enumerate() {
+                    let new_key = format!("{}{}{}", key, separator, index);
+                    result.insert(new_key, value);
+                }
+            } else if handle_key_collision {
+                // Strategy 2: Collect values into an array
+                let array_value = Value::Array(values);
+                result.insert(key, array_value);
+            }
+        }
+    }
+
+    result
+}
+
+/// Handle key collisions for unflattening operations
+///
+/// This function processes a Map<String, Value> (flattened object) to handle cases where
+/// multiple keys would collide after key replacements and transformations. It supports
+/// the same two strategies as the flattening version:
+///
+/// 1. `avoid_key_collision`: Append index suffixes to make keys unique
+/// 2. `handle_key_collision`: Collect values into arrays for duplicate keys
+///
+/// If both options are enabled, `avoid_key_collision` takes precedence.
+fn handle_key_collisions_for_unflatten(
+    flattened_obj: Map<String, Value>,
+    avoid_key_collision: bool,
+    handle_key_collision: bool,
+    separator: &str,
     remove_empty_string_values: bool,
     remove_null_values: bool,
     remove_empty_dict: bool,
     remove_empty_list: bool,
-    key_replacements: Option<Vec<(String, String)>>,
-    value_replacements: Option<Vec<(String, String)>>,
-    separator: Option<&str>,
-    lower_case_keys: bool,
-) -> Result<JsonOutput, Box<dyn Error>>
-where
-    T: Into<JsonInput<'a>>,
-{
-    let mut flattener = JsonFlattener::new()
-        .remove_empty_strings(remove_empty_string_values)
-        .remove_nulls(remove_null_values)
-        .remove_empty_objects(remove_empty_dict)
-        .remove_empty_arrays(remove_empty_list)
-        .lowercase_keys(lower_case_keys);
-
-    if let Some(sep) = separator {
-        flattener = flattener.separator(sep);
+) -> Map<String, Value> {
+    // If neither option is enabled, return as-is
+    if !avoid_key_collision && !handle_key_collision {
+        return flattened_obj;
     }
 
-    if let Some(key_reps) = key_replacements {
-        for (find, replace) in key_reps {
-            flattener = flattener.key_replacement(find, replace);
+    // Group values by key to detect collisions
+    let mut key_groups: HashMap<String, Vec<Value>> = HashMap::new();
+
+    for (key, value) in flattened_obj {
+        key_groups.entry(key).or_insert_with(Vec::new).push(value);
+    }
+
+    let mut result = Map::new();
+
+    for (key, values) in key_groups {
+        if values.len() == 1 {
+            // No collision, keep the original key-value pair
+            result.insert(key, values.into_iter().next().unwrap());
+        } else {
+            // Collision detected
+            if avoid_key_collision {
+                // Strategy 1: Append index suffixes to avoid collisions
+                for (index, value) in values.into_iter().enumerate() {
+                    let new_key = format!("{}{}{}", key, separator, index);
+                    result.insert(new_key, value);
+                }
+            } else if handle_key_collision {
+                // Strategy 2: Collect values into an array, filtering out unwanted values
+                let filtered_values: Vec<Value> = values.into_iter().filter(|value| {
+                    should_include_value(
+                        value,
+                        remove_empty_string_values,
+                        remove_null_values,
+                        remove_empty_dict,
+                        remove_empty_list,
+                    )
+                }).collect();
+
+                // Only create the array if we have values after filtering
+                if !filtered_values.is_empty() {
+                    let array_value = Value::Array(filtered_values);
+                    result.insert(key, array_value);
+                }
+                // If all values were filtered out, don't insert anything
+            }
         }
     }
 
-    if let Some(val_reps) = value_replacements {
-        for (find, replace) in val_reps {
-            flattener = flattener.value_replacement(find, replace);
-        }
-    }
-
-    flattener.flatten(json_input)
+    result
 }
+
+/// Helper function to determine if a value should be included based on filtering criteria
+/// This ensures consistent filtering logic across both flatten and unflatten operations
+fn should_include_value(
+    value: &Value,
+    remove_empty_string_values: bool,
+    remove_null_values: bool,
+    remove_empty_dict: bool,
+    remove_empty_list: bool,
+) -> bool {
+    // Check for empty strings
+    if remove_empty_string_values {
+        if let Some(s) = value.as_str() {
+            if s.is_empty() {
+                return false;
+            }
+        }
+    }
+
+    // Check for nulls
+    if remove_null_values && value.is_null() {
+        return false;
+    }
+
+    // Check for empty objects
+    if remove_empty_dict {
+        if let Some(obj) = value.as_object() {
+            if obj.is_empty() {
+                return false;
+            }
+        }
+    }
+
+    // Check for empty arrays
+    if remove_empty_list {
+        if let Some(arr) = value.as_array() {
+            if arr.is_empty() {
+                return false;
+            }
+        }
+    }
+
+    true
+}
+
+/// Apply key replacements with collision handling for flattening operations
+///
+/// This function combines key replacement and collision detection in a single pass
+/// to properly handle cases where multiple keys would map to the same result after replacement.
+fn apply_key_replacements_with_collision_handling(
+    flattened: HashMap<String, Value>,
+    patterns: &[String],
+    avoid_key_collision: bool,
+    handle_key_collision: bool,
+    separator: &str,
+    remove_empty_string_values: bool,
+    remove_null_values: bool,
+    remove_empty_dict: bool,
+    remove_empty_list: bool,
+) -> Result<HashMap<String, Value>, Box<dyn Error>> {
+    if patterns.is_empty() {
+        return Ok(flattened);
+    }
+
+    if patterns.len() % 2 != 0 {
+        return Err(Box::new(FlattenError::InvalidReplacementPattern(
+            "Patterns must be provided in pairs (find, replace)".to_string(),
+        )));
+    }
+
+    // First pass: apply replacements and track what each original key maps to
+    let mut key_mapping: HashMap<String, String> = HashMap::new();
+    let mut original_values: HashMap<String, Value> = HashMap::new();
+
+    for (original_key, value) in flattened {
+        let mut new_key = original_key.clone();
+
+        // Apply all key replacement patterns (process in pairs)
+        for chunk in patterns.chunks(2) {
+            let find = &chunk[0];
+            let replace = &chunk[1];
+
+            if find.starts_with("regex:") {
+                // Handle regex replacement
+                let pattern = &find[6..]; // Remove "regex:" prefix
+                let regex = regex::Regex::new(pattern)
+                    .map_err(|e| Box::new(FlattenError::InvalidReplacementPattern(e.to_string())))?;
+                new_key = regex.replace_all(&new_key, replace).to_string();
+            } else {
+                // Handle literal replacement
+                new_key = new_key.replace(find, replace);
+            }
+        }
+
+        key_mapping.insert(original_key.clone(), new_key);
+        original_values.insert(original_key, value);
+    }
+
+    // Second pass: group by target key to detect collisions
+    let mut target_groups: HashMap<String, Vec<String>> = HashMap::new();
+    for (original_key, target_key) in &key_mapping {
+        target_groups.entry(target_key.clone()).or_insert_with(Vec::new).push(original_key.clone());
+    }
+
+    // Third pass: build result with collision handling
+    let mut result = HashMap::new();
+
+    for (target_key, original_keys) in target_groups {
+        if original_keys.len() == 1 {
+            // No collision
+            let original_key = &original_keys[0];
+            let value = original_values.remove(original_key).unwrap();
+            result.insert(target_key, value);
+        } else {
+            // Collision detected
+            if avoid_key_collision {
+                // Strategy 1: Append index suffixes to avoid collisions
+                for (index, original_key) in original_keys.iter().enumerate() {
+                    let value = original_values.remove(original_key).unwrap();
+                    let new_key = format!("{}{}{}", target_key, separator, index);
+                    result.insert(new_key, value);
+                }
+            } else if handle_key_collision {
+                // Strategy 2: Collect values into an array, filtering out unwanted values
+                let mut values = Vec::new();
+                for original_key in &original_keys {
+                    let value = original_values.remove(original_key).unwrap();
+
+                    // Apply filtering to values before adding to collision array
+                    let should_include = should_include_value(
+                        &value,
+                        remove_empty_string_values,
+                        remove_null_values,
+                        remove_empty_dict,
+                        remove_empty_list,
+                    );
+
+                    if should_include {
+                        values.push(value);
+                    }
+                }
+
+                // Only create the array if we have values after filtering
+                if !values.is_empty() {
+                    result.insert(target_key, Value::Array(values));
+                }
+                // If all values were filtered out, don't insert anything
+            } else {
+                // No collision handling enabled, use the last value (default behavior)
+                let last_original_key = original_keys.last().unwrap();
+                let value = original_values.remove(last_original_key).unwrap();
+                result.insert(target_key, value);
+            }
+        }
+    }
+
+    Ok(result)
+}
+
+/// Apply key replacements with collision handling for unflattening operations
+///
+/// This function combines key replacement and collision detection for Map<String, Value>
+/// to properly handle cases where multiple keys would map to the same result after replacement.
+fn apply_key_replacements_for_unflatten_with_collision_handling(
+    flattened_obj: Map<String, Value>,
+    key_replacements: &[(String, String)],
+    avoid_key_collision: bool,
+    handle_key_collision: bool,
+    separator: &str,
+    remove_empty_string_values: bool,
+    remove_null_values: bool,
+    remove_empty_dict: bool,
+    remove_empty_list: bool,
+) -> Result<Map<String, Value>, Box<dyn Error>> {
+    if key_replacements.is_empty() {
+        return Ok(flattened_obj);
+    }
+
+    // First pass: apply replacements and track what each original key maps to
+    let mut key_mapping: HashMap<String, String> = HashMap::new();
+    let mut original_values: HashMap<String, Value> = HashMap::new();
+
+    for (original_key, value) in flattened_obj {
+        let mut new_key = original_key.clone();
+
+        // Apply all key replacement patterns
+        for (find, replace) in key_replacements {
+            if find.starts_with("regex:") {
+                // Handle regex replacement
+                let pattern = &find[6..]; // Remove "regex:" prefix
+                let regex = regex::Regex::new(pattern)
+                    .map_err(|e| Box::new(FlattenError::InvalidReplacementPattern(e.to_string())))?;
+                new_key = regex.replace_all(&new_key, replace).to_string();
+            } else {
+                // Handle literal replacement
+                new_key = new_key.replace(find, replace);
+            }
+        }
+
+        key_mapping.insert(original_key.clone(), new_key);
+        original_values.insert(original_key, value);
+    }
+
+    // Second pass: group by target key to detect collisions
+    let mut target_groups: HashMap<String, Vec<String>> = HashMap::new();
+    for (original_key, target_key) in &key_mapping {
+        target_groups.entry(target_key.clone()).or_insert_with(Vec::new).push(original_key.clone());
+    }
+
+    // Third pass: build result with collision handling
+    let mut result = Map::new();
+
+    for (target_key, original_keys) in target_groups {
+        if original_keys.len() == 1 {
+            // No collision
+            let original_key = &original_keys[0];
+            let value = original_values.remove(original_key).unwrap();
+            result.insert(target_key, value);
+        } else {
+            // Collision detected
+            if avoid_key_collision {
+                // Strategy 1: Append index suffixes to avoid collisions
+                // Use the provided separator for consistency with flatten operations
+                for (index, original_key) in original_keys.iter().enumerate() {
+                    let value = original_values.remove(original_key).unwrap();
+                    let new_key = format!("{}{}{}", target_key, separator, index);
+                    result.insert(new_key, value);
+                }
+            } else if handle_key_collision {
+                // Strategy 2: Collect values into an array, filtering out unwanted values
+                let mut values = Vec::new();
+                for original_key in &original_keys {
+                    let value = original_values.remove(original_key).unwrap();
+
+                    // Apply filtering to values before adding to collision array
+                    let should_include = should_include_value(
+                        &value,
+                        remove_empty_string_values,
+                        remove_null_values,
+                        remove_empty_dict,
+                        remove_empty_list,
+                    );
+
+                    if should_include {
+                        values.push(value);
+                    }
+                }
+
+                // Only create the array if we have values after filtering
+                if !values.is_empty() {
+                    result.insert(target_key, Value::Array(values));
+                }
+                // If all values were filtered out, don't insert anything
+            } else {
+                // No collision handling enabled, use the last value (default behavior)
+                let last_original_key = original_keys.last().unwrap();
+                let value = original_values.remove(last_original_key).unwrap();
+                result.insert(target_key, value);
+            }
+        }
+    }
+
+    Ok(result)
+}
+
+

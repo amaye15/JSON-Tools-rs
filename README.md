@@ -4,63 +4,84 @@ A high-performance Rust library for advanced JSON manipulation with SIMD-acceler
 
 ## Features
 
-- **Unified APIs**: JsonFlattener and JsonUnflattener with matching builder patterns
-- **Complete Roundtrip Support**: Flatten JSON and unflatten it back to original structure
-- **High Performance**: SIMD-accelerated JSON parsing with optimized algorithms
-- **Builder Pattern**: Fluent, chainable API for easy configuration
-- **Comprehensive Filtering**: Remove empty values, nulls, empty objects/arrays
-- **Advanced Replacements**: Support for literal and regex-based key/value replacements
-- **Batch Processing**: Handle single JSON strings or arrays of JSON strings
-- **Python Bindings**: Full Python support via maturin/PyO3
+- **🚀 Unified API**: Single `JSONTools` entry point for both flattening and unflattening operations
+- **🔧 Builder Pattern**: Fluent, chainable API for easy configuration
+- **⚡ High Performance**: SIMD-accelerated JSON parsing with optimized algorithms
+- **🎯 Complete Roundtrip Support**: Flatten JSON and unflatten it back to original structure
+- **🧹 Comprehensive Filtering**: Remove empty values, nulls, empty objects/arrays
+- **🔄 Advanced Replacements**: Support for literal and regex-based key/value replacements
+- **⚔️ Key Collision Handling**: Two strategies for handling key conflicts after transformations
+  - **Avoid Collisions**: Append index suffixes to make keys unique
+  - **Collect Values**: Merge colliding values into arrays with intelligent filtering
+- **📦 Batch Processing**: Handle single JSON strings or arrays of JSON strings
+- **🐍 Python Bindings**: Full Python support via maturin/PyO3
+- **🛡️ Type Safety**: Compile-time checked with comprehensive error handling
 
 ## Quick Start
 
-### Rust
+### Rust - Unified API (Recommended)
 
 #### Flattening JSON
 
 ```rust
-use json_tools_rs::{JsonFlattener, JsonOutput};
+use json_tools_rs::{JSONTools, JsonOutput};
 
 let json = r#"{"user": {"name": "John", "details": {"age": null, "city": ""}}}"#;
-let result = JsonFlattener::new()
+let result = JSONTools::new()
+    .flatten()
+    .separator("::")
+    .lowercase_keys(true)
+    .key_replacement("regex:(User|Admin)_", "")
+    .value_replacement("@example.com", "@company.org")
     .remove_empty_strings(true)
     .remove_nulls(true)
-    .flatten(json)?;
+    .remove_empty_objects(true)
+    .remove_empty_arrays(true)
+    .execute(json)?;
 
 match result {
     JsonOutput::Single(flattened) => println!("{}", flattened),
     JsonOutput::Multiple(_) => unreachable!(),
 }
-// Output: {"user.name": "John"}
+// Output: {"user::name": "John"}
 ```
 
 #### Unflattening JSON
 
 ```rust
-use json_tools_rs::{JsonUnflattener, JsonOutput};
+use json_tools_rs::{JSONTools, JsonOutput};
 
-let flattened = r#"{"user.name": "John", "user.age": 30, "items.0": "first", "items.1": "second"}"#;
-let result = JsonUnflattener::new().unflatten(flattened)?;
+let flattened = r#"{"user::name": "John", "user::age": 30}"#;
+let result = JSONTools::new()
+    .unflatten()
+    .separator("::")
+    .lowercase_keys(true)
+    .key_replacement("regex:(User|Admin)_", "")
+    .value_replacement("@company.org", "@example.com")
+    .remove_empty_strings(true)
+    .remove_nulls(true)
+    .remove_empty_objects(true)
+    .remove_empty_arrays(true)
+    .execute(flattened)?;
 
 match result {
     JsonOutput::Single(unflattened) => println!("{}", unflattened),
     JsonOutput::Multiple(_) => unreachable!(),
 }
-// Output: {"user": {"name": "John", "age": 30}, "items": ["first", "second"]}
+// Output: {"user": {"name": "John", "age": 30}}
 ```
 
 #### Roundtrip Example
 
 ```rust
-use json_tools_rs::{JsonFlattener, JsonUnflattener, JsonOutput};
+use json_tools_rs::{JSONTools, JsonOutput};
 
 let original = r#"{"user": {"name": "John", "age": 30}, "items": [1, 2, {"nested": "value"}]}"#;
 
 // Flatten
-let flattened = JsonFlattener::new().flatten(original)?.into_single();
+let flattened = JSONTools::new().flatten().execute(original)?.into_single();
 // Unflatten back
-let restored = JsonUnflattener::new().unflatten(&flattened)?.into_single();
+let restored = JSONTools::new().unflatten().execute(&flattened)?.into_single();
 
 // original and restored are equivalent JSON structures
 assert_eq!(
@@ -68,6 +89,8 @@ assert_eq!(
     serde_json::from_str::<serde_json::Value>(&restored)?
 );
 ```
+
+
 
 ### Python
 

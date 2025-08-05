@@ -4,8 +4,8 @@ JSON Tools RS - High-performance JSON manipulation library
 This package provides Python bindings for the JSON Tools RS library,
 offering high-performance JSON flattening and unflattening with SIMD-accelerated parsing.
 
-The main entry points are the JsonFlattener and JsonUnflattener classes, which provide
-unified builder pattern APIs for all JSON manipulation operations.
+The main entry point is the JSONTools class, which provides a unified builder pattern API
+for all JSON manipulation operations with advanced collision handling and filtering.
 
 Perfect Type Matching - Input type = Output type:
     - str input → str output (JSON string)
@@ -14,63 +14,59 @@ Perfect Type Matching - Input type = Output type:
     - list[dict] input → list[dict] output (list of Python dictionaries)
     - Mixed lists preserve original types
 
-Flattening Example:
+Basic Usage:
     >>> import json_tools_rs
     >>>
-    >>> # JSON string input → JSON string output
-    >>> flattener = json_tools_rs.JsonFlattener()
-    >>> result = flattener.flatten('{"user": {"name": "John", "age": 30}}')
-    >>> print(result)  # '{"user.name": "John", "user.age": 30}' (str)
-    >>> print(type(result))  # <class 'str'>
-    >>>
-    >>> # Python dict input → Python dict output (much more convenient!)
-    >>> result = flattener.flatten({"user": {"name": "John", "age": 30}})
+    >>> # Basic flattening
+    >>> tools = json_tools_rs.JSONTools().flatten()
+    >>> result = tools.execute({"user": {"name": "John", "age": 30}})
     >>> print(result)  # {'user.name': 'John', 'user.age': 30} (dict)
-    >>> print(type(result))  # <class 'dict'>
-
-Unflattening Example:
-    >>> import json_tools_rs
     >>>
-    >>> # JSON string input → JSON string output
-    >>> unflattener = json_tools_rs.JsonUnflattener()
-    >>> result = unflattener.unflatten('{"user.name": "John", "user.age": 30}')
-    >>> print(result)  # '{"user": {"name": "John", "age": 30}}' (str)
-    >>> print(type(result))  # <class 'str'>
-    >>>
-    >>> # Python dict input → Python dict output (much more convenient!)
-    >>> result = unflattener.unflatten({"user.name": "John", "user.age": 30})
+    >>> # Basic unflattening
+    >>> tools = json_tools_rs.JSONTools().unflatten()
+    >>> result = tools.execute({"user.name": "John", "user.age": 30})
     >>> print(result)  # {'user': {'name': 'John', 'age': 30}} (dict)
-    >>> print(type(result))  # <class 'dict'>
 
-Advanced Configuration:
-    >>> # Both classes support the same builder pattern
-    >>> flattener = (json_tools_rs.JsonFlattener()
+Advanced Features:
+    >>> # Collision handling with filtering
+    >>> tools = (json_tools_rs.JSONTools()
+    ...     .flatten()
+    ...     .separator("::")
     ...     .remove_empty_strings(True)
     ...     .remove_nulls(True)
-    ...     .separator("_")
-    ...     .lowercase_keys(True))
+    ...     .key_replacement("regex:(User|Admin)_", "")
+    ...     .handle_key_collision(True))
     >>>
-    >>> unflattener = (json_tools_rs.JsonUnflattener()
-    ...     .separator("_")
-    ...     .lowercase_keys(True)
-    ...     .key_replacement("prefix_", "user_"))
+    >>> data = {"User_name": "John", "Admin_name": "", "Guest_name": "Bob"}
+    >>> result = tools.execute(data)
+    >>> print(result)  # {"name": ["John", "Bob"], "guest_name": "Bob"}
     >>>
+    >>> # Collision avoidance strategy
+    >>> tools = (json_tools_rs.JSONTools()
+    ...     .flatten()
+    ...     .key_replacement("regex:(User|Admin)_", "")
+    ...     .avoid_key_collision(True))
+    >>>
+    >>> result = tools.execute({"User_name": "John", "Admin_name": "Jane"})
+    >>> print(result)  # {"name.0": "John", "name.1": "Jane"}
+
+Batch Processing:
     >>> # Perfect type preservation in batch processing
-    >>> str_results = flattener.flatten(['{"a": 1}', '{"b": 2}'])
+    >>> tools = json_tools_rs.JSONTools().flatten()
+    >>> str_results = tools.execute(['{"a": 1}', '{"b": 2}'])
     >>> print(str_results)  # ['{"a": 1}', '{"b": 2}'] (list of strings)
     >>>
-    >>> dict_results = unflattener.unflatten([{"a.b": 1}, {"c.d": 2}])
-    >>> print(dict_results)  # [{'a': {'b': 1}}, {'c': {'d': 2}}] (list of dicts)
+    >>> dict_results = tools.execute([{"a": {"b": 1}}, {"c": {"d": 2}}])
+    >>> print(dict_results)  # [{'a.b': 1}, {'c.d': 2}] (list of dicts)
 """
 
-from .json_tools_rs import JsonFlattener, JsonFlattenError, JsonOutput, JsonUnflattener
+from .json_tools_rs import JSONTools, JsonFlattenError, JsonOutput
 
 __version__ = "0.1.0"
 __author__ = "JSON Tools RS Contributors"
 
 __all__ = [
-    "JsonFlattener",
-    "JsonUnflattener",
+    "JSONTools",
     "JsonOutput",
     "JsonFlattenError",
 ]
