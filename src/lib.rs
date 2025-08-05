@@ -106,18 +106,7 @@ fn get_pooled_string() -> String {
     })
 }
 
-#[inline]
-fn return_pooled_string(mut s: String) {
-    if s.capacity() <= 512 { // Only pool reasonably sized strings
-        s.clear();
-        STRING_POOL.with(|pool| {
-            let mut pool = pool.borrow_mut();
-            if pool.len() < 32 { // Limit pool size
-                pool.push(s);
-            }
-        });
-    }
-}
+
 
 // Python bindings module
 #[cfg(feature = "python")]
@@ -1336,137 +1325,46 @@ fn apply_value_replacements(
     Ok(())
 }
 
-/// JSON serialization with simd-json integration
+/// Ultra-fast JSON serialization - direct string building without intermediate Value creation
 #[inline]
 fn serialize_flattened(
     flattened: &FxHashMap<String, Value>,
 ) -> Result<String, simd_json::Error> {
-    // Always use SIMD for maximum performance - use simd_json for all serialization
-    let json_obj = Value::Object(flattened.iter().map(|(k, v)| (k.clone(), v.clone())).collect());
-    simd_json::serde::to_string(&json_obj)
-}
+    // Estimate capacity more accurately
+    let estimated_size = flattened.len() * 50 + 100; // Rough estimate
+    let mut result = String::with_capacity(estimated_size);
 
-/// Value serialization with branch prediction optimization
-#[inline]
-fn serialize_value(value: &Value, result: &mut String) -> Result<(), simd_json::Error> {
-    match value {
-        // Most common case first for better branch prediction
-        Value::String(s) => {
-            result.push('"');
-            result.push_str(&escape_json_string(s));
-            result.push('"');
-        }
-        Value::Number(n) => {
-            // Optimized number serialization
-            if let Some(i) = n.as_i64() {
-                // Fast integer path
-                if (0..10).contains(&i) {
-                    // Ultra-fast path for single digits
-                    result.push(char::from(b'0' + i as u8));
-                } else if (0..100).contains(&i) {
-                    // Fast path for two digits
-                    let tens = i / 10;
-                    let ones = i % 10;
-                    result.push(char::from(b'0' + tens as u8));
-                    result.push(char::from(b'0' + ones as u8));
-                } else if (0..1000).contains(&i) {
-                    // Fast path for three digits
-                    let hundreds = i / 100;
-                    let tens = (i % 100) / 10;
-                    let ones = i % 10;
-                    result.push(char::from(b'0' + hundreds as u8));
-                    result.push(char::from(b'0' + tens as u8));
-                    result.push(char::from(b'0' + ones as u8));
-                } else {
-                    use std::fmt::Write;
-                    write!(result, "{}", i).unwrap();
-                }
-            } else if let Some(f) = n.as_f64() {
-                use std::fmt::Write;
-                write!(result, "{}", f).unwrap();
-            } else {
-                use std::fmt::Write;
-                write!(result, "{}", n).unwrap();
-            }
-        }
-        Value::Bool(true) => {
-            result.push_str("true");
-        }
-        Value::Bool(false) => {
-            result.push_str("false");
-        }
-        Value::Null => {
-            result.push_str("null");
-        }
-        _ => {
-            // For complex values, fall back to simd_json
-            let value_str = simd_json::serde::to_string(value)?;
-            result.push_str(&value_str);
-        }
-    }
-    Ok(())
-}
-
-/// JSON size estimation with better accuracy
-#[inline]
-fn estimate_json_size(flattened: &FxHashMap<String, Value>) -> usize {
-    let mut size = 2; // Opening and closing braces
-    let len = flattened.len();
-
-    if len == 0 {
-        return 2;
-    }
-
-    // Pre-calculate comma overhead
-    size += len - 1; // Commas between entries
+    result.push('{');
+    let mut first = true;
 
     for (key, value) in flattened {
-        size += key.len() + 3; // Key + quotes + colon
+        if !first {
+            result.push(',');
+        }
+        first = false;
 
-        // More accurate value size estimation
-        size += match value {
-            Value::String(s) => {
-                // Account for potential escaping
-                let base_len = s.len() + 2; // String + quotes
-                let mut escape_overhead = 0;
-                for &b in s.as_bytes() {
-                    match b {
-                        b'"' | b'\\' | b'\n' | b'\r' | b'\t' | 0x08 | 0x0C => escape_overhead += 1,
-                        b if b < 0x20 => escape_overhead += 5, // \uXXXX format
-                        _ => {}
-                    }
-                }
-                base_len + escape_overhead
-            }
-            Value::Number(n) => {
-                if let Some(i) = n.as_i64() {
-                    if (0..10).contains(&i) {
-                        1
-                    } else if (-9..100).contains(&i) {
-                        2
-                    } else if (-99..1000).contains(&i) {
-                        3
-                    } else {
-                        20
-                    } // Conservative for large numbers
-                } else {
-                    20 // Conservative for floats
-                }
-            }
-            Value::Bool(true) => 4,  // "true"
-            Value::Bool(false) => 5, // "false"
-            Value::Null => 4,        // "null"
-            _ => 50,                 // Conservative estimate for complex values
-        };
+        // Serialize key directly
+        result.push('"');
+        escape_json_string_direct(key, &mut result);
+        result.push_str("\":");
+
+        // Serialize value directly
+        serialize_value_direct(value, &mut result)?;
     }
 
-    // Add 10% buffer for safety
-    size + (size / 10)
+    result.push('}');
+    Ok(result)
 }
 
-/// Ultra-fast JSON string escaping with optimized byte-level operations
+
+
+
+
+
+
+/// Ultra-fast direct JSON string escaping - writes directly to output buffer
 #[inline]
-fn escape_json_string(s: &str) -> Cow<str> {
+fn escape_json_string_direct(s: &str, output: &mut String) {
     let bytes = s.as_bytes();
 
     // Ultra-fast path: scan for escape characters using byte operations
@@ -1479,29 +1377,76 @@ fn escape_json_string(s: &str) -> Cow<str> {
     }
 
     if !needs_escape {
-        return Cow::Borrowed(s);
+        output.push_str(s);
+        return;
     }
 
-    // Optimized escaping with pre-allocated capacity
-    let mut result = String::with_capacity(s.len() + (s.len() >> 2)); // 25% extra capacity
+    // Reserve capacity for escaped string
+    output.reserve(s.len() + 16);
 
+    // Escape and append directly
     for &byte in bytes {
         match byte {
-            b'"' => result.push_str("\\\""),
-            b'\\' => result.push_str("\\\\"),
-            b'\n' => result.push_str("\\n"),
-            b'\r' => result.push_str("\\r"),
-            b'\t' => result.push_str("\\t"),
-            0x08 => result.push_str("\\b"),
-            0x0C => result.push_str("\\f"),
-            // Handle other control characters (0x00-0x1F)
+            b'"' => output.push_str("\\\""),
+            b'\\' => output.push_str("\\\\"),
+            b'\n' => output.push_str("\\n"),
+            b'\r' => output.push_str("\\r"),
+            b'\t' => output.push_str("\\t"),
+            0x08 => output.push_str("\\b"),
+            0x0C => output.push_str("\\f"),
             b if b < 0x20 => {
-                result.push_str(&format!("\\u{:04x}", b));
+                output.push_str(&format!("\\u{:04x}", b));
             }
-            _ => result.push(byte as char),
+            _ => output.push(byte as char),
         }
     }
-    Cow::Owned(result)
+}
+
+/// Ultra-fast direct value serialization - writes directly to output buffer
+#[inline]
+fn serialize_value_direct(value: &Value, output: &mut String) -> Result<(), simd_json::Error> {
+    match value {
+        Value::String(s) => {
+            output.push('"');
+            escape_json_string_direct(s, output);
+            output.push('"');
+        }
+        Value::Number(n) => {
+            output.push_str(&n.to_string());
+        }
+        Value::Bool(b) => {
+            output.push_str(if *b { "true" } else { "false" });
+        }
+        Value::Null => {
+            output.push_str("null");
+        }
+        Value::Array(arr) => {
+            output.push('[');
+            for (i, item) in arr.iter().enumerate() {
+                if i > 0 {
+                    output.push(',');
+                }
+                serialize_value_direct(item, output)?;
+            }
+            output.push(']');
+        }
+        Value::Object(obj) => {
+            output.push('{');
+            let mut first = true;
+            for (key, val) in obj {
+                if !first {
+                    output.push(',');
+                }
+                first = false;
+                output.push('"');
+                escape_json_string_direct(key, output);
+                output.push_str("\":");
+                serialize_value_direct(val, output)?;
+            }
+            output.push('}');
+        }
+    }
+    Ok(())
 }
 
 /// Cached separator information for operations with Cow optimization
@@ -1511,21 +1456,20 @@ struct SeparatorCache {
     is_single_char: bool,            // True if separator is a single character
     single_char: Option<char>,       // The character if single-char separator
     length: usize,                   // Pre-computed length
-    is_common: bool,                 // True if it's a common separator (., _, ::, /, -)
 }
 
 impl SeparatorCache {
     #[inline]
     fn new(separator: &str) -> Self {
         // Check for common static separators to avoid heap allocations
-        let (separator_cow, is_common) = match separator {
-            "." => (Cow::Borrowed("."), true),
-            "_" => (Cow::Borrowed("_"), true),
-            "::" => (Cow::Borrowed("::"), true),
-            "/" => (Cow::Borrowed("/"), true),
-            "-" => (Cow::Borrowed("-"), true),
-            "|" => (Cow::Borrowed("|"), true),
-            _ => (Cow::Owned(separator.to_string()), false),
+        let separator_cow = match separator {
+            "." => Cow::Borrowed("."),
+            "_" => Cow::Borrowed("_"),
+            "::" => Cow::Borrowed("::"),
+            "/" => Cow::Borrowed("/"),
+            "-" => Cow::Borrowed("-"),
+            "|" => Cow::Borrowed("|"),
+            _ => Cow::Owned(separator.to_string()),
         };
 
         let is_single_char = separator.len() == 1;
@@ -1540,7 +1484,6 @@ impl SeparatorCache {
             is_single_char,
             single_char,
             length: separator.len(),
-            is_common,
         }
     }
 
@@ -1668,15 +1611,7 @@ impl FastStringBuilder {
         &self.buffer
     }
 
-    #[inline]
-    fn into_string(self) -> String {
-        self.buffer
-    }
 
-    #[inline]
-    fn clone_string(&self) -> String {
-        self.buffer.clone()
-    }
 
     #[inline]
     fn is_empty(&self) -> bool {
