@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
-JSON Tools RS Python Example
+JSON Tools RS Python Advanced Examples
 
-This example demonstrates the unified JsonFlattener and JsonUnflattener APIs in Python.
+This example demonstrates the unified JSONTools API in Python with advanced features
+including collision handling, filtering, transformations, and batch processing.
 """
 
 from typing import Any, Dict
@@ -11,9 +12,9 @@ import json_tools_rs
 
 
 def main() -> None:
-    print("JSON Tools RS - Python Example")
+    print("JSON Tools RS - Advanced Python Examples")
     print("Perfect Type Matching: Input Type = Output Type!")
-    print("Complete Flatten/Unflatten Solution")
+    print("Unified JSONTools API with Advanced Features")
     print("=" * 50)
 
     # Example 1: Basic flattening
@@ -31,8 +32,9 @@ def main() -> None:
 
     print(f"Input (Python dict): {json_data}")
 
-    flattener = json_tools_rs.JsonFlattener()
-    result = flattener.flatten(json_data)  # Pass Python dict directly!
+    # Use the unified JSONTools API with flatten() method
+    tools = json_tools_rs.JSONTools().flatten()
+    result = tools.execute(json_data)  # Pass Python dict directly!
 
     print(f"Output: {result}")
 
@@ -54,9 +56,10 @@ def main() -> None:
 
     print(f"Input (Python dict): {python_data}")
 
-    # Configure with builder pattern
-    advanced_flattener = (
-        json_tools_rs.JsonFlattener()
+    # Configure with builder pattern using unified JSONTools API
+    advanced_tools = (
+        json_tools_rs.JSONTools()
+        .flatten()
         .remove_empty_strings(True)
         .remove_nulls(True)
         .remove_empty_objects(True)
@@ -65,7 +68,7 @@ def main() -> None:
         .lowercase_keys(True)
     )
 
-    result = advanced_flattener.flatten(python_data)  # Pass Python dict directly!
+    result = advanced_tools.execute(python_data)  # Pass Python dict directly!
     print(f"Output: {result}")
 
     # Example 3: Key and value replacements
@@ -81,13 +84,14 @@ def main() -> None:
 
     print(f"Input (Python dict): {python_patterns}")
 
-    replacement_flattener = (
-        json_tools_rs.JsonFlattener()
+    replacement_tools = (
+        json_tools_rs.JSONTools()
+        .flatten()
         .key_replacement("regex:^(user|admin)_", "")
         .value_replacement("@example.com", "@company.org")
     )
 
-    result = replacement_flattener.flatten(
+    result = replacement_tools.execute(
         python_patterns
     )  # Pass Python dict directly!
     print(f"Output: {result}")
@@ -105,8 +109,8 @@ def main() -> None:
 
     print(f"Input (mixed types): {mixed_batch}")
 
-    batch_flattener = json_tools_rs.JsonFlattener()
-    results = batch_flattener.flatten(mixed_batch)  # Handles mixed types automatically!
+    batch_tools = json_tools_rs.JSONTools().flatten()
+    results = batch_tools.execute(mixed_batch)  # Handles mixed types automatically!
 
     print(f"Output: {results}")
 
@@ -118,14 +122,15 @@ def main() -> None:
     flattened_data = result  # This is a Python dict from Example 1
     print(f"Input (flattened dict): {flattened_data}")
 
-    unflattener = json_tools_rs.JsonUnflattener()
-    restored = unflattener.unflatten(flattened_data)  # Pass Python dict directly!
+    # Use the unified JSONTools API with unflatten() method
+    unflatten_tools = json_tools_rs.JSONTools().unflatten()
+    restored = unflatten_tools.execute(flattened_data)  # Pass Python dict directly!
 
     print(f"Output (restored): {restored}")
     print(f"Type preserved: {type(restored)}")
 
-    # Example 6: Advanced JsonUnflattener configuration
-    print("\n6. Advanced Unflattener Configuration")
+    # Example 6: Advanced JSONTools unflattening configuration
+    print("\n6. Advanced Unflattening Configuration")
     print("-" * 40)
 
     # Create some flattened data with prefixes
@@ -137,16 +142,17 @@ def main() -> None:
 
     print(f"Input (flattened dict): {flattened_with_prefixes}")
 
-    # Configure unflattener with transformations
-    advanced_unflattener = (
-        json_tools_rs.JsonUnflattener()
+    # Configure unflattening with transformations using unified API
+    advanced_unflatten_tools = (
+        json_tools_rs.JSONTools()
+        .unflatten()
         .separator("_")
         .lowercase_keys(True)
         .key_replacement("prefix_", "user_")
         .value_replacement("@company.org", "@example.com")
     )
 
-    restored_advanced = advanced_unflattener.unflatten(flattened_with_prefixes)
+    restored_advanced = advanced_unflatten_tools.execute(flattened_with_prefixes)
     print(f"Output (transformed): {restored_advanced}")
 
     # Example 7: Roundtrip demonstration
@@ -168,14 +174,14 @@ def main() -> None:
 
     print(f"Original: {original_complex}")
 
-    # Flatten
-    roundtrip_flattener = json_tools_rs.JsonFlattener()
-    flattened_complex = roundtrip_flattener.flatten(original_complex)
+    # Flatten using unified JSONTools API
+    roundtrip_flatten_tools = json_tools_rs.JSONTools().flatten()
+    flattened_complex = roundtrip_flatten_tools.execute(original_complex)
     print(f"Flattened: {flattened_complex}")
 
-    # Unflatten
-    roundtrip_unflattener = json_tools_rs.JsonUnflattener()
-    restored_complex = roundtrip_unflattener.unflatten(flattened_complex)
+    # Unflatten using unified JSONTools API
+    roundtrip_unflatten_tools = json_tools_rs.JSONTools().unflatten()
+    restored_complex = roundtrip_unflatten_tools.execute(flattened_complex)
     print(f"Restored: {restored_complex}")
 
     # Verify they're identical
@@ -200,24 +206,59 @@ def main() -> None:
 
     print(f"String batch input: {flattened_batch_strings}")
 
-    batch_unflattener = json_tools_rs.JsonUnflattener()
+    batch_unflatten_tools = json_tools_rs.JSONTools().unflatten()
 
     # Process string batch → returns list of strings
-    string_results = batch_unflattener.unflatten(flattened_batch_strings)
+    string_results = batch_unflatten_tools.execute(flattened_batch_strings)
     print(f"String batch output: {string_results}")
     print(f"Output types: {[type(item) for item in string_results]}")
 
     print(f"\nDict batch input: {flattened_batch_dicts}")
 
     # Process dict batch → returns list of dicts
-    dict_results = batch_unflattener.unflatten(flattened_batch_dicts)
+    dict_results = batch_unflatten_tools.execute(flattened_batch_dicts)
     print(f"Dict batch output: {dict_results}")
     print(f"Output types: {[type(item) for item in dict_results]}")
 
+    # Example 9: Collision handling strategies
+    print("\n9. Collision Handling Strategies")
+    print("-" * 35)
+
+    # Data that will cause key collisions after transformation
+    collision_data = {
+        "user_name": "John",
+        "admin_name": "Jane",
+        "guest_name": "Bob",
+    }
+
+    print(f"Input (will cause collisions): {collision_data}")
+
+    # Strategy 1: Handle collisions by collecting values into arrays
+    handle_collision_tools = (
+        json_tools_rs.JSONTools()
+        .flatten()
+        .key_replacement("regex:(user|admin|guest)_", "")
+        .handle_key_collision(True)
+    )
+
+    collision_result = handle_collision_tools.execute(collision_data)
+    print(f"Handle collision (arrays): {collision_result}")
+
+    # Strategy 2: Avoid collisions by appending index suffixes
+    avoid_collision_tools = (
+        json_tools_rs.JSONTools()
+        .flatten()
+        .key_replacement("regex:(user|admin|guest)_", "")
+        .avoid_key_collision(True)
+    )
+
+    avoidance_result = avoid_collision_tools.execute(collision_data)
+    print(f"Avoid collision (suffixes): {avoidance_result}")
+
     print("\n" + "=" * 60)
     print("✅ All examples completed successfully!")
-    print("🚀 JsonFlattener and JsonUnflattener provide a complete,")
-    print("   unified solution for JSON manipulation with perfect type preservation!")
+    print("🚀 JSONTools provides a complete, unified API for JSON manipulation")
+    print("   with perfect type preservation and advanced collision handling!")
 
 
 if __name__ == "__main__":

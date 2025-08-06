@@ -62,7 +62,7 @@ Batch Processing:
 
 from .json_tools_rs import JSONTools, JsonToolsError, JsonOutput
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 __author__ = "JSON Tools RS Contributors"
 
 __all__ = [
