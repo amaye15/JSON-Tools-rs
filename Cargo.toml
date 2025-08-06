@@ -19,9 +19,7 @@ crate-type = ["rlib", "cdylib"]
 name = "json-tools-rs"
 path = "src/main.rs"
 
-[[example]]
-name = "unified_api"
-path = "examples/unified_api.rs"
+
 
 [dependencies]
 regex = "1.11.1"
