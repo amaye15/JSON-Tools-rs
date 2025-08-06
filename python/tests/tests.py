@@ -643,7 +643,7 @@ class TestErrorHandling:
         """Test invalid JSON string input"""
         tools = json_tools_rs.JSONTools().flatten()
 
-        with pytest.raises(json_tools_rs.JsonFlattenError):
+        with pytest.raises(json_tools_rs.JsonToolsError):
             tools.execute('{"invalid": json}')
 
     def test_invalid_json_in_list(self):
@@ -655,7 +655,7 @@ class TestErrorHandling:
             '{"another": "valid"}',
         ]
 
-        with pytest.raises(json_tools_rs.JsonFlattenError):
+        with pytest.raises(json_tools_rs.JsonToolsError):
             tools.execute(input_list)
 
     def test_invalid_input_type(self):
@@ -676,14 +676,14 @@ class TestErrorHandling:
     def test_invalid_regex_pattern(self):
         """Test invalid regex patterns"""
         # Invalid regex in key replacement
-        with pytest.raises(json_tools_rs.JsonFlattenError):
+        with pytest.raises(json_tools_rs.JsonToolsError):
             tools = json_tools_rs.JSONTools().flatten().key_replacement(
                 "regex:[invalid", "replacement"
             )
             tools.execute('{"test": "value"}')
 
         # Invalid regex in value replacement
-        with pytest.raises(json_tools_rs.JsonFlattenError):
+        with pytest.raises(json_tools_rs.JsonToolsError):
             tools = json_tools_rs.JSONTools().flatten().value_replacement(
                 "regex:*invalid", "replacement"
             )
@@ -1916,7 +1916,7 @@ class TestJsonUnflattenerErrorHandling:
     def test_invalid_json_string(self):
         """Test handling of invalid JSON string."""
         tools = json_tools_rs.JSONTools().unflatten()
-        with pytest.raises(json_tools_rs.JsonFlattenError):
+        with pytest.raises(json_tools_rs.JsonToolsError):
             tools.execute('{"invalid": json}')
 
     def test_invalid_input_type(self):
