@@ -189,21 +189,21 @@ fn main() {
         Err(e) => eprintln!("    Error: {}\n", e),
     }
 
-    // Example 12: Collision handling - avoid key collisions
-    println!("12. Collision Handling - Avoid Key Collisions:");
-    println!("    When key replacements cause collisions, append index suffixes to make keys unique");
+    // Example 12: Collision handling - collect into arrays
+    println!("12. Collision Handling - Collect Values:");
+    println!("    When key replacements cause collisions, collect all values into arrays");
     let collision_json = r#"{"user_name": "John", "admin_name": "Jane"}"#;
     match JSONTools::new()
         .flatten()
         .separator("::")
         .key_replacement("regex:(user|admin)_", "")
-        .avoid_key_collision(true)
+        .handle_key_collision(true)
         .execute(collision_json)
     {
         Ok(JsonOutput::Single(result)) => {
             println!("    Input:  {}", collision_json);
             println!("    Output: {}", result);
-            println!("    Result: Colliding keys get index suffixes (name::0, name::1)\n");
+            println!("    Result: Colliding values collected into arrays (e.g., \"name\": [..])\n");
         }
         Ok(JsonOutput::Multiple(_)) => println!("    Unexpected multiple results\n"),
         Err(e) => eprintln!("    Error: {}\n", e),

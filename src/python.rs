@@ -143,14 +143,6 @@ impl PyJsonOutput {
 /// result = tools.execute({"User_name": "John", "Admin_name": "", "Guest_name": "Bob"})
 /// print(result)  # {"name": ["John", "Bob"]} (dict, empty string filtered out)
 ///
-/// # Collision avoidance strategy
-/// tools = (json_tools_rs.JSONTools()
-///     .flatten()
-///     .key_replacement("regex:(User|Admin|Guest)_", "")
-///     .avoid_key_collision(True))
-///
-/// result = tools.execute({"User_name": "John", "Admin_name": "Jane"})
-/// print(result)  # {"name.0": "John", "name.1": "Jane"} (dict)
 ///
 /// # Batch processing with type preservation
 /// str_list = ['{"a": 1}', '{"b": 2}']
@@ -260,19 +252,6 @@ impl PyJSONTools {
     ) -> PyJSONTools {
         PyJSONTools {
             inner: slf.inner.clone().value_replacement(find, replace),
-        }
-    }
-
-    /// Enable collision avoidance strategy
-    ///
-    /// When key transformations result in duplicate keys, this strategy appends
-    /// index suffixes to make keys unique (e.g., "name.0", "name.1", "name.2").
-    ///
-    /// # Arguments
-    /// * `value` - Whether to enable collision avoidance
-    pub fn avoid_key_collision(slf: PyRef<'_, Self>, value: bool) -> PyJSONTools {
-        PyJSONTools {
-            inner: slf.inner.clone().avoid_key_collision(value),
         }
     }
 

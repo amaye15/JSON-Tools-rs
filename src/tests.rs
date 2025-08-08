@@ -534,34 +534,24 @@ mod tests {
     // ===== KEY COLLISION TESTS =====
 
     #[test]
-    fn test_avoid_key_collision_flatten() {
+    fn test_handle_key_collision_flatten_arrays() {
         let json = r#"{"User_name": "John", "Admin_name": "Jane", "Guest_name": "Bob"}"#;
         let result = JSONTools::new()
             .flatten()
             .separator("::")
             .key_replacement("regex:(User|Admin|Guest)_", "")
-            .avoid_key_collision(true)
+            .handle_key_collision(true)
             .execute(json)
             .unwrap();
         let flattened = extract_single(result);
         let parsed: Value = serde_json::from_str(&flattened).unwrap();
 
-        // Should have keys with index suffixes to avoid collisions (order may vary)
+        // Should have a single key mapping to an array of values
         let obj = parsed.as_object().unwrap();
-        assert_eq!(obj.len(), 3);
-
-        // Check that we have the expected indexed keys
-        let mut found_values = Vec::new();
-        for i in 0..3 {
-            let key = format!("name::{}", i);
-            if let Some(value) = obj.get(&key) {
-                found_values.push(value.as_str().unwrap());
-            }
-        }
-        assert_eq!(found_values.len(), 3);
-        assert!(found_values.contains(&"John"));
-        assert!(found_values.contains(&"Jane"));
-        assert!(found_values.contains(&"Bob"));
+        assert_eq!(obj.len(), 1);
+        assert!(obj.contains_key("name"));
+        let arr = obj.get("name").unwrap().as_array().unwrap();
+        assert_eq!(arr.len(), 3);
     }
 
     #[test]
@@ -588,32 +578,7 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_avoid_key_collision_unflatten() {
-        let flattened = r#"{"name::0": "John", "name::1": "Jane", "name::2": "Bob"}"#;
-        let result = JSONTools::new()
-            .unflatten()
-            .separator("::")
-            .key_replacement("regex:name::\\d+", "user_name")
-            .avoid_key_collision(true)
-            .handle_key_collision(false)  // Explicitly disable to ensure precedence
-            .execute(flattened)
-            .unwrap();
-        let unflattened = extract_single(result);
-        let parsed: Value = serde_json::from_str(&unflattened).unwrap();
 
-        // For unflattening, collision avoidance creates indexed keys that get unflattened into arrays
-        // This is the correct behavior: user_name::0, user_name::1, user_name::2 -> user_name: [...]
-        if let Some(array) = parsed["user_name"].as_array() {
-            assert_eq!(array.len(), 3);
-            let values: Vec<&str> = array.iter().map(|v| v.as_str().unwrap()).collect();
-            assert!(values.contains(&"John"));
-            assert!(values.contains(&"Jane"));
-            assert!(values.contains(&"Bob"));
-        } else {
-            panic!("Expected array for 'user_name' key after unflattening collision-avoided keys");
-        }
-    }
 
     #[test]
     fn test_handle_key_collision_unflatten() {
@@ -641,46 +606,40 @@ mod tests {
     }
 
     #[test]
-    fn test_collision_precedence_avoid_over_handle() {
-        // When both avoid_key_collision and handle_key_collision are true,
-        // avoid_key_collision should take precedence
+    fn test_collision_precedence_collect_only() {
+        // With only handle_key_collision supported, ensure colliding keys collect into arrays
         let json = r#"{"User_name": "John", "Admin_name": "Jane"}"#;
         let result = JSONTools::new()
             .flatten()
             .key_replacement("regex:(User|Admin)_", "")
-            .avoid_key_collision(true)
             .handle_key_collision(true)
             .execute(json)
             .unwrap();
         let flattened = extract_single(result);
         let parsed: Value = serde_json::from_str(&flattened).unwrap();
 
-        // Should use avoid strategy (index suffixes), not handle strategy (arrays)
+        // Should use collect strategy (arrays)
         let obj = parsed.as_object().unwrap();
-        assert_eq!(obj.len(), 2);
+        assert_eq!(obj.len(), 1);
+        assert!(obj.contains_key("name"));
+        assert!(parsed["name"].is_array());
 
-        // Check that we have the expected indexed keys (order may vary)
-        let mut found_values = Vec::new();
-        for i in 0..2 {
-            let key = format!("name.{}", i);
-            if let Some(value) = obj.get(&key) {
-                found_values.push(value.as_str().unwrap());
-            }
-        }
-        assert_eq!(found_values.len(), 2);
-        assert!(found_values.contains(&"John"));
-        assert!(found_values.contains(&"Jane"));
-        assert!(!obj.contains_key("name")); // Should not have array-style collision handling
+        // Check array contents
+        let arr = parsed["name"].as_array().unwrap();
+        assert_eq!(arr.len(), 2);
+        let mut values: Vec<&str> = arr.iter().map(|v| v.as_str().unwrap()).collect();
+        values.sort();
+        assert_eq!(values, vec!["Jane", "John"]);
     }
 
     #[test]
     fn test_no_collision_no_change() {
-        // When there are no collisions, the result should be unchanged
+        // When there are no collisions, and handle_key_collision is enabled, no arrays should be created
         let json = r#"{"User_name": "John", "Admin_email": "jane@example.com"}"#;
         let result = JSONTools::new()
             .flatten()
             .key_replacement("regex:(User|Admin)_", "")
-            .avoid_key_collision(true)
+            .handle_key_collision(true)
             .execute(json)
             .unwrap();
         let flattened = extract_single(result);
@@ -698,27 +657,23 @@ mod tests {
             .flatten()
             .separator("__")
             .key_replacement("regex:(User|Admin)_", "")
-            .avoid_key_collision(true)
+            .handle_key_collision(true)
             .execute(json)
             .unwrap();
         let flattened = extract_single(result);
         let parsed: Value = serde_json::from_str(&flattened).unwrap();
 
-        // Should use custom separator for index suffixes (order may vary)
+        // With custom separator in keys, but only collection strategy, we still produce arrays under a single key
         let obj = parsed.as_object().unwrap();
-        assert_eq!(obj.len(), 2);
+        assert_eq!(obj.len(), 1);
+        assert!(obj.contains_key("name"));
 
-        // Check that we have the expected indexed keys with custom separator
-        let mut found_values = Vec::new();
-        for i in 0..2 {
-            let key = format!("name__{}", i);
-            if let Some(value) = obj.get(&key) {
-                found_values.push(value.as_str().unwrap());
-            }
-        }
-        assert_eq!(found_values.len(), 2);
-        assert!(found_values.contains(&"John"));
-        assert!(found_values.contains(&"Jane"));
+        // Check array contents
+        let arr = parsed["name"].as_array().unwrap();
+        assert_eq!(arr.len(), 2);
+        let mut values: Vec<&str> = arr.iter().map(|v| v.as_str().unwrap()).collect();
+        values.sort();
+        assert_eq!(values, vec!["Jane", "John"]);
     }
 
     #[test]

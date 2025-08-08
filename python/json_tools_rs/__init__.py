@@ -41,14 +41,6 @@ Advanced Features:
     >>> result = tools.execute(data)
     >>> print(result)  # {"name": ["John", "Bob"], "guest_name": "Bob"}
     >>>
-    >>> # Collision avoidance strategy
-    >>> tools = (json_tools_rs.JSONTools()
-    ...     .flatten()
-    ...     .key_replacement("regex:(User|Admin)_", "")
-    ...     .avoid_key_collision(True))
-    >>>
-    >>> result = tools.execute({"User_name": "John", "Admin_name": "Jane"})
-    >>> print(result)  # {"name.0": "John", "name.1": "Jane"}
 
 Batch Processing:
     >>> # Perfect type preservation in batch processing

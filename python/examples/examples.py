@@ -244,15 +244,7 @@ def main() -> None:
     collision_result = handle_collision_tools.execute(collision_data)
     print(f"Handle collision (arrays): {collision_result}")
 
-    # Strategy 2: Avoid collisions by appending index suffixes
-    avoid_collision_tools = (
-        json_tools_rs.JSONTools()
-        .flatten()
-        .key_replacement("regex:(user|admin|guest)_", "")
-        .avoid_key_collision(True)
-    )
 
-    avoidance_result = avoid_collision_tools.execute(collision_data)
     print(f"Avoid collision (suffixes): {avoidance_result}")
 
     print("\n" + "=" * 60)

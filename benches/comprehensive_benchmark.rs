@@ -99,9 +99,9 @@ fn bench_flatten_comprehensive(c: &mut Criterion) {
 fn bench_flatten_collision_avoidance(c: &mut Criterion) {
     let test_files = load_test_files();
     
-    let mut group = c.benchmark_group("flatten_collision_avoidance");
+    let mut group = c.benchmark_group("flatten_collision_handling");
     group.measurement_time(Duration::from_secs(10));
-    
+
     for (filename, content) in &test_files {
         group.bench_with_input(
             BenchmarkId::new("file", filename),
@@ -112,9 +112,9 @@ fn bench_flatten_collision_avoidance(c: &mut Criterion) {
                         .flatten()
                         .separator(black_box("_"))
                         .key_replacement("regex:(customer|transaction|billing)", "data")
-                        .avoid_key_collision(true)
+                        .handle_key_collision(true)
                         .execute(black_box(json_content))
-                        .expect("Collision avoidance flatten failed");
+                        .expect("Collision handling flatten failed");
                     black_box(result);
                 });
             },

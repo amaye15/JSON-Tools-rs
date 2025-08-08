@@ -316,29 +316,7 @@
 //! }
 //! ```
 //!
-//! ## 11. Collision Handling - Avoid Key Collisions
-//!
-//! ```rust
-//! use json_tools_rs::{JSONTools, JsonOutput};
-//!
-//! // When key replacements cause collisions, append index suffixes to make keys unique
-//! let json = r#"{"user_name": "John", "admin_name": "Jane"}"#;
-//! let result = JSONTools::new()
-//!     .flatten()
-//!     .separator("::")
-//!     .key_replacement("regex:(user|admin)_", "") // This creates collision: both become "name"
-//!     .avoid_key_collision(true) // Append index suffixes
-//!     .execute(json).unwrap();
-//!
-//! match result {
-//!     JsonOutput::Single(flattened) => {
-//!         // Result: {"name::0": "John", "name::1": "Jane"}
-//!         assert!(flattened.contains("name::0"));
-//!         assert!(flattened.contains("name::1"));
-//!     }
-//!     JsonOutput::Multiple(_) => unreachable!(),
-//! }
-//! ```
+
 //!
 //! ## 12. Collision Handling - Collect Values into Arrays
 //!
@@ -474,19 +452,6 @@ fn get_cached_regex(pattern: &str) -> Result<Regex, regex::Error> {
     }
 }
 
-// String pool for reusing allocations
-thread_local! {
-    static STRING_POOL: std::cell::RefCell<Vec<String>> = std::cell::RefCell::new(Vec::with_capacity(64));
-}
-
-#[inline]
-fn get_pooled_string() -> String {
-    STRING_POOL.with(|pool| {
-        pool.borrow_mut().pop().unwrap_or_else(|| String::with_capacity(64))
-    })
-}
-
-
 
 // ================================================================================================
 // MODULE: Feature Gates and External Modules
@@ -509,8 +474,10 @@ mod tests;
 pub enum JsonInput<'a> {
     /// Single JSON string with Cow for efficient memory usage
     Single(Cow<'a, str>),
-    /// Multiple JSON strings
+    /// Multiple JSON strings (borrowing)
     Multiple(&'a [&'a str]),
+    /// Multiple JSON strings (owned)
+    MultipleOwned(Vec<Cow<'a, str>>),
 }
 
 impl<'a> From<&'a str> for JsonInput<'a> {
@@ -533,7 +500,19 @@ impl<'a> From<&'a [&'a str]> for JsonInput<'a> {
 
 impl<'a> From<Vec<&'a str>> for JsonInput<'a> {
     fn from(json_list: Vec<&'a str>) -> Self {
-        JsonInput::Multiple(json_list.leak())
+        JsonInput::MultipleOwned(json_list.into_iter().map(Cow::Borrowed).collect())
+    }
+}
+
+impl<'a> From<Vec<String>> for JsonInput<'a> {
+    fn from(json_list: Vec<String>) -> Self {
+        JsonInput::MultipleOwned(json_list.into_iter().map(|s| Cow::Owned(s)).collect())
+    }
+}
+
+impl<'a> From<&'a [String]> for JsonInput<'a> {
+    fn from(json_list: &'a [String]) -> Self {
+        JsonInput::MultipleOwned(json_list.iter().map(|s| Cow::Borrowed(s.as_str())).collect())
     }
 }
 
@@ -774,6 +753,8 @@ enum OperationMode {
     Flatten,
     /// Unflatten JSON structures
     Unflatten,
+    /// Normal processing (no flatten/unflatten) applying transformations recursively
+    Normal,
 }
 
 // ================================================================================================
@@ -832,23 +813,13 @@ impl FilteringConfig {
 /// Configuration for collision handling strategies
 #[derive(Debug, Clone, Default)]
 pub struct CollisionConfig {
-    /// Avoid key collisions by appending index suffixes
-    pub avoid_collisions: bool,
     /// Handle key collisions by collecting values into arrays
     pub handle_collisions: bool,
 }
 
 impl CollisionConfig {
     /// Create a new CollisionConfig with collision handling disabled
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Enable collision avoidance by appending index suffixes
-    pub fn avoid_collisions(mut self, enabled: bool) -> Self {
-        self.avoid_collisions = enabled;
-        self
-    }
+    pub fn new() -> Self { Self::default() }
 
     /// Enable collision handling by collecting values into arrays
     pub fn handle_collisions(mut self, enabled: bool) -> Self {
@@ -857,9 +828,7 @@ impl CollisionConfig {
     }
 
     /// Check if any collision handling is enabled
-    pub fn has_collision_handling(&self) -> bool {
-        self.avoid_collisions || self.handle_collisions
-    }
+    pub fn has_collision_handling(&self) -> bool { self.handle_collisions }
 }
 
 /// Configuration for replacement operations
@@ -975,7 +944,6 @@ impl ProcessingConfig {
                 remove_empty_arrays: tools.remove_empty_list,
             },
             collision: CollisionConfig {
-                avoid_collisions: tools.avoid_key_collision,
                 handle_collisions: tools.handle_key_collision,
             },
             replacements: ReplacementConfig {
@@ -998,6 +966,7 @@ impl ProcessingConfig {
 pub struct JSONTools {
     /// Current operation mode (flatten or unflatten)
     mode: Option<OperationMode>,
+
     /// Remove keys with empty string values
     remove_empty_string_values: bool,
     /// Remove keys with null values
@@ -1014,8 +983,6 @@ pub struct JSONTools {
     separator: String,
     /// Convert all keys to lowercase
     lower_case_keys: bool,
-    /// Avoid key collisions by appending index suffixes
-    avoid_key_collision: bool,
     /// Handle key collisions by collecting values into arrays
     handle_key_collision: bool,
 }
@@ -1032,11 +999,11 @@ impl Default for JSONTools {
             value_replacements: Vec::new(),
             separator: ".".to_string(),
             lower_case_keys: false,
-            avoid_key_collision: false,
             handle_key_collision: false,
         }
     }
 }
+
 
 impl JSONTools {
     /// Create a new JSONTools instance with default settings
@@ -1053,6 +1020,12 @@ impl JSONTools {
     /// Set the operation mode to unflatten
     pub fn unflatten(mut self) -> Self {
         self.mode = Some(OperationMode::Unflatten);
+        self
+    }
+
+    /// Set the operation mode to normal (no flatten/unflatten)
+    pub fn normal(mut self) -> Self {
+        self.mode = Some(OperationMode::Normal);
         self
     }
 
@@ -1134,30 +1107,10 @@ impl JSONTools {
         self
     }
 
-    /// Avoid key collisions by appending index suffixes
-    ///
-    /// When enabled, if key replacement operations result in duplicate keys,
-    /// automatically append an index suffix to make keys unique.
-    /// The index uses the configured separator followed by a sequential number (0, 1, 2, etc.).
-    ///
-    /// **Note**: This feature is mutually exclusive with `handle_key_collision`.
-    /// If both are enabled, `avoid_key_collision` takes precedence.
-    ///
-    /// Works for both flatten and unflatten operations.
-    pub fn avoid_key_collision(mut self, value: bool) -> Self {
-        self.avoid_key_collision = value;
-        self
-    }
-
     /// Handle key collisions by collecting values into arrays
     ///
-    /// When enabled, instead of avoiding collisions by renaming keys,
-    /// collect all values that would have the same key into an array.
-    ///
-    /// **Note**: This feature is mutually exclusive with `avoid_key_collision`.
-    /// If both are enabled, `avoid_key_collision` takes precedence.
-    ///
-    /// Works for both flatten and unflatten operations.
+    /// When enabled, collect all values that would have the same key into an array.
+    /// Works for all operations (flatten, unflatten, normal).
     pub fn handle_key_collision(mut self, value: bool) -> Self {
         self.handle_key_collision = value;
         self
@@ -1165,8 +1118,8 @@ impl JSONTools {
 
     /// Execute the configured operation on the provided JSON input
     ///
-    /// This method performs either flattening or unflattening based on the operation mode
-    /// set by calling `.flatten()` or `.unflatten()` on the builder.
+    /// This method performs the selected operation based on the mode set by calling
+    /// `.flatten()`, `.unflatten()`, or `.normal()`. If no mode was set, an error is returned.
     ///
     /// # Arguments
     /// * `json_input` - JSON input that can be a single string, multiple strings, or other supported types
@@ -1175,84 +1128,129 @@ impl JSONTools {
     /// * `Result<JsonOutput, Box<dyn Error>>` - The processed JSON result or an error
     ///
     /// # Errors
-    /// * Returns an error if no operation mode has been set (must call `.flatten()` or `.unflatten()` first)
+    /// * Returns an error if no operation mode has been set
     /// * Returns an error if the JSON input is invalid
     /// * Returns an error if processing fails for any other reason
     pub fn execute<'a, T>(&self, json_input: T) -> Result<JsonOutput, JsonToolsError>
     where
         T: Into<JsonInput<'a>>,
     {
-        // Ensure operation mode is set
         let mode = self.mode.as_ref().ok_or_else(|| {
             JsonToolsError::configuration_error(
-                "Operation mode not set. Call .flatten() or .unflatten() before .execute()"
+                "Operation mode not set. Call .flatten(), .unflatten(), or .normal() before .execute()"
             )
         })?;
 
         let input = json_input.into();
-
         match mode {
-            OperationMode::Flatten => {
-                // Use the flattening logic
-                match input {
-                    JsonInput::Single(json_cow) => {
-                        let config = ProcessingConfig::from_json_tools(self);
-                        let result = process_single_json(&json_cow, &config)?;
-                        Ok(JsonOutput::Single(result))
-                    }
-                    JsonInput::Multiple(json_list) => {
-                        let mut results = Vec::with_capacity(json_list.len());
+            OperationMode::Flatten => self.execute_flatten(input),
+            OperationMode::Unflatten => self.execute_unflatten(input),
+            OperationMode::Normal => self.execute_normal(input),
+        }
+    }
 
-                        let config = ProcessingConfig::from_json_tools(self);
-                        for (index, json) in json_list.iter().enumerate() {
-                            let json_cow = Cow::Borrowed(*json);
-                            match process_single_json(&json_cow, &config) {
-                                Ok(result) => results.push(result),
-                                Err(e) => {
-                                    return Err(JsonToolsError::batch_processing_error(
-                                        index,
-                                        JsonToolsError::input_validation_error(format!("Processing failed: {}", e))
-                                    ));
-                                }
-                            }
-                        }
-
-                        Ok(JsonOutput::Multiple(results))
-                    }
-                }
+    fn execute_flatten<'a>(&self, input: JsonInput<'a>) -> Result<JsonOutput, JsonToolsError> {
+        match input {
+            JsonInput::Single(json_cow) => {
+                let config = ProcessingConfig::from_json_tools(self);
+                let result = process_single_json(&json_cow, &config)?;
+                Ok(JsonOutput::Single(result))
             }
-            OperationMode::Unflatten => {
-                // Use the unflattening logic
-                match input {
-                    JsonInput::Single(json_cow) => {
-                        let config = ProcessingConfig::from_json_tools(self);
-                        let result = process_single_json_for_unflatten(&json_cow, &config)?;
-                        Ok(JsonOutput::Single(result))
-                    }
-                    JsonInput::Multiple(json_list) => {
-                        let mut results = Vec::with_capacity(json_list.len());
-
-                        let config = ProcessingConfig::from_json_tools(self);
-                        for (index, json) in json_list.iter().enumerate() {
-                            let json_cow = Cow::Borrowed(*json);
-                            match process_single_json_for_unflatten(&json_cow, &config) {
-                                Ok(result) => results.push(result),
-                                Err(e) => {
-                                    return Err(JsonToolsError::batch_processing_error(
-                                        index,
-                                        JsonToolsError::input_validation_error(format!("Processing failed: {}", e))
-                                    ));
-                                }
-                            }
-                        }
-
-                        Ok(JsonOutput::Multiple(results))
+            JsonInput::Multiple(json_list) => {
+                let mut results = Vec::with_capacity(json_list.len());
+                let config = ProcessingConfig::from_json_tools(self);
+                for (index, json) in json_list.iter().enumerate() {
+                    let json_cow = Cow::Borrowed(*json);
+                    match process_single_json(&json_cow, &config) {
+                        Ok(result) => results.push(result),
+                        Err(e) => return Err(JsonToolsError::batch_processing_error(index, e)),
                     }
                 }
+                Ok(JsonOutput::Multiple(results))
+            }
+            JsonInput::MultipleOwned(vecs) => {
+                let mut results = Vec::with_capacity(vecs.len());
+                let config = ProcessingConfig::from_json_tools(self);
+                for (index, json_cow) in vecs.iter().enumerate() {
+                    match process_single_json(json_cow, &config) {
+                        Ok(result) => results.push(result),
+                        Err(e) => return Err(JsonToolsError::batch_processing_error(index, e)),
+                    }
+                }
+                Ok(JsonOutput::Multiple(results))
             }
         }
     }
+
+    fn execute_unflatten<'a>(&self, input: JsonInput<'a>) -> Result<JsonOutput, JsonToolsError> {
+        match input {
+            JsonInput::Single(json_cow) => {
+                let config = ProcessingConfig::from_json_tools(self);
+                let result = process_single_json_for_unflatten(&json_cow, &config)?;
+                Ok(JsonOutput::Single(result))
+            }
+            JsonInput::Multiple(json_list) => {
+                let mut results = Vec::with_capacity(json_list.len());
+                let config = ProcessingConfig::from_json_tools(self);
+                for (index, json) in json_list.iter().enumerate() {
+                    let json_cow = Cow::Borrowed(*json);
+                    match process_single_json_for_unflatten(&json_cow, &config) {
+                        Ok(result) => results.push(result),
+                        Err(e) => return Err(JsonToolsError::batch_processing_error(index, e)),
+                    }
+                }
+                Ok(JsonOutput::Multiple(results))
+            }
+            JsonInput::MultipleOwned(vecs) => {
+                let mut results = Vec::with_capacity(vecs.len());
+                let config = ProcessingConfig::from_json_tools(self);
+                for (index, json_cow) in vecs.iter().enumerate() {
+                    match process_single_json_for_unflatten(json_cow, &config) {
+                        Ok(result) => results.push(result),
+                        Err(e) => return Err(JsonToolsError::batch_processing_error(index, e)),
+                    }
+                }
+                Ok(JsonOutput::Multiple(results))
+            }
+        }
+    }
+
+    fn execute_normal<'a>(&self, input: JsonInput<'a>) -> Result<JsonOutput, JsonToolsError> {
+        match input {
+            JsonInput::Single(json_cow) => {
+                let config = ProcessingConfig::from_json_tools(self);
+                let result = process_single_json_normal(&json_cow, &config)?;
+                Ok(JsonOutput::Single(result))
+            }
+            JsonInput::Multiple(json_list) => {
+                let mut results = Vec::with_capacity(json_list.len());
+                let config = ProcessingConfig::from_json_tools(self);
+                for (index, json) in json_list.iter().enumerate() {
+                    let json_cow = Cow::Borrowed(*json);
+                    match process_single_json_normal(&json_cow, &config) {
+                        Ok(result) => results.push(result),
+                        Err(e) => return Err(JsonToolsError::batch_processing_error(index, e)),
+                    }
+                }
+                Ok(JsonOutput::Multiple(results))
+            }
+            JsonInput::MultipleOwned(vecs) => {
+                let mut results = Vec::with_capacity(vecs.len());
+                let config = ProcessingConfig::from_json_tools(self);
+                for (index, json_cow) in vecs.iter().enumerate() {
+                    match process_single_json_normal(json_cow, &config) {
+                        Ok(result) => results.push(result),
+                        Err(e) => return Err(JsonToolsError::batch_processing_error(index, e)),
+                    }
+                }
+                Ok(JsonOutput::Multiple(results))
+            }
+        }
+    }
+
 }
+
+
 
 /// Handle root-level primitive values and empty containers for unflattening
 #[inline]
@@ -1267,6 +1265,8 @@ fn handle_root_level_primitives_unflatten(
             if !value_replacements.is_empty() {
                 apply_value_replacements_to_single(&mut single_value, value_replacements)?;
             }
+
+
             Ok(Some(simd_json::serde::to_string(&single_value)?))
         }
         Value::Object(obj) if obj.is_empty() => {
@@ -1306,7 +1306,7 @@ fn apply_transformations_unflatten(
     // Apply key replacements with collision detection if provided
     if config.replacements.has_key_replacements() {
         // Use optimized version when collision handling is disabled for better performance
-        if !config.collision.avoid_collisions && !config.collision.handle_collisions {
+        if !config.collision.handle_collisions {
             processed_obj = apply_key_replacements_for_unflatten(&processed_obj, &config.replacements.key_replacements)?;
         } else {
             processed_obj = apply_key_replacements_unflatten_with_collisions(
@@ -1327,13 +1327,13 @@ fn apply_transformations_unflatten(
 
         // If collision handling is enabled but no key replacements were applied,
         // we need to check for collisions after lowercase conversion
-        if (config.collision.avoid_collisions || config.collision.handle_collisions) && !config.replacements.has_key_replacements() {
+        if config.collision.handle_collisions && !config.replacements.has_key_replacements() {
             processed_obj = handle_key_collisions_for_unflatten(
                 processed_obj,
                 config,
             );
         }
-    } else if (config.collision.avoid_collisions || config.collision.handle_collisions) && !config.replacements.has_key_replacements() {
+    } else if config.collision.handle_collisions && !config.replacements.has_key_replacements() {
         // If collision handling is enabled but no transformations were applied,
         // we still need to check for collisions (though this would be rare)
         processed_obj = handle_key_collisions_for_unflatten(
@@ -1480,6 +1480,7 @@ fn perform_flattening(value: &Value, separator: &str) -> FxHashMap<String, Value
     flattened
 }
 
+
 /// Apply key transformations including replacements and lowercase conversion for flattening
 #[inline]
 fn apply_key_transformations_flatten(
@@ -1508,9 +1509,7 @@ fn apply_key_transformations_flatten(
         if config.collision.has_collision_handling() && !config.replacements.has_key_replacements() {
             flattened = handle_key_collisions(
                 flattened,
-                config.collision.avoid_collisions,
                 config.collision.handle_collisions,
-                &config.separator
             );
         }
     } else if config.collision.has_collision_handling() && !config.replacements.has_key_replacements() {
@@ -1518,9 +1517,7 @@ fn apply_key_transformations_flatten(
         // we still need to check for collisions (though this would be rare)
         flattened = handle_key_collisions(
             flattened,
-            config.collision.avoid_collisions,
             config.collision.handle_collisions,
-            &config.separator
         );
     }
 
@@ -1663,22 +1660,6 @@ where
     key_groups
 }
 
-/// Apply collision avoidance strategy by appending index suffixes
-#[inline]
-fn apply_collision_avoidance<V>(
-    key: &str,
-    values: Vec<V>,
-    separator: &str,
-) -> Vec<(String, V)> {
-    values
-        .into_iter()
-        .enumerate()
-        .map(|(index, value)| {
-            let new_key = format!("{}{}{}", key, separator, index);
-            (new_key, value)
-        })
-        .collect()
-}
 
 /// Apply collision handling strategy by collecting values into arrays
 #[inline]
@@ -1871,6 +1852,111 @@ fn apply_value_replacements_to_single(
         }
     }
     Ok(())
+}
+
+
+// ================================================================================================
+// MODULE: Core Processing Functions - Normal (No Flatten/Unflatten) Operations
+// ================================================================================================
+
+/// Core normal-mode logic for a single JSON string with Cow optimization
+/// Applies key/value transformations and filtering recursively without changing structure
+#[inline]
+fn process_single_json_normal(
+    json: &Cow<str>,
+    config: &ProcessingConfig,
+) -> Result<String, JsonToolsError> {
+    // Parse JSON using optimized SIMD parsing
+    let mut value = parse_json_optimized(json)?;
+
+    // Apply value replacements recursively to all strings
+    if config.replacements.has_value_replacements() {
+        apply_value_replacements_recursive(&mut value, &config.replacements.value_replacements)?;
+    }
+
+    // Apply key transformations (key replacements and lowercase), with collision handling
+    if config.replacements.has_key_replacements() || config.lowercase_keys || config.collision.has_collision_handling() {
+        value = apply_key_transformations_normal(value, config)?;
+    }
+
+    // Apply filtering recursively after replacements and key transformations
+    if config.filtering.has_any_filter() {
+        filter_nested_value(
+            &mut value,
+            config.filtering.remove_empty_strings,
+            config.filtering.remove_nulls,
+            config.filtering.remove_empty_objects,
+            config.filtering.remove_empty_arrays,
+        );
+    }
+
+    // Serialize back to JSON
+    Ok(simd_json::serde::to_string(&value)?)
+}
+
+/// Recursively apply value replacements to all string values
+fn apply_value_replacements_recursive(value: &mut Value, patterns: &[(String, String)]) -> Result<(), JsonToolsError> {
+    match value {
+        Value::Object(map) => {
+            for v in map.values_mut() {
+                apply_value_replacements_recursive(v, patterns)?;
+            }
+        }
+        Value::Array(arr) => {
+            for v in arr.iter_mut() {
+                apply_value_replacements_recursive(v, patterns)?;
+            }
+        }
+        _ => {
+            // Apply to primitive string values
+            apply_value_replacement_patterns(value, patterns)?;
+        }
+    }
+    Ok(())
+}
+
+/// Apply key replacements and lowercase to all object keys recursively, with collision handling
+fn apply_key_transformations_normal(value: Value, config: &ProcessingConfig) -> Result<Value, JsonToolsError> {
+    match value {
+        Value::Object(map) => {
+            // Transform this level's keys first
+            let mut transformed: Map<String, Value> = Map::with_capacity(map.len());
+            for (key, v) in map.into_iter() {
+                // Recurse into child first
+                let v = apply_key_transformations_normal(v, config)?;
+
+                // Apply key replacement patterns
+                let new_key: String = if config.replacements.has_key_replacements() {
+                    if let Some(repl) = apply_key_replacement_patterns(&key, &config.replacements.key_replacements)? {
+                        repl
+                    } else { key }
+                } else { key };
+
+                // Apply lowercase if needed
+                let final_key = if config.lowercase_keys { new_key.to_lowercase() } else { new_key };
+
+                // Insert; we'll handle collisions later
+                transformed.insert(final_key, v);
+            }
+
+            // Handle key collisions if requested
+            let result_map = if config.collision.has_collision_handling() {
+                handle_key_collisions_for_unflatten(transformed, config)
+            } else {
+                transformed
+            };
+
+            Ok(Value::Object(result_map))
+        }
+        Value::Array(mut arr) => {
+            for i in 0..arr.len() {
+                let v = std::mem::take(&mut arr[i]);
+                arr[i] = apply_key_transformations_normal(v, config)?;
+            }
+            Ok(Value::Array(arr))
+        }
+        other => Ok(other),
+    }
 }
 
 /// Value replacement with regex caching - optimized to use string references
@@ -2269,14 +2355,10 @@ fn flatten_value(
             }
         }
         _ => {
-            // Ultra-optimized key creation using string pool
+            // Optimized key creation with pre-allocation
             let key_str = builder.as_str();
 
-            // Use pooled string for better memory reuse
-            let mut key = get_pooled_string();
-            if key.capacity() < key_str.len() {
-                key.reserve(key_str.len() - key.capacity());
-            }
+            let mut key = String::with_capacity(key_str.len());
             key.push_str(key_str);
 
             // Optimize value insertion - avoid cloning for simple types
@@ -2386,65 +2468,65 @@ fn unflatten_object(obj: &Map<String, Value>, separator: &str) -> Result<Value, 
 
 /// Analyze all flattened keys to determine whether each path should be an array or object
 fn analyze_path_types(obj: &Map<String, Value>, separator: &str) -> FxHashMap<String, bool> {
-    let mut path_types = FxHashMap::default(); // true = array, false = object
-
-    // First, collect all the actual parent paths that have children
-    let mut parent_paths = std::collections::HashSet::new();
+    // One-pass analysis over all keys.
+    // For each parent path, track whether we have seen numeric children and/or non-numeric children.
+    // Use a compact bitmask for state: bit0 = saw_numeric, bit1 = saw_non_numeric.
+    let mut state: FxHashMap<String, u8> = FxHashMap::default();
 
     for key in obj.keys() {
-        let parts: Vec<&str> = key.split(separator).collect();
+        let k = key.as_str();
+        let mut parent = String::new();
+        let mut start = 0usize;
+        let mut part_idx = 0usize;
+        // Manual split to avoid intermediate Vec allocations
+        while start <= k.len() {
+            // Find next separator
+            let next_sep = match k[start..].find(separator) {
+                Some(off) => start + off,
+                None => k.len(),
+            };
+            let token = &k[start..next_sep];
 
-        // Only consider paths that have more than one part (i.e., have children)
-        if parts.len() > 1 {
-            for i in 0..parts.len() - 1 {
-                let parent_path = parts[..=i].join(separator);
-                parent_paths.insert(parent_path);
+            if part_idx == 0 {
+                parent.push_str(token);
+            } else {
+                parent.push_str(separator);
+                parent.push_str(token);
             }
+
+            // Determine child token (the next token after current one)
+            if next_sep < k.len() {
+                // There is at least one more token; peek ahead to classify child
+                let child_start = next_sep + separator.len();
+                let child_end = match k[child_start..].find(separator) {
+                    Some(off) => child_start + off,
+                    None => k.len(),
+                };
+                let child = &k[child_start..child_end];
+                // Classify child: valid usize and no leading zeros (unless "0")
+                let is_numeric = match child.parse::<usize>() {
+                    Ok(_) => child == "0" || !child.starts_with('0'),
+                    Err(_) => false,
+                };
+                let entry = state.entry(parent.clone()).or_insert(0);
+                if is_numeric { *entry |= 0b01; } else { *entry |= 0b10; }
+            }
+
+            if next_sep == k.len() { break; }
+            // Advance to next token
+            start = next_sep + separator.len();
+            part_idx += 1;
         }
     }
 
-    // Now analyze each parent path to determine if it should be an array or object
-    for parent_path in parent_paths {
-        let parent_parts: Vec<&str> = parent_path.split(separator).collect();
-        let parent_depth = parent_parts.len();
-
-        // Find all child keys for this parent path
-        let child_keys: Vec<&str> = obj
-            .keys()
-            .filter_map(|key| {
-                let parts: Vec<&str> = key.split(separator).collect();
-                if parts.len() > parent_depth
-                    && parts[..parent_depth].join(separator) == parent_path
-                {
-                    Some(parts[parent_depth])
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        // Check if all child keys are valid array indices
-        let all_numeric = !child_keys.is_empty()
-            && child_keys.iter().all(|&key| {
-                // Must be a valid usize and not have leading zeros (except "0" itself)
-                key.parse::<usize>().is_ok() && (key == "0" || !key.starts_with('0'))
-            });
-
-        // Also check if there are any non-numeric keys
-        let has_non_numeric = child_keys
-            .iter()
-            .any(|&key| key.parse::<usize>().is_err() || (key != "0" && key.starts_with('0')));
-
-        if has_non_numeric {
-            path_types.insert(parent_path, false); // object
-        } else if all_numeric {
-            path_types.insert(parent_path, true); // array
-        } else {
-            path_types.insert(parent_path, false); // default to object
-        }
+    // Convert bitmask state to final decision: any non-numeric -> object (false),
+    // else if saw numeric -> array (true), else default to object (false).
+    let mut result: FxHashMap<String, bool> = FxHashMap::with_capacity_and_hasher(state.len(), Default::default());
+    for (k, mask) in state.into_iter() {
+        let is_array = (mask & 0b10 == 0) && (mask & 0b01 != 0);
+        result.insert(k, is_array);
     }
-
-    path_types
+    result
 }
 
 /// Set a nested value using pre-analyzed path types to handle conflicts
@@ -2777,18 +2859,13 @@ fn filter_nested_value(
 /// This function processes a HashMap to handle cases where multiple keys would collide
 /// after key replacements and transformations. It supports two strategies:
 ///
-/// 1. `avoid_key_collision`: Append index suffixes to make keys unique
-/// 2. `handle_key_collision`: Collect values into arrays for duplicate keys
-///
-/// If both options are enabled, `avoid_key_collision` takes precedence.
+/// Only supported strategy: `handle_key_collision` to collect values into arrays for duplicate keys
 fn handle_key_collisions(
     mut flattened: FxHashMap<String, Value>,
-    avoid_key_collision: bool,
     handle_key_collision: bool,
-    separator: &str,
 ) -> FxHashMap<String, Value> {
-    // If neither option is enabled, return as-is
-    if !avoid_key_collision && !handle_key_collision {
+    // If option is disabled, return as-is
+    if !handle_key_collision {
         return flattened;
     }
 
@@ -2801,17 +2878,9 @@ fn handle_key_collisions(
             // No collision, keep the original key-value pair
             result.insert(key, values.into_iter().next().unwrap());
         } else {
-            // Collision detected
-            if avoid_key_collision {
-                // Use the unified collision avoidance logic
-                for (new_key, value) in apply_collision_avoidance(&key, values, separator) {
-                    result.insert(new_key, value);
-                }
-            } else if handle_key_collision {
-                // Use the unified collision handling logic
-                if let Some((final_key, array_value)) = apply_collision_handling(key, values, None) {
-                    result.insert(final_key, array_value);
-                }
+            // Collision detected: collect values into array
+            if let Some((final_key, array_value)) = apply_collision_handling(key, values, None) {
+                result.insert(final_key, array_value);
             }
         }
     }
@@ -2822,19 +2891,14 @@ fn handle_key_collisions(
 /// Handle key collisions for unflattening operations
 ///
 /// This function processes a Map<String, Value> (flattened object) to handle cases where
-/// multiple keys would collide after key replacements and transformations. It supports
-/// the same two strategies as the flattening version:
-///
-/// 1. `avoid_key_collision`: Append index suffixes to make keys unique
-/// 2. `handle_key_collision`: Collect values into arrays for duplicate keys
-///
-/// If both options are enabled, `avoid_key_collision` takes precedence.
+/// multiple keys would collide after key replacements and transformations.
+/// Only supported strategy: collect values into arrays when enabled.
 fn handle_key_collisions_for_unflatten(
     flattened_obj: Map<String, Value>,
     config: &ProcessingConfig,
 ) -> Map<String, Value> {
-    // If neither option is enabled, return as-is
-    if !config.collision.avoid_collisions && !config.collision.handle_collisions {
+    // If option is disabled, return as-is
+    if !config.collision.handle_collisions {
         return flattened_obj;
     }
 
@@ -2847,17 +2911,9 @@ fn handle_key_collisions_for_unflatten(
             // No collision, keep the original key-value pair
             result.insert(key, values.into_iter().next().unwrap());
         } else {
-            // Collision detected
-            if config.collision.avoid_collisions {
-                // Use the unified collision avoidance logic
-                for (new_key, value) in apply_collision_avoidance(&key, values, &config.separator) {
-                    result.insert(new_key, value);
-                }
-            } else if config.collision.handle_collisions {
-                // Use the unified collision handling logic with filtering
-                if let Some((final_key, array_value)) = apply_collision_handling(key, values, Some(&config.filtering)) {
-                    result.insert(final_key, array_value);
-                }
+            // Collision detected: collect values into array, with filtering
+            if let Some((final_key, array_value)) = apply_collision_handling(key, values, Some(&config.filtering)) {
+                result.insert(final_key, array_value);
             }
         }
     }
@@ -2944,7 +3000,7 @@ fn apply_key_replacements_with_collision_handling(
     }
 
     // Early exit optimization: check if any keys need replacement to avoid unnecessary allocation
-    if !config.collision.avoid_collisions && !config.collision.handle_collisions {
+    if !config.collision.handle_collisions {
         // When collision handling is disabled, we can use the optimized path
         let needs_replacement = flattened.keys().any(|key| {
             for (i, chunk) in patterns.chunks(2).enumerate() {
@@ -3041,45 +3097,30 @@ fn apply_key_replacements_with_collision_handling(
             let value = original_values.remove(original_key).unwrap();
             result.insert(target_key, value);
         } else {
-            // Collision detected
-            if config.collision.avoid_collisions {
-                // Strategy 1: Append index suffixes to avoid collisions
-                for (index, original_key) in original_keys.iter().enumerate() {
-                    let value = original_values.remove(original_key).unwrap();
-                    let new_key = format!("{}{}{}", target_key, &config.separator, index);
-                    result.insert(new_key, value);
-                }
-            } else if config.collision.handle_collisions {
-                // Strategy 2: Collect values into an array, filtering out unwanted values
-                let mut values = Vec::new();
-                for original_key in &original_keys {
-                    let value = original_values.remove(original_key).unwrap();
+            // Collision detected: Only supported strategy is collecting into arrays
+            let mut values = Vec::new();
+            for original_key in &original_keys {
+                let value = original_values.remove(original_key).unwrap();
 
-                    // Apply filtering to values before adding to collision array
-                    let should_include = should_include_value(
-                        &value,
-                        config.filtering.remove_empty_strings,
-                        config.filtering.remove_nulls,
-                        config.filtering.remove_empty_objects,
-                        config.filtering.remove_empty_arrays,
-                    );
+                // Apply filtering to values before adding to collision array
+                let should_include = should_include_value(
+                    &value,
+                    config.filtering.remove_empty_strings,
+                    config.filtering.remove_nulls,
+                    config.filtering.remove_empty_objects,
+                    config.filtering.remove_empty_arrays,
+                );
 
-                    if should_include {
-                        values.push(value);
-                    }
+                if should_include {
+                    values.push(value);
                 }
-
-                // Only create the array if we have values after filtering
-                if !values.is_empty() {
-                    result.insert(target_key, Value::Array(values));
-                }
-                // If all values were filtered out, don't insert anything
-            } else {
-                // No collision handling enabled, use the last value (default behavior)
-                let last_original_key = original_keys.last().unwrap();
-                let value = original_values.remove(last_original_key).unwrap();
-                result.insert(target_key, value);
             }
+
+            // Only create the array if we have values after filtering
+            if !values.is_empty() {
+                result.insert(target_key, Value::Array(values));
+            }
+            // If all values were filtered out, don't insert anything
         }
     }
 
@@ -3138,46 +3179,30 @@ fn apply_key_replacements_unflatten_with_collisions(
             let value = original_values.remove(original_key).unwrap();
             result.insert(target_key, value);
         } else {
-            // Collision detected
-            if config.collision.avoid_collisions {
-                // Strategy 1: Append index suffixes to avoid collisions
-                // Use the provided separator for consistency with flatten operations
-                for (index, original_key) in original_keys.iter().enumerate() {
-                    let value = original_values.remove(original_key).unwrap();
-                    let new_key = format!("{}{}{}", target_key, &config.separator, index);
-                    result.insert(new_key, value);
-                }
-            } else if config.collision.handle_collisions {
-                // Strategy 2: Collect values into an array, filtering out unwanted values
-                let mut values = Vec::new();
-                for original_key in &original_keys {
-                    let value = original_values.remove(original_key).unwrap();
+            // Collision detected: Only supported strategy is collecting into arrays
+            let mut values = Vec::new();
+            for original_key in &original_keys {
+                let value = original_values.remove(original_key).unwrap();
 
-                    // Apply filtering to values before adding to collision array
-                    let should_include = should_include_value(
-                        &value,
-                        config.filtering.remove_empty_strings,
-                        config.filtering.remove_nulls,
-                        config.filtering.remove_empty_objects,
-                        config.filtering.remove_empty_arrays,
-                    );
+                // Apply filtering to values before adding to collision array
+                let should_include = should_include_value(
+                    &value,
+                    config.filtering.remove_empty_strings,
+                    config.filtering.remove_nulls,
+                    config.filtering.remove_empty_objects,
+                    config.filtering.remove_empty_arrays,
+                );
 
-                    if should_include {
-                        values.push(value);
-                    }
+                if should_include {
+                    values.push(value);
                 }
-
-                // Only create the array if we have values after filtering
-                if !values.is_empty() {
-                    result.insert(target_key, Value::Array(values));
-                }
-                // If all values were filtered out, don't insert anything
-            } else {
-                // No collision handling enabled, use the last value (default behavior)
-                let last_original_key = original_keys.last().unwrap();
-                let value = original_values.remove(last_original_key).unwrap();
-                result.insert(target_key, value);
             }
+
+            // Only create the array if we have values after filtering
+            if !values.is_empty() {
+                result.insert(target_key, Value::Array(values));
+            }
+            // If all values were filtered out, don't insert anything
         }
     }
 

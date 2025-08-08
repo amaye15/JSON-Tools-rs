@@ -136,26 +136,6 @@ class TestBasicFunctionality:
 class TestCollisionHandling:
     """Test collision handling strategies"""
 
-    def test_avoid_collision_strategy(self):
-        """Test collision avoidance with index suffixes"""
-        tools = (json_tools_rs.JSONTools()
-                .flatten()
-                .key_replacement("regex:(User|Admin|Guest)_", "")
-                .avoid_key_collision(True))
-
-        data = {"User_name": "John", "Admin_name": "Jane", "Guest_name": "Bob"}
-        result = tools.execute(data)
-
-        # Should create indexed keys
-        assert len(result) == 3
-        assert "name.0" in result
-        assert "name.1" in result
-        assert "name.2" in result
-
-        values = [result["name.0"], result["name.1"], result["name.2"]]
-        assert "John" in values
-        assert "Jane" in values
-        assert "Bob" in values
 
     def test_handle_collision_strategy(self):
         """Test collision handling with arrays"""
@@ -194,24 +174,6 @@ class TestCollisionHandling:
         assert "Bob" in result["name"]
         assert "" not in result["name"]
 
-    def test_unflatten_collision_avoidance(self):
-        """Test unflattening with collision avoidance creates arrays"""
-        tools = (json_tools_rs.JSONTools()
-                .unflatten()
-                .separator("::")
-                .key_replacement("regex:name::\\d+", "user_name")
-                .avoid_key_collision(True))
-
-        data = {"name::0": "John", "name::1": "Jane", "name::2": "Bob"}
-        result = tools.execute(data)
-
-        # For unflattening, collision avoidance creates indexed keys that become arrays
-        assert "user_name" in result
-        assert isinstance(result["user_name"], list)
-        assert len(result["user_name"]) == 3
-        assert "John" in result["user_name"]
-        assert "Jane" in result["user_name"]
-        assert "Bob" in result["user_name"]
 
 
 class TestAdvancedConfiguration:

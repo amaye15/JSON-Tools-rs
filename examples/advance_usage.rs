@@ -29,21 +29,21 @@ fn main() {
         Err(e) => eprintln!("   Error: {}\n", e),
     }
 
-    // Example 2: Key collision handling - avoid strategy
-    println!("2. Key Collision Handling - Avoid Strategy:");
+    // Example 2: Key collision handling - collect strategy (only supported)
+    println!("2. Key Collision Handling - Collect Strategy:");
     let collision_json = r#"{"user_name": "John", "admin_name": "Jane", "guest_name": "Bob"}"#;
-    
+
     match JSONTools::new()
         .flatten()
         .separator("::")
         .key_replacement("regex:(user|admin|guest)_", "")
-        .avoid_key_collision(true)
+        .handle_key_collision(true)
         .execute(collision_json)
     {
         Ok(JsonOutput::Single(result)) => {
             println!("   Input:  {}", collision_json);
             println!("   Output: {}", result);
-            println!("   ✅ Colliding keys get unique index suffixes\n");
+            println!("   ✅ Colliding values collected into arrays\n");
         }
         Ok(JsonOutput::Multiple(_)) => println!("   Unexpected multiple results\n"),
         Err(e) => eprintln!("   Error: {}\n", e),
