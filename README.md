@@ -100,6 +100,27 @@ match result {
 // Output: {"user": {"name": "John", "age": 30}}
 ```
 
+#### Key Collision Handling
+
+When transformations make different keys end up identical, enable collision handling to collect values into arrays.
+
+```rust
+use json_tools_rs::{JSONTools, JsonOutput};
+
+let json = r#"{"user_name": "John", "admin_name": "Jane"}"#;
+let result = JSONTools::new()
+    .flatten()
+    .key_replacement("regex:(user|admin)_", "") // both become "name"
+    .handle_key_collision(true)                    // collect colliding values
+    .execute(json)?;
+
+if let JsonOutput::Single(flattened) = result {
+    println!("{}", flattened);
+}
+// Output: {"name": ["John", "Jane"]}
+```
+
+
 #### Perfect Roundtrip Support
 
 ```rust
@@ -179,6 +200,23 @@ result = (jt.JSONTools()
 print(result)  # {'user': {'name': 'john', 'email': 'john@example.com'}}
 ```
 
+#### Key Collision Handling
+
+When transformations make different keys end up identical, enable collision handling to collect values into arrays.
+
+```python
+import json_tools_rs as jt
+
+tools = (jt.JSONTools()
+    .flatten()
+    .key_replacement("regex:(user|admin)_", "")  # both become "name"
+    .handle_key_collision(True))                    # collect colliding values
+
+data = {"user_name": "John", "admin_name": "Jane"}
+print(tools.execute(data))  # {'name': ['John', 'Jane']}
+```
+
+
 #### Batch Processing with Type Preservation
 
 ```python
@@ -230,7 +268,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-json-tools-rs = "0.2.0"
+json-tools-rs = "0.3.0"
 ```
 
 ### Python

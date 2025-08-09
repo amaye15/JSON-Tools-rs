@@ -1,6 +1,6 @@
 [package]
 name = "json-tools-rs"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 description = "A high-performance Rust library for advanced JSON manipulation with SIMD-accelerated parsing, including flattening nested JSON structures"
 license = "MIT OR Apache-2.0"
