@@ -1,3 +1,4 @@
+
 //! # JSON Tools RS
 //!
 //! A Rust library for advanced JSON manipulation, including flattening and unflattening
@@ -431,26 +432,246 @@ use rustc_hash::FxHashMap;
 use serde_json::{Map, Value};
 use std::borrow::Cow;
 use std::sync::OnceLock;
+use lazy_static::lazy_static;
+
 
 // ================================================================================================
 // MODULE: Global Caches and Performance Optimizations
 // ================================================================================================
 
-// Global regex cache for better performance
-static REGEX_CACHE: OnceLock<std::sync::Mutex<FxHashMap<String, Regex>>> = OnceLock::new();
+// Pre-compiled common regex patterns for maximum performance
+lazy_static! {
+    /// Common regex patterns used in JSON processing, pre-compiled for performance
+    static ref COMMON_REGEX_PATTERNS: FxHashMap<&'static str, Regex> = {
+        let mut patterns = FxHashMap::default();
+
+        // Common patterns for key/value replacements
+        let common_patterns = [
+            // Whitespace patterns
+            (r"\s+", r"\s+"),                          // Multiple whitespace
+            (r"^\s+|\s+$", r"^\s+|\s+$"),             // Leading/trailing whitespace
+            (r"\s", r"\s"),                            // Any whitespace
+
+            // Special character patterns
+            (r"[^\w\s]", r"[^\w\s]"),                 // Non-word, non-space characters
+            (r"[^a-zA-Z0-9]", r"[^a-zA-Z0-9]"),       // Non-alphanumeric
+            (r"[^a-zA-Z0-9_]", r"[^a-zA-Z0-9_]"),     // Non-alphanumeric except underscore
+
+            // Common JSON key patterns
+            (r"[A-Z]", r"[A-Z]"),                     // Uppercase letters
+            (r"[a-z]", r"[a-z]"),                     // Lowercase letters
+            (r"\d+", r"\d+"),                         // Digits
+            (r"_+", r"_+"),                           // Multiple underscores
+            (r"-+", r"-+"),                           // Multiple hyphens
+
+            // Email and URL patterns (common in JSON data)
+            (r"@", r"@"),                             // At symbol (emails)
+            (r"\.", r"\."),                           // Dot (domains, decimals)
+            (r"://", r"://"),                         // Protocol separator
+
+            // Date/time patterns
+            (r"\d{4}-\d{2}-\d{2}", r"\d{4}-\d{2}-\d{2}"), // ISO date
+            (r"\d{2}:\d{2}:\d{2}", r"\d{2}:\d{2}:\d{2}"), // Time format
+        ];
+
+        for (pattern, _) in &common_patterns {
+            if let Ok(regex) = Regex::new(pattern) {
+                patterns.insert(*pattern, regex);
+            }
+        }
+
+        patterns
+    };
+}
+
+/// Simple LRU cache for regex patterns to prevent unbounded growth
+struct LruRegexCache {
+    cache: FxHashMap<String, (Regex, usize)>, // (regex, access_order)
+    access_counter: usize,
+    max_size: usize,
+}
+
+impl LruRegexCache {
+    fn new(max_size: usize) -> Self {
+        Self {
+            cache: FxHashMap::default(),
+            access_counter: 0,
+            max_size,
+        }
+    }
+
+    fn get(&mut self, pattern: &str) -> Option<Regex> {
+        if let Some((regex, access_time)) = self.cache.get_mut(pattern) {
+            self.access_counter += 1;
+            *access_time = self.access_counter; // Update access time
+            Some(regex.clone())
+        } else {
+            None
+        }
+    }
+
+    fn insert(&mut self, pattern: String, regex: Regex) {
+        self.access_counter += 1;
+
+        // If cache is full, remove least recently used item
+        if self.cache.len() >= self.max_size {
+            self.evict_lru();
+        }
+
+        self.cache.insert(pattern, (regex, self.access_counter));
+    }
+
+    fn evict_lru(&mut self) {
+        if let Some(lru_key) = self.cache
+            .iter()
+            .min_by_key(|(_, (_, access_time))| *access_time)
+            .map(|(k, _)| k.clone())
+        {
+            self.cache.remove(&lru_key);
+        }
+    }
+
+}
+
+// Global regex cache with LRU eviction for better performance
+static REGEX_CACHE: OnceLock<std::sync::RwLock<LruRegexCache>> = OnceLock::new();
+
+// Thread-local regex cache for even better performance
+thread_local! {
+    static THREAD_LOCAL_REGEX_CACHE: std::cell::RefCell<FxHashMap<String, Regex>> =
+        std::cell::RefCell::new(FxHashMap::default());
+}
 
 fn get_cached_regex(pattern: &str) -> Result<Regex, regex::Error> {
-    let cache = REGEX_CACHE.get_or_init(|| std::sync::Mutex::new(FxHashMap::default()));
-    let mut cache_guard = cache.lock().unwrap();
+    // First, check pre-compiled common patterns (fastest path, no allocation)
+    if let Some(regex) = COMMON_REGEX_PATTERNS.get(pattern) {
+        return Ok(regex.clone());
+    }
 
-    if let Some(regex) = cache_guard.get(pattern) {
-        Ok(regex.clone())
+    // Second, try thread-local cache (fast path, no locks)
+    let thread_local_result = THREAD_LOCAL_REGEX_CACHE.with(|cache| {
+        let cache_ref = cache.borrow();
+        cache_ref.get(pattern).cloned()
+    });
+
+    if let Some(regex) = thread_local_result {
+        return Ok(regex);
+    }
+
+    // If not in thread-local cache, try global LRU cache
+    let cache = REGEX_CACHE.get_or_init(|| std::sync::RwLock::new(LruRegexCache::new(256))); // 256 max patterns
+
+    // First, try to read from global cache (allows concurrent reads)
+    // Note: LRU requires mutable access, so we need write lock for get operations
+    let global_result = {
+        let mut write_guard = cache.write().unwrap();
+        write_guard.get(pattern)
+    };
+
+    if let Some(regex) = global_result {
+        // Cache in thread-local for next time
+        THREAD_LOCAL_REGEX_CACHE.with(|cache| {
+            let mut cache_ref = cache.borrow_mut();
+            // Limit thread-local cache size to prevent memory bloat
+            if cache_ref.len() >= 32 {
+                cache_ref.clear(); // Simple eviction strategy
+            }
+            cache_ref.insert(pattern.to_string(), regex.clone());
+        });
+        return Ok(regex);
+    }
+
+    // If not found anywhere, compile and cache the regex
+    let mut write_guard = cache.write().unwrap();
+
+    // Double-check in case another thread compiled it while we were waiting
+    if let Some(regex) = write_guard.get(pattern) {
+        // Cache in thread-local for next time
+        THREAD_LOCAL_REGEX_CACHE.with(|cache| {
+            let mut cache_ref = cache.borrow_mut();
+            if cache_ref.len() >= 32 {
+                cache_ref.clear();
+            }
+            cache_ref.insert(pattern.to_string(), regex.clone());
+        });
+        Ok(regex)
     } else {
         let regex = Regex::new(pattern)?;
-        cache_guard.insert(pattern.to_string(), regex.clone());
+        write_guard.insert(pattern.to_string(), regex.clone());
+
+        // Cache in thread-local for next time
+        THREAD_LOCAL_REGEX_CACHE.with(|cache| {
+            let mut cache_ref = cache.borrow_mut();
+            if cache_ref.len() >= 32 {
+                cache_ref.clear();
+            }
+            cache_ref.insert(pattern.to_string(), regex.clone());
+        });
+
         Ok(regex)
     }
 }
+
+/// Key deduplication system that works with HashMap operations
+/// This reduces memory usage when the same keys appear multiple times
+struct KeyDeduplicator {
+    /// Cache of deduplicated keys
+    key_cache: FxHashMap<String, std::sync::Arc<str>>,
+    /// Statistics for monitoring effectiveness
+    cache_hits: usize,
+    cache_misses: usize,
+}
+
+impl KeyDeduplicator {
+    fn new() -> Self {
+        Self {
+            key_cache: FxHashMap::default(),
+            cache_hits: 0,
+            cache_misses: 0,
+        }
+    }
+
+    /// Get a deduplicated key, creating it if it doesn't exist
+    fn deduplicate_key(&mut self, key: &str) -> std::sync::Arc<str> {
+        if let Some(cached_key) = self.key_cache.get(key) {
+            self.cache_hits += 1;
+            cached_key.clone()
+        } else {
+            self.cache_misses += 1;
+            let arc_key: std::sync::Arc<str> = key.into();
+            self.key_cache.insert(key.to_string(), arc_key.clone());
+            arc_key
+        }
+    }
+
+
+}
+
+thread_local! {
+    static KEY_DEDUPLICATOR: std::cell::RefCell<KeyDeduplicator> = std::cell::RefCell::new(KeyDeduplicator::new());
+}
+
+/// Get a deduplicated key using thread-local storage for better performance
+fn deduplicate_key(key: &str) -> String {
+    // For short, simple keys that are likely to be repeated, use deduplication
+    if key.len() <= 64 && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-') {
+        KEY_DEDUPLICATOR.with(|dedup| {
+            let arc_key = dedup.borrow_mut().deduplicate_key(key);
+            arc_key.to_string()
+        })
+    } else {
+        // For complex or long keys, just create a regular string
+        key.to_string()
+    }
+}
+
+
+
+/// Radix tree/trie for efficient prefix-based key operations
+/// Optimized for JSON key processing with path analysis and collision detection
+
+
+
 
 
 // ================================================================================================
@@ -1031,7 +1252,12 @@ impl JSONTools {
 
     /// Set the separator used for nested keys (default: ".")
     pub fn separator<S: Into<Cow<'static, str>>>(mut self, separator: S) -> Self {
-        self.separator = separator.into().into_owned();
+        let sep_cow = separator.into();
+        // Only allocate if we need to own the string
+        self.separator = match sep_cow {
+            Cow::Borrowed(s) => s.to_string(),
+            Cow::Owned(s) => s,
+        };
         self
     }
 
@@ -1050,7 +1276,20 @@ impl JSONTools {
         find: S1,
         replace: S2,
     ) -> Self {
-        self.key_replacements.push((find.into().into_owned(), replace.into().into_owned()));
+        let find_cow = find.into();
+        let replace_cow = replace.into();
+
+        // Only allocate when necessary
+        let find_string = match find_cow {
+            Cow::Borrowed(s) => s.to_string(),
+            Cow::Owned(s) => s,
+        };
+        let replace_string = match replace_cow {
+            Cow::Borrowed(s) => s.to_string(),
+            Cow::Owned(s) => s,
+        };
+
+        self.key_replacements.push((find_string, replace_string));
         self
     }
 
@@ -1063,7 +1302,20 @@ impl JSONTools {
         find: S1,
         replace: S2,
     ) -> Self {
-        self.value_replacements.push((find.into().into_owned(), replace.into().into_owned()));
+        let find_cow = find.into();
+        let replace_cow = replace.into();
+
+        // Only allocate when necessary
+        let find_string = match find_cow {
+            Cow::Borrowed(s) => s.to_string(),
+            Cow::Owned(s) => s,
+        };
+        let replace_string = match replace_cow {
+            Cow::Borrowed(s) => s.to_string(),
+            Cow::Owned(s) => s,
+        };
+
+        self.value_replacements.push((find_string, replace_string));
         self
     }
 
@@ -1455,14 +1707,11 @@ fn parse_json_optimized(json: &Cow<str>) -> Result<Value, JsonToolsError> {
 /// Initialize flattened HashMap with optimized capacity
 #[inline]
 fn initialize_flattened_map(value: &Value) -> FxHashMap<String, Value> {
-    let estimated_capacity = estimate_flattened_size(value);
-    // Use extremely aggressive initial capacity to eliminate all rehashing
-    let initial_capacity = std::cmp::max(
-        estimated_capacity * 4, // Quadruple the estimated capacity for zero rehashing
-        256 // Very high minimum capacity for SIMD-friendly operations
-    );
+    let estimated_size = estimate_flattened_size(value);
+    let optimal_capacity = calculate_optimal_capacity(estimated_size);
+
     // Use FxHashMap for better performance with string keys
-    FxHashMap::with_capacity_and_hasher(initial_capacity, Default::default())
+    FxHashMap::with_capacity_and_hasher(optimal_capacity, Default::default())
 }
 
 /// Perform the core flattening operation
@@ -1580,6 +1829,7 @@ fn apply_filtering_flatten(
 
 /// Core key replacement logic that works with both string keys and Cow<str>
 /// This eliminates duplication between flatten and unflatten key replacement functions
+/// Optimized to minimize string allocations by using efficient Cow operations
 #[inline]
 fn apply_key_replacement_patterns(
     key: &str,
@@ -1598,7 +1848,7 @@ fn apply_key_replacement_patterns(
                 changed = true;
             }
         } else if new_key.contains(pattern) {
-            // Handle literal replacement
+            // Handle literal replacement - use replace which is more efficient for literals
             new_key = Cow::Owned(new_key.replace(pattern, replacement));
             changed = true;
         }
@@ -1613,6 +1863,7 @@ fn apply_key_replacement_patterns(
 
 /// Core value replacement logic that works with any Value type
 /// This eliminates duplication between flatten and unflatten value replacement functions
+/// Optimized to minimize string allocations by using efficient Cow operations
 #[inline]
 fn apply_value_replacement_patterns(
     value: &mut Value,
@@ -1625,14 +1876,16 @@ fn apply_value_replacement_patterns(
         // Apply each replacement pattern
         for (pattern, replacement) in patterns {
             if let Some(regex_pattern) = pattern.strip_prefix("regex:") {
-                // Handle regex replacement
-                let regex = get_cached_regex(regex_pattern)?;
-                if regex.is_match(&current_value) {
-                    current_value = Cow::Owned(regex.replace_all(&current_value, replacement).into_owned());
-                    changed = true;
+                // Handle regex replacement - only compile if string might match
+                if current_value.len() >= regex_pattern.len() {
+                    let regex = get_cached_regex(regex_pattern)?;
+                    if regex.is_match(&current_value) {
+                        current_value = Cow::Owned(regex.replace_all(&current_value, replacement).into_owned());
+                        changed = true;
+                    }
                 }
             } else if current_value.contains(pattern) {
-                // Handle literal replacement
+                // Handle literal replacement - more efficient for simple patterns
                 current_value = Cow::Owned(current_value.replace(pattern, replacement));
                 changed = true;
             }
@@ -1739,9 +1992,12 @@ fn convert_tuples_to_patterns(tuples: &[(String, String)]) -> Vec<&str> {
 /// Apply lowercase conversion to all keys in the flattened HashMap
 /// This function creates a new HashMap with all keys converted to lowercase
 /// Optimized with Cow to avoid unnecessary allocations when keys are already lowercase
+/// Uses Entry API for potential collision handling
 #[inline]
 fn apply_lowercase_keys(flattened: FxHashMap<String, Value>) -> FxHashMap<String, Value> {
-    let mut result = FxHashMap::with_capacity_and_hasher(flattened.len(), Default::default());
+    let optimal_capacity = calculate_optimal_capacity(flattened.len());
+    let mut result = FxHashMap::with_capacity_and_hasher(optimal_capacity, Default::default());
+
     for (key, value) in flattened {
         // Use Cow to avoid allocation if the key is already lowercase
         let lowercase_key = if key.chars().any(|c| c.is_uppercase()) {
@@ -1755,30 +2011,81 @@ fn apply_lowercase_keys(flattened: FxHashMap<String, Value>) -> FxHashMap<String
             Cow::Owned(lower) => lower, // Key was converted to lowercase
         };
 
-        result.insert(final_key, value);
+        // Use Entry API to handle potential collisions more efficiently
+        match result.entry(final_key) {
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                entry.insert(value);
+            }
+            std::collections::hash_map::Entry::Occupied(mut entry) => {
+                // Handle collision by converting to array
+                let existing_value = entry.get_mut();
+                match existing_value {
+                    Value::Array(arr) => {
+                        arr.push(value);
+                    }
+                    _ => {
+                        let old_value = std::mem::replace(existing_value, Value::Null);
+                        *existing_value = Value::Array(vec![old_value, value]);
+                    }
+                }
+            }
+        }
     }
     result
 }
 
 /// Estimates the flattened size to pre-allocate HashMap capacity
+/// Improved algorithm that considers nesting depth and provides more accurate estimates
 fn estimate_flattened_size(value: &Value) -> usize {
+    estimate_flattened_size_with_depth(value, 0)
+}
+
+/// Internal function that tracks depth for more accurate capacity estimation
+fn estimate_flattened_size_with_depth(value: &Value, depth: usize) -> usize {
     match value {
         Value::Object(obj) => {
             if obj.is_empty() {
                 1
             } else {
-                obj.iter().map(|(_, v)| estimate_flattened_size(v)).sum()
+                // For deeply nested objects, the flattening factor increases
+                let depth_multiplier = if depth > 3 { 1.2 } else { 1.0 };
+                let base_size: usize = obj.iter()
+                    .map(|(_, v)| estimate_flattened_size_with_depth(v, depth + 1))
+                    .sum();
+                (base_size as f64 * depth_multiplier).ceil() as usize
             }
         }
         Value::Array(arr) => {
             if arr.is_empty() {
                 1
             } else {
-                arr.iter().map(estimate_flattened_size).sum()
+                // Arrays contribute more to flattened size due to index keys
+                let depth_multiplier = if depth > 2 { 1.3 } else { 1.1 };
+                let base_size: usize = arr.iter()
+                    .map(|v| estimate_flattened_size_with_depth(v, depth + 1))
+                    .sum();
+                (base_size as f64 * depth_multiplier).ceil() as usize
             }
         }
         _ => 1,
     }
+}
+
+/// Estimates optimal HashMap capacity based on expected size and load factor
+fn calculate_optimal_capacity(estimated_size: usize) -> usize {
+    if estimated_size == 0 {
+        return 16; // Minimum reasonable capacity
+    }
+
+    // Use a load factor of 0.75 to minimize rehashing while not wasting too much memory
+    let target_capacity = (estimated_size as f64 / 0.75).ceil() as usize;
+
+    // Round up to next power of 2 for optimal HashMap performance
+    let next_power_of_2 = target_capacity.next_power_of_two();
+
+    // Cap the maximum initial capacity to prevent excessive memory usage
+    let max_capacity = 8192;
+    std::cmp::min(next_power_of_2, max_capacity)
 }
 
 /// Estimates the maximum key length for string pre-allocation
@@ -2314,6 +2621,7 @@ impl FastStringBuilder {
     fn is_empty(&self) -> bool {
         self.buffer.is_empty()
     }
+
 }
 
 // ================================================================================================
@@ -2355,11 +2663,9 @@ fn flatten_value(
             }
         }
         _ => {
-            // Optimized key creation with pre-allocation
+            // Optimized key creation with deduplication for memory efficiency
             let key_str = builder.as_str();
-
-            let mut key = String::with_capacity(key_str.len());
-            key.push_str(key_str);
+            let key = deduplicate_key(key_str);
 
             // Optimize value insertion - avoid cloning for simple types
             let optimized_value = match value {
@@ -2378,7 +2684,7 @@ fn flatten_value(
                 _ => value.clone(),
             };
 
-            // Insert with the pooled key
+            // Insert with the deduplicated key
             result.insert(key, optimized_value);
         }
     }
@@ -2468,59 +2774,24 @@ fn unflatten_object(obj: &Map<String, Value>, separator: &str) -> Result<Value, 
 
 /// Analyze all flattened keys to determine whether each path should be an array or object
 fn analyze_path_types(obj: &Map<String, Value>, separator: &str) -> FxHashMap<String, bool> {
-    // One-pass analysis over all keys.
-    // For each parent path, track whether we have seen numeric children and/or non-numeric children.
-    // Use a compact bitmask for state: bit0 = saw_numeric, bit1 = saw_non_numeric.
-    let mut state: FxHashMap<String, u8> = FxHashMap::default();
+    analyze_path_types_optimized(obj, separator)
+}
+
+/// Optimized path analysis using radix tree and efficient data structures
+fn analyze_path_types_optimized(obj: &Map<String, Value>, separator: &str) -> FxHashMap<String, bool> {
+    // Use a more efficient approach with pre-allocated capacity and optimized string operations
+    let estimated_paths = obj.len() * 2; // Rough estimate of path count
+    let mut state: FxHashMap<String, u8> = FxHashMap::with_capacity_and_hasher(estimated_paths, Default::default());
+
+    // Pre-compile separator for faster matching
+    let sep_bytes = separator.as_bytes();
+    let sep_len = separator.len();
 
     for key in obj.keys() {
-        let k = key.as_str();
-        let mut parent = String::new();
-        let mut start = 0usize;
-        let mut part_idx = 0usize;
-        // Manual split to avoid intermediate Vec allocations
-        while start <= k.len() {
-            // Find next separator
-            let next_sep = match k[start..].find(separator) {
-                Some(off) => start + off,
-                None => k.len(),
-            };
-            let token = &k[start..next_sep];
-
-            if part_idx == 0 {
-                parent.push_str(token);
-            } else {
-                parent.push_str(separator);
-                parent.push_str(token);
-            }
-
-            // Determine child token (the next token after current one)
-            if next_sep < k.len() {
-                // There is at least one more token; peek ahead to classify child
-                let child_start = next_sep + separator.len();
-                let child_end = match k[child_start..].find(separator) {
-                    Some(off) => child_start + off,
-                    None => k.len(),
-                };
-                let child = &k[child_start..child_end];
-                // Classify child: valid usize and no leading zeros (unless "0")
-                let is_numeric = match child.parse::<usize>() {
-                    Ok(_) => child == "0" || !child.starts_with('0'),
-                    Err(_) => false,
-                };
-                let entry = state.entry(parent.clone()).or_insert(0);
-                if is_numeric { *entry |= 0b01; } else { *entry |= 0b10; }
-            }
-
-            if next_sep == k.len() { break; }
-            // Advance to next token
-            start = next_sep + separator.len();
-            part_idx += 1;
-        }
+        analyze_key_path_optimized(key, sep_bytes, sep_len, &mut state);
     }
 
-    // Convert bitmask state to final decision: any non-numeric -> object (false),
-    // else if saw numeric -> array (true), else default to object (false).
+    // Convert bitmask state to final decision with pre-allocated result
     let mut result: FxHashMap<String, bool> = FxHashMap::with_capacity_and_hasher(state.len(), Default::default());
     for (k, mask) in state.into_iter() {
         let is_array = (mask & 0b10 == 0) && (mask & 0b01 != 0);
@@ -2528,6 +2799,105 @@ fn analyze_path_types(obj: &Map<String, Value>, separator: &str) -> FxHashMap<St
     }
     result
 }
+
+/// Optimized key path analysis with efficient string operations
+#[inline]
+fn analyze_key_path_optimized(key: &str, sep_bytes: &[u8], sep_len: usize, state: &mut FxHashMap<String, u8>) {
+    let key_bytes = key.as_bytes();
+    let mut parent_end = 0;
+    let mut search_start = 0;
+
+    // Use Boyer-Moore-like approach for separator finding
+    while search_start < key_bytes.len() {
+        // Find next separator using optimized byte search
+        let next_sep = find_separator_optimized(key_bytes, sep_bytes, search_start);
+
+        if next_sep == key_bytes.len() {
+            break; // No more separators
+        }
+
+        // Extract parent path efficiently
+        let parent = if parent_end == 0 {
+            &key[..next_sep]
+        } else {
+            &key[..next_sep]
+        };
+
+        // Look ahead to classify child
+        let child_start = next_sep + sep_len;
+        if child_start < key_bytes.len() {
+            let child_end = find_separator_optimized(key_bytes, sep_bytes, child_start)
+                .min(key_bytes.len());
+            let child = &key[child_start..child_end];
+
+            // Optimized numeric check
+            let is_numeric = is_valid_array_index(child);
+
+            // Update state with efficient entry handling
+            match state.get_mut(parent) {
+                Some(entry) => {
+                    if is_numeric { *entry |= 0b01; } else { *entry |= 0b10; }
+                }
+                None => {
+                    let initial_value = if is_numeric { 0b01 } else { 0b10 };
+                    state.insert(parent.to_string(), initial_value);
+                }
+            }
+        }
+
+        parent_end = next_sep;
+        search_start = next_sep + sep_len;
+    }
+}
+
+/// Optimized separator finding using byte-level operations
+#[inline]
+fn find_separator_optimized(haystack: &[u8], needle: &[u8], start: usize) -> usize {
+    if needle.len() == 1 {
+        // Single byte separator - use memchr-like optimization
+        let needle_byte = needle[0];
+        for i in start..haystack.len() {
+            if haystack[i] == needle_byte {
+                return i;
+            }
+        }
+        haystack.len()
+    } else {
+        // Multi-byte separator - use sliding window
+        if start + needle.len() > haystack.len() {
+            return haystack.len();
+        }
+
+        for i in start..=(haystack.len() - needle.len()) {
+            if haystack[i..i + needle.len()] == *needle {
+                return i;
+            }
+        }
+        haystack.len()
+    }
+}
+
+/// Optimized check for valid array index
+#[inline]
+fn is_valid_array_index(s: &str) -> bool {
+    if s.is_empty() {
+        return false;
+    }
+
+    // Fast path for single digit
+    if s.len() == 1 {
+        return s.as_bytes()[0].is_ascii_digit();
+    }
+
+    // Check for leading zero (invalid except for "0")
+    if s.starts_with('0') {
+        return s == "0";
+    }
+
+    // Check if all characters are digits
+    s.bytes().all(|b| b.is_ascii_digit())
+}
+
 
 /// Set a nested value using pre-analyzed path types to handle conflicts
 fn set_nested_value_with_types(

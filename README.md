@@ -4,19 +4,17 @@ A high-performance Rust library for advanced JSON manipulation with SIMD-acceler
 
 ## Features
 
-- **🚀 Unified API**: Single `JSONTools` entry point for both flattening and unflattening operations
-- **🔧 Builder Pattern**: Fluent, chainable API for easy configuration and method chaining
-- **⚡ High Performance**: SIMD-accelerated JSON parsing with FxHashMap optimization and reduced memory allocations
-- **🎯 Complete Roundtrip Support**: Flatten JSON and unflatten it back to original structure with perfect fidelity
-- **🧹 Comprehensive Filtering**: Remove empty strings, nulls, empty objects, and empty arrays
-- **🔄 Advanced Replacements**: Support for literal and regex-based key/value replacements with collision handling
-- **⚔️ Key Collision Handling**: Two strategies for handling key conflicts after transformations
-  - **Avoid Collisions**: Append index suffixes to make keys unique
-  - **Collect Values**: Merge colliding values into arrays with intelligent filtering
-- **📦 Batch Processing**: Handle single JSON strings or arrays of JSON strings efficiently
-- **🐍 Python Bindings**: Full Python support with perfect type matching (input type = output type)
-- **🛡️ Type Safety**: Compile-time checked with comprehensive `JsonToolsError` enum and detailed error messages
-- **🔥 Performance Optimizations**: FxHashMap for 15-30% faster operations, reduced string allocations, optimized SIMD parsing
+- 🚀 Unified API: Single `JSONTools` entry point for flattening, unflattening, or pass-through transforms (`.normal()`)
+- 🔧 Builder Pattern: Fluent, chainable API for easy configuration and method chaining
+- ⚡ High Performance: SIMD-accelerated JSON parsing with FxHashMap and fewer allocations
+- 🎯 Complete Roundtrip: Flatten JSON and unflatten back to original structure
+- 🧹 Comprehensive Filtering: Remove empty strings, nulls, empty objects, and empty arrays (works for flatten and unflatten)
+- 🔄 Advanced Replacements: Literal and regex-based key/value replacements (prefix patterns with `regex:`)
+- 🛡️ Collision Handling: Single strategy `.handle_key_collision(true)` to collect colliding values into arrays
+- 📦 Batch Processing: Process single JSON or batches; Python also supports dicts and lists of dicts
+- 🐍 Python Bindings: Full support with type preservation (input type = output type)
+- 🧰 Robust Errors: Single `JsonToolsError` enum with helpful suggestions
+- 🔥 Optimizations: FxHashMap, SIMD parsing, and Cow-based string handling to minimize clones
 
 ## Quick Start
 
@@ -34,9 +32,8 @@ let result = JSONTools::new()
     .flatten()
     .execute(json)?;
 
-match result {
-    JsonOutput::Single(flattened) => println!("{}", flattened),
-    JsonOutput::Multiple(_) => unreachable!(),
+if let JsonOutput::Single(flattened) = result {
+    println!("{}", flattened);
 }
 // Output: {"user.name": "John", "user.profile.age": 30, "user.profile.city": "NYC"}
 ```
@@ -59,9 +56,8 @@ let result = JSONTools::new()
     .remove_empty_arrays(true)
     .execute(json)?;
 
-match result {
-    JsonOutput::Single(flattened) => println!("{}", flattened),
-    JsonOutput::Multiple(_) => unreachable!(),
+if let JsonOutput::Single(flattened) = result {
+    println!("{}", flattened);
 }
 // Output: {"user::name": "John"}
 ```
@@ -113,17 +109,11 @@ let original = r#"{"user": {"name": "John", "age": 30}, "items": [1, 2, {"nested
 
 // Flatten
 let flattened = JSONTools::new().flatten().execute(original)?;
-let flattened_str = match flattened {
-    JsonOutput::Single(s) => s,
-    JsonOutput::Multiple(_) => unreachable!(),
-};
+let flattened_str = match flattened { JsonOutput::Single(s) => s, _ => unreachable!() };
 
 // Unflatten back to original structure
 let restored = JSONTools::new().unflatten().execute(&flattened_str)?;
-let restored_str = match restored {
-    JsonOutput::Single(s) => s,
-    JsonOutput::Multiple(_) => unreachable!(),
-};
+let restored_str = match restored { JsonOutput::Single(s) => s, _ => unreachable!() };
 
 // Verify perfect roundtrip
 assert_eq!(
@@ -135,35 +125,33 @@ assert_eq!(
 
 ### Python - Unified JSONTools API
 
-The Python bindings provide the same unified `JSONTools` API with perfect type matching: input type equals output type. This means `str` input gives `str` output, `dict` input gives `dict` output, and lists preserve their element types.
+The Python bindings provide the same unified `JSONTools` API with perfect type matching: input type equals output type. `str` → `str`, `dict` → `dict`, lists preserve element types.
 
 #### Basic Usage
 
 ```python
-import json_tools_rs
+import json_tools_rs as jt
 
 # Basic flattening - dict input → dict output
-tools = json_tools_rs.JSONTools().flatten()
-result = tools.execute({"user": {"name": "John", "age": 30}})
-print(result)  # {'user.name': 'John', 'user.age': 30} (dict)
+result = jt.JSONTools().flatten().execute({"user": {"name": "John", "age": 30}})
+print(result)  # {'user.name': 'John', 'user.age': 30}
 
 # Basic flattening - JSON string input → JSON string output
-result = tools.execute('{"user": {"name": "John", "age": 30}}')
-print(result)  # '{"user.name": "John", "user.age": 30}' (str)
+result = jt.JSONTools().flatten().execute('{"user": {"name": "John", "age": 30}}')
+print(result)  # '{"user.name": "John", "user.age": 30}'
 
 # Basic unflattening - dict input → dict output
-tools = json_tools_rs.JSONTools().unflatten()
-result = tools.execute({"user.name": "John", "user.age": 30})
-print(result)  # {'user': {'name': 'John', 'age': 30}} (dict)
+result = jt.JSONTools().unflatten().execute({"user.name": "John", "user.age": 30})
+print(result)  # {'user': {'name': 'John', 'age': 30}}
 ```
 
 #### Advanced Configuration
 
 ```python
-import json_tools_rs
+import json_tools_rs as jt
 
 # Advanced flattening with filtering and transformations
-tools = (json_tools_rs.JSONTools()
+tools = (jt.JSONTools()
     .flatten()
     .separator("::")
     .lowercase_keys(True)
@@ -176,44 +164,42 @@ tools = (json_tools_rs.JSONTools()
 
 data = {"User_name": "John", "Admin_email": "john@example.com", "empty": "", "null_val": None}
 result = tools.execute(data)
-print(result)  # {'name': 'John', 'email': 'john@company.org'} (dict)
+print(result)  # {'name': 'John', 'email': 'john@company.org'}
 
 # Advanced unflattening with same configuration options
-tools = (json_tools_rs.JSONTools()
+result = (jt.JSONTools()
     .unflatten()
     .separator("::")
     .lowercase_keys(True)
     .remove_empty_strings(True)
     .remove_nulls(True)
     .key_replacement("prefix_", "user_")
-    .value_replacement("@company.org", "@example.com"))
-
-flattened = {"PREFIX_NAME": "john", "PREFIX_EMAIL": "john@company.org", "empty": ""}
-result = tools.execute(flattened)
-print(result)  # {'user': {'name': 'john', 'email': 'john@example.com'}} (dict)
+    .value_replacement("@company.org", "@example.com")
+    .execute({"PREFIX_NAME": "john", "PREFIX_EMAIL": "john@company.org", "empty": ""}))
+print(result)  # {'user': {'name': 'john', 'email': 'john@example.com'}}
 ```
 
 #### Batch Processing with Type Preservation
 
 ```python
-import json_tools_rs
+import json_tools_rs as jt
 
-tools = json_tools_rs.JSONTools().flatten()
+tools = jt.JSONTools().flatten()
 
 # List[str] input → List[str] output
 str_batch = ['{"a": {"b": 1}}', '{"c": {"d": 2}}']
 results = tools.execute(str_batch)
-print(results)  # ['{"a.b": 1}', '{"c.d": 2}'] (list of strings)
+print(results)  # ['{"a.b": 1}', '{"c.d": 2}']
 
 # List[dict] input → List[dict] output
 dict_batch = [{"a": {"b": 1}}, {"c": {"d": 2}}]
 results = tools.execute(dict_batch)
-print(results)  # [{'a.b': 1}, {'c.d': 2}] (list of dicts)
+print(results)  # [{'a.b': 1}, {'c.d': 2}]
 
 # Mixed types are handled automatically
 mixed_batch = ['{"a": 1}', {"b": {"c": 2}}]
 results = tools.execute(mixed_batch)
-print(results)  # ['{"a": 1}', {'b.c': 2}] (preserves original types)
+print(results)  # ['{"a": 1}', {'b.c': 2}]
 ```
 
 #### Perfect Roundtrip Support
@@ -288,11 +274,10 @@ JSON Tools RS delivers exceptional performance through multiple optimizations:
 
 ### Performance Optimizations
 
-- **🔥 FxHashMap**: 15-30% faster string key operations compared to standard HashMap
-- **⚡ SIMD JSON Parsing**: Optimized `simd-json` for faster parsing and serialization
-- **🧠 Reduced Allocations**: ~50% fewer memory allocations through string reference optimization
-- **🎯 Smart Capacity Management**: Pre-allocated HashMaps and string builders to eliminate rehashing
-- **🔄 String Pooling**: Thread-local string pools for memory reuse
+- FxHashMap: ~15–30% faster string key ops vs HashMap
+- SIMD JSON Parsing: fast parsing/serialization via simd-json
+- Reduced Allocations: fewer clones using Cow and scoped buffers
+- Smart Capacity Management: pre-sized maps/builders to minimize rehashing
 
 ### Benchmark Results
 
@@ -344,21 +329,20 @@ All configuration methods are available for both flattening and unflattening ope
 
 #### Collision Handling Methods
 
-- **`.handle_key_collision(value: bool)`** - Merge colliding values into arrays with intelligent filtering
-- **`.avoid_key_collision(value: bool)`** - Append index suffixes to make keys unique
+- `.handle_key_collision(value: bool)` - Merge colliding values into arrays with intelligent filtering
 
 #### Input/Output Types
 
-**Rust:**
+Rust:
 - `&str` (JSON string) → `JsonOutput::Single(String)`
-- `Vec<&str>` (JSON strings) → `JsonOutput::Multiple(Vec<String>)`
+- `Vec<&str>` or `Vec<String>` → `JsonOutput::Multiple(Vec<String>)`
 
-**Python:**
-- `str` → `str` (JSON string)
-- `dict` → `dict` (Python dictionary)
-- `List[str]` → `List[str]` (list of JSON strings)
-- `List[dict]` → `List[dict]` (list of Python dictionaries)
-- Mixed lists preserve original types
+Python:
+- `str` → `str`
+- `dict` → `dict`
+- `List[str]` → `List[str]`
+- `List[dict]` → `List[dict]`
+- Mixed lists preserve original element types
 
 ### Error Handling
 

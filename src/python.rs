@@ -288,14 +288,14 @@ impl PyJSONTools {
     /// * list[dict] input → list[dict] output (list of processed Python dictionaries)
     pub fn execute(&self, json_input: &Bound<'_, PyAny>) -> PyResult<PyObject> {
         let py = json_input.py();
-        let json_module = py.import("json")?;
 
-        // Try to handle as single input first
+        // Fast path: single JSON string → return JSON string
         if let Ok(json_str) = json_input.extract::<String>() {
-            // Single JSON string → return JSON string
-            let result = self.inner.clone().execute(json_str.as_str()).map_err(|e| {
-                JsonToolsError::new_err(format!("Failed to process JSON string: {}", e))
-            })?;
+            let result = self
+                .inner
+                .clone()
+                .execute(json_str.as_str())
+                .map_err(|e| JsonToolsError::new_err(format!("Failed to process JSON string: {}", e)))?;
 
             match result {
                 JsonOutput::Single(processed) => Ok(processed.into_pyobject(py)?.into_any().unbind()),
@@ -305,18 +305,18 @@ impl PyJSONTools {
             }
         } else if json_input.is_instance_of::<pyo3::types::PyDict>() {
             // Single Python dictionary → return Python dictionary
-            let json_str: String = json_module
-                .getattr("dumps")?
-                .call1((json_input,))?
-                .extract()?;
+            let json_module = py.import("json")?;
+            let json_str: String = json_module.getattr("dumps")?.call1((json_input,))?.extract()?;
 
-            let result = self.inner.clone().execute(json_str.as_str()).map_err(|e| {
-                JsonToolsError::new_err(format!("Failed to process Python dict: {}", e))
-            })?;
+            let result = self
+                .inner
+                .clone()
+                .execute(json_str.as_str())
+                .map_err(|e| JsonToolsError::new_err(format!("Failed to process Python dict: {}", e)))?;
 
             match result {
                 JsonOutput::Single(processed) => {
-                    // Parse the processed JSON string back to a Python dict
+                    // Parse back to a Python dict
                     let processed_dict = json_module.getattr("loads")?.call1((processed,))?;
                     Ok(processed_dict.unbind())
                 }
@@ -325,104 +325,81 @@ impl PyJSONTools {
                 )),
             }
         } else if json_input.is_instance_of::<pyo3::types::PyList>() {
-            // Handle list input - could be batch processing or single JSON array
+            // Handle list input - batch processing of JSON strings and/or dicts
             let list = json_input.downcast::<pyo3::types::PyList>()?;
 
-            // Check if this is valid batch processing (only JSON strings and/or dicts)
-            // Empty lists are treated as empty batch
             if list.is_empty() {
-                // Empty list - return empty batch result
                 return Ok(Vec::<String>::new().into_pyobject(py)?.into_any().unbind());
             }
 
-            let mut has_json_strings = false;
-            let mut has_dicts = false;
+            // Detect item types and serialize dicts only once
+            let json_module = py.import("json")?;
+            let mut json_strings: Vec<String> = Vec::with_capacity(list.len());
+            let mut is_str_flags: Vec<bool> = Vec::with_capacity(list.len());
             let mut has_other_types = false;
 
             for item in list.iter() {
-                if item.extract::<String>().is_ok() {
-                    has_json_strings = true;
+                if let Ok(json_str) = item.extract::<String>() {
+                    json_strings.push(json_str);
+                    is_str_flags.push(true);
                 } else if item.is_instance_of::<pyo3::types::PyDict>() {
-                    has_dicts = true;
+                    let json_str: String = json_module.getattr("dumps")?.call1((item,))?.extract()?;
+                    json_strings.push(json_str);
+                    is_str_flags.push(false);
                 } else {
                     has_other_types = true;
+                    break;
                 }
             }
 
-            // Only allow batch processing if all items are JSON strings or dicts
-            if (has_json_strings || has_dicts) && !has_other_types {
-                // This is batch processing - list of JSON strings or list of dicts
-                let mut json_strings = Vec::new();
-                let mut input_types = Vec::new();
-
-                for item in list.iter() {
-                    if let Ok(json_str) = item.extract::<String>() {
-                        // Item is a JSON string
-                        json_strings.push(json_str);
-                        input_types.push("str");
-                    } else if item.is_instance_of::<pyo3::types::PyDict>() {
-                        // Item is a Python dictionary - serialize to JSON
-                        let json_str: String =
-                            json_module.getattr("dumps")?.call1((item,))?.extract()?;
-                        json_strings.push(json_str);
-                        input_types.push("dict");
-                    }
-                }
-
-                // Process the list of JSON strings (batch processing)
-                let json_refs: Vec<&str> = json_strings.iter().map(|s| s.as_str()).collect();
-                let result = self.inner.clone().execute(&json_refs[..]).map_err(|e| {
-                    JsonToolsError::new_err(format!("Failed to process JSON list: {}", e))
-                })?;
-
-                match result {
-                    JsonOutput::Single(_) => Err(PyValueError::new_err(
-                        "Unexpected single result for multiple input",
-                    )),
-                    JsonOutput::Multiple(processed_list) => {
-                        // Determine output type based on input types
-                        let all_strings = input_types.iter().all(|&t| t == "str");
-                        let all_dicts = input_types.iter().all(|&t| t == "dict");
-
-                        if all_strings {
-                            // list[str] input → list[str] output
-                            Ok(processed_list.into_pyobject(py)?.into_any().unbind())
-                        } else if all_dicts {
-                            // list[dict] input → list[dict] output
-                            let mut dict_results = Vec::new();
-                            for processed_json in processed_list {
-                                let dict_result =
-                                    json_module.getattr("loads")?.call1((processed_json,))?;
-                                dict_results.push(dict_result);
-                            }
-                            Ok(dict_results.into_pyobject(py)?.into_any().unbind())
-                        } else {
-                            // Mixed input → preserve original types
-                            let mut mixed_results = Vec::new();
-                            for (processed_json, &input_type) in
-                                processed_list.iter().zip(input_types.iter())
-                            {
-                                if input_type == "str" {
-                                    mixed_results.push(processed_json.into_pyobject(py)?.into_any().unbind());
-                                } else {
-                                    let dict_result =
-                                        json_module.getattr("loads")?.call1((processed_json,))?;
-                                    mixed_results.push(dict_result.unbind());
-                                }
-                            }
-                            Ok(mixed_results.into_pyobject(py)?.into_any().unbind())
-                        }
-                    }
-                }
-            } else {
-                // Invalid list - contains types other than JSON strings or dicts
-                Err(PyValueError::new_err(
+            if has_other_types {
+                return Err(PyValueError::new_err(
                     "List items must be either JSON strings or Python dictionaries",
-                ))
+                ));
+            }
+
+            // Process the list of JSON strings directly (avoids building Vec<&str>)
+            let result = self
+                .inner
+                .clone()
+                .execute(json_strings)
+                .map_err(|e| JsonToolsError::new_err(format!("Failed to process JSON list: {}", e)))?;
+
+            match result {
+                JsonOutput::Single(_) => Err(PyValueError::new_err(
+                    "Unexpected single result for multiple input",
+                )),
+                JsonOutput::Multiple(processed_list) => {
+                    // Determine output shape and transform accordingly
+                    let all_strings = is_str_flags.iter().all(|&b| b);
+                    let all_dicts = is_str_flags.iter().all(|&b| !b);
+
+                    if all_strings {
+                        Ok(processed_list.into_pyobject(py)?.into_any().unbind())
+                    } else if all_dicts {
+                        let mut dict_results: Vec<PyObject> = Vec::with_capacity(processed_list.len());
+                        for processed_json in processed_list {
+                            let dict_obj = json_module.getattr("loads")?.call1((processed_json,))?;
+                            dict_results.push(dict_obj.unbind());
+                        }
+                        Ok(dict_results.into_pyobject(py)?.into_any().unbind())
+                    } else {
+                        let mut mixed_results: Vec<PyObject> = Vec::with_capacity(processed_list.len());
+                        for (processed_json, is_str) in processed_list.into_iter().zip(is_str_flags.into_iter()) {
+                            if is_str {
+                                mixed_results.push(processed_json.into_pyobject(py)?.into_any().unbind());
+                            } else {
+                                let dict_obj = json_module.getattr("loads")?.call1((processed_json,))?;
+                                mixed_results.push(dict_obj.unbind());
+                            }
+                        }
+                        Ok(mixed_results.into_pyobject(py)?.into_any().unbind())
+                    }
+                }
             }
         } else {
             Err(PyValueError::new_err(
-                "json_input must be a JSON string, Python dict, list of JSON strings, or list of Python dicts"
+                "json_input must be a JSON string, Python dict, list of JSON strings, or list of Python dicts",
             ))
         }
     }
@@ -445,85 +422,65 @@ impl PyJSONTools {
     pub fn execute_to_output(&self, json_input: &Bound<'_, PyAny>) -> PyResult<PyJsonOutput> {
         let py = json_input.py();
 
-        // Try to handle as single input first
+        // Single JSON string
         if let Ok(json_str) = json_input.extract::<String>() {
-            // Single JSON string
-            let result = self.inner.clone().execute(json_str.as_str()).map_err(|e| {
-                JsonToolsError::new_err(format!("Failed to process JSON string: {}", e))
-            })?;
-            Ok(PyJsonOutput::from_rust_output(result))
-        } else if json_input.is_instance_of::<pyo3::types::PyDict>() {
-            // Single Python dictionary - serialize to JSON first
-            let json_module = py.import("json")?;
-            let json_str: String = json_module
-                .getattr("dumps")?
-                .call1((json_input,))?
-                .extract()?;
+            let result = self
+                .inner
+                .clone()
+                .execute(json_str.as_str())
+                .map_err(|e| JsonToolsError::new_err(format!("Failed to process JSON string: {}", e)))?;
+            return Ok(PyJsonOutput::from_rust_output(result));
+        }
 
-            let result = self.inner.clone().execute(json_str.as_str()).map_err(|e| {
-                JsonToolsError::new_err(format!("Failed to process Python dict: {}", e))
-            })?;
-            Ok(PyJsonOutput::from_rust_output(result))
-        } else if json_input.is_instance_of::<pyo3::types::PyList>() {
-            // Handle list input - could be batch processing or single JSON array
+        // Single Python dictionary - serialize to JSON first
+        if json_input.is_instance_of::<pyo3::types::PyDict>() {
+            let json_module = py.import("json")?;
+            let json_str: String = json_module.getattr("dumps")?.call1((json_input,))?.extract()?;
+            let result = self
+                .inner
+                .clone()
+                .execute(json_str.as_str())
+                .map_err(|e| JsonToolsError::new_err(format!("Failed to process Python dict: {}", e)))?;
+            return Ok(PyJsonOutput::from_rust_output(result));
+        }
+
+        // List input - batch processing or single JSON array
+        if json_input.is_instance_of::<pyo3::types::PyList>() {
             let list = json_input.downcast::<pyo3::types::PyList>()?;
 
-            // Check if this is valid batch processing (only JSON strings and/or dicts)
-            // Empty lists are treated as empty batch
             if list.is_empty() {
-                // Empty list - return empty batch result
                 return Ok(PyJsonOutput::from_rust_output(JsonOutput::Multiple(vec![])));
             }
 
-            let mut has_json_strings = false;
-            let mut has_dicts = false;
-            let mut has_other_types = false;
+            // Serialize inputs
+            let json_module = py.import("json")?;
+            let mut json_strings: Vec<String> = Vec::with_capacity(list.len());
 
             for item in list.iter() {
-                if item.extract::<String>().is_ok() {
-                    has_json_strings = true;
+                if let Ok(json_str) = item.extract::<String>() {
+                    json_strings.push(json_str);
                 } else if item.is_instance_of::<pyo3::types::PyDict>() {
-                    has_dicts = true;
+                    let json_str: String = json_module.getattr("dumps")?.call1((item,))?.extract()?;
+                    json_strings.push(json_str);
                 } else {
-                    has_other_types = true;
+                    return Err(PyValueError::new_err(
+                        "List items must be either JSON strings or Python dictionaries",
+                    ));
                 }
             }
 
-            // Only allow batch processing if all items are JSON strings or dicts
-            if (has_json_strings || has_dicts) && !has_other_types {
-                // This is batch processing
-                let mut json_strings = Vec::new();
-
-                for item in list.iter() {
-                    if let Ok(json_str) = item.extract::<String>() {
-                        // Item is a JSON string
-                        json_strings.push(json_str);
-                    } else if item.is_instance_of::<pyo3::types::PyDict>() {
-                        // Item is a Python dictionary - serialize to JSON
-                        let json_module = py.import("json")?;
-                        let json_str: String =
-                            json_module.getattr("dumps")?.call1((item,))?.extract()?;
-                        json_strings.push(json_str);
-                    }
-                }
-
-                // Process the list of JSON strings
-                let json_refs: Vec<&str> = json_strings.iter().map(|s| s.as_str()).collect();
-                let result = self.inner.clone().execute(&json_refs[..]).map_err(|e| {
-                    JsonToolsError::new_err(format!("Failed to process JSON list: {}", e))
-                })?;
-                Ok(PyJsonOutput::from_rust_output(result))
-            } else {
-                // Invalid list - contains types other than JSON strings or dicts
-                Err(PyValueError::new_err(
-                    "List items must be either JSON strings or Python dictionaries",
-                ))
-            }
-        } else {
-            Err(PyValueError::new_err(
-                "json_input must be a JSON string, Python dict, list of JSON strings, or list of Python dicts"
-            ))
+            // Process the list of JSON strings directly
+            let result = self
+                .inner
+                .clone()
+                .execute(json_strings)
+                .map_err(|e| JsonToolsError::new_err(format!("Failed to process JSON list: {}", e)))?;
+            return Ok(PyJsonOutput::from_rust_output(result));
         }
+
+        Err(PyValueError::new_err(
+            "json_input must be a JSON string, Python dict, list of JSON strings, or list of Python dicts",
+        ))
     }
 }
 
