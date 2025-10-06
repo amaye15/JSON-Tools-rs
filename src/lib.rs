@@ -1696,12 +1696,42 @@ fn handle_root_level_primitives_flatten(
 }
 
 /// Parse JSON string using optimized SIMD parsing
+///
+/// On architectures where simd-json has native SIMD support (x86, x86_64, aarch64, arm),
+/// this uses simd-json for maximum performance. On other architectures (s390x, powerpc64, etc.),
+/// this falls back to serde_json to avoid issues with simd-json's fallback implementation.
 #[inline]
 fn parse_json_optimized(json: &Cow<str>) -> Result<Value, JsonToolsError> {
-    let mut json_bytes = json.as_bytes().to_vec();
-    let value: Value = simd_json::serde::from_slice(&mut json_bytes)
-        .map_err(JsonToolsError::json_parse_error)?;
-    Ok(value)
+    // Use simd-json on architectures with native SIMD support
+    #[cfg(any(
+        target_arch = "x86",
+        target_arch = "x86_64",
+        target_arch = "aarch64",
+        target_arch = "arm"
+    ))]
+    {
+        let mut json_bytes = json.as_bytes().to_vec();
+        let value: Value = simd_json::serde::from_slice(&mut json_bytes)
+            .map_err(JsonToolsError::json_parse_error)?;
+        Ok(value)
+    }
+
+    // Use serde_json on other architectures (s390x, powerpc64, etc.) where simd-json
+    // doesn't have native SIMD support and uses a fallback implementation that may have issues
+    #[cfg(not(any(
+        target_arch = "x86",
+        target_arch = "x86_64",
+        target_arch = "aarch64",
+        target_arch = "arm"
+    )))]
+    {
+        let value: Value = serde_json::from_str(json.as_ref())
+            .map_err(|e| JsonToolsError::JsonParseError {
+                message: e.to_string(),
+                suggestion: "Verify your JSON syntax using a JSON validator. Common issues include: missing quotes around keys or values, trailing commas, unescaped characters, incomplete JSON (missing closing braces or brackets), or invalid escape sequences.".to_string(),
+            })?;
+        Ok(value)
+    }
 }
 
 /// Initialize flattened HashMap with optimized capacity
