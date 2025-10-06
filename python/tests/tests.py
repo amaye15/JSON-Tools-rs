@@ -636,20 +636,24 @@ class TestErrorHandling:
             tools.execute([123, object()])  # Contains invalid object type
 
     def test_invalid_regex_pattern(self):
-        """Test invalid regex patterns"""
-        # Invalid regex in key replacement
-        with pytest.raises(json_tools_rs.JsonToolsError):
-            tools = json_tools_rs.JSONTools().flatten().key_replacement(
-                "[invalid", "replacement"
-            )
-            tools.execute('{"test": "value"}')
+        """Test invalid regex patterns fall back to literal matching"""
+        # Invalid regex in key replacement - should fall back to literal matching
+        tools = json_tools_rs.JSONTools().flatten().key_replacement(
+            "[invalid", "replacement"
+        )
+        result = tools.execute('{"test": "value"}')
+        # Should not raise error, just treat as literal string (no match)
+        assert isinstance(result, str)
+        assert '"test"' in result and '"value"' in result
 
-        # Invalid regex in value replacement
-        with pytest.raises(json_tools_rs.JsonToolsError):
-            tools = json_tools_rs.JSONTools().flatten().value_replacement(
-                "*invalid", "replacement"
-            )
-            tools.execute('{"test": "value"}')
+        # Invalid regex in value replacement - should fall back to literal matching
+        tools = json_tools_rs.JSONTools().flatten().value_replacement(
+            "*invalid", "replacement"
+        )
+        result = tools.execute('{"test": "value"}')
+        # Should not raise error, just treat as literal string (no match)
+        assert isinstance(result, str)
+        assert '"test"' in result and '"value"' in result
 
     def test_deeply_nested_structure_limits(self):
         """Test very deeply nested structures"""
