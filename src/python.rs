@@ -306,11 +306,7 @@ impl PyJSONTools {
         } else if json_input.is_instance_of::<pyo3::types::PyDict>() {
             // Single Python dictionary → return Python dictionary
             let json_module = py.import("json")?;
-            // Use json.dumps() with ensure_ascii=False to properly serialize Python booleans and None
-            let dumps_fn = json_module.getattr("dumps")?;
-            let kwargs = pyo3::types::PyDict::new(py);
-            kwargs.set_item("ensure_ascii", false)?;
-            let json_str: String = dumps_fn.call((json_input,), Some(&kwargs))?.extract()?;
+            let json_str: String = json_module.getattr("dumps")?.call1((json_input,))?.extract()?;
 
             let result = self
                 .inner
@@ -342,17 +338,12 @@ impl PyJSONTools {
             let mut is_str_flags: Vec<bool> = Vec::with_capacity(list.len());
             let mut has_other_types = false;
 
-            // Prepare json.dumps() with proper kwargs for boolean/null handling
-            let dumps_fn = json_module.getattr("dumps")?;
-            let kwargs = pyo3::types::PyDict::new(py);
-            kwargs.set_item("ensure_ascii", false)?;
-
             for item in list.iter() {
                 if let Ok(json_str) = item.extract::<String>() {
                     json_strings.push(json_str);
                     is_str_flags.push(true);
                 } else if item.is_instance_of::<pyo3::types::PyDict>() {
-                    let json_str: String = dumps_fn.call((item,), Some(&kwargs))?.extract()?;
+                    let json_str: String = json_module.getattr("dumps")?.call1((item,))?.extract()?;
                     json_strings.push(json_str);
                     is_str_flags.push(false);
                 } else {
@@ -444,11 +435,7 @@ impl PyJSONTools {
         // Single Python dictionary - serialize to JSON first
         if json_input.is_instance_of::<pyo3::types::PyDict>() {
             let json_module = py.import("json")?;
-            // Use json.dumps() with ensure_ascii=False to properly serialize Python booleans and None
-            let dumps_fn = json_module.getattr("dumps")?;
-            let kwargs = pyo3::types::PyDict::new(py);
-            kwargs.set_item("ensure_ascii", false)?;
-            let json_str: String = dumps_fn.call((json_input,), Some(&kwargs))?.extract()?;
+            let json_str: String = json_module.getattr("dumps")?.call1((json_input,))?.extract()?;
             let result = self
                 .inner
                 .clone()
@@ -469,16 +456,11 @@ impl PyJSONTools {
             let json_module = py.import("json")?;
             let mut json_strings: Vec<String> = Vec::with_capacity(list.len());
 
-            // Prepare json.dumps() with proper kwargs for boolean/null handling
-            let dumps_fn = json_module.getattr("dumps")?;
-            let kwargs = pyo3::types::PyDict::new(py);
-            kwargs.set_item("ensure_ascii", false)?;
-
             for item in list.iter() {
                 if let Ok(json_str) = item.extract::<String>() {
                     json_strings.push(json_str);
                 } else if item.is_instance_of::<pyo3::types::PyDict>() {
-                    let json_str: String = dumps_fn.call((item,), Some(&kwargs))?.extract()?;
+                    let json_str: String = json_module.getattr("dumps")?.call1((item,))?.extract()?;
                     json_strings.push(json_str);
                 } else {
                     return Err(PyValueError::new_err(

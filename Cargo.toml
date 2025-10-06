@@ -19,8 +19,6 @@ crate-type = ["rlib", "cdylib"]
 name = "json-tools-rs"
 path = "src/main.rs"
 
-
-
 [dependencies]
 regex = "1.11.1"
 simd-json = { version = "0.15.1", features = ["serde_impl"] }
