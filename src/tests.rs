@@ -139,8 +139,8 @@ mod tests {
         let json = r#"{"user_name": "John", "admin_role": "super", "temp_data": "test"}"#;
         let result = JSONTools::new()
             .flatten()
-            .key_replacement("regex:^(user|admin)_", "")
-            .value_replacement("regex:^super$", "administrator")
+            .key_replacement("^(user|admin)_", "")
+            .value_replacement("^super$", "administrator")
             .execute(json)
             .unwrap();
         let flattened = extract_single(result);
@@ -539,7 +539,7 @@ mod tests {
         let result = JSONTools::new()
             .flatten()
             .separator("::")
-            .key_replacement("regex:(User|Admin|Guest)_", "")
+            .key_replacement("(User|Admin|Guest)_", "")
             .handle_key_collision(true)
             .execute(json)
             .unwrap();
@@ -559,7 +559,7 @@ mod tests {
         let json = r#"{"User_name": "John", "Admin_name": "Jane", "Guest_name": "Bob"}"#;
         let result = JSONTools::new()
             .flatten()
-            .key_replacement("regex:(User|Admin|Guest)_", "")
+            .key_replacement("(User|Admin|Guest)_", "")
             .handle_key_collision(true)
             .execute(json)
             .unwrap();
@@ -586,7 +586,7 @@ mod tests {
         let result = JSONTools::new()
             .unflatten()
             .separator("::")
-            .key_replacement("regex:name::\\d+", "user_name")
+            .key_replacement("name::\\d+", "user_name")
             .handle_key_collision(true)
             .execute(flattened)
             .unwrap();
@@ -611,7 +611,7 @@ mod tests {
         let json = r#"{"User_name": "John", "Admin_name": "Jane"}"#;
         let result = JSONTools::new()
             .flatten()
-            .key_replacement("regex:(User|Admin)_", "")
+            .key_replacement("(User|Admin)_", "")
             .handle_key_collision(true)
             .execute(json)
             .unwrap();
@@ -638,7 +638,7 @@ mod tests {
         let json = r#"{"User_name": "John", "Admin_email": "jane@example.com"}"#;
         let result = JSONTools::new()
             .flatten()
-            .key_replacement("regex:(User|Admin)_", "")
+            .key_replacement("(User|Admin)_", "")
             .handle_key_collision(true)
             .execute(json)
             .unwrap();
@@ -656,7 +656,7 @@ mod tests {
         let result = JSONTools::new()
             .flatten()
             .separator("__")
-            .key_replacement("regex:(User|Admin)_", "")
+            .key_replacement("(User|Admin)_", "")
             .handle_key_collision(true)
             .execute(json)
             .unwrap();
@@ -681,7 +681,7 @@ mod tests {
         let json = r#"{"User_name": "John", "Admin_name": 42, "Guest_name": true}"#;
         let result = JSONTools::new()
             .flatten()
-            .key_replacement("regex:(User|Admin|Guest)_", "")
+            .key_replacement("(User|Admin|Guest)_", "")
             .handle_key_collision(true)
             .execute(json)
             .unwrap();
@@ -710,7 +710,7 @@ mod tests {
         let json = r#"{"User_name": "John", "Admin_name": "", "Guest_name": "Bob"}"#;
         let result = JSONTools::new()
             .flatten()
-            .key_replacement("regex:(User|Admin|Guest)_", "")
+            .key_replacement("(User|Admin|Guest)_", "")
             .remove_empty_strings(true)
             .handle_key_collision(true)
             .execute(json)

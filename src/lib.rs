@@ -26,7 +26,7 @@
 //!     .flatten()
 //!     .separator("::")
 //!     .lowercase_keys(true)
-//!     .key_replacement("regex:(User|Admin)_", "")
+//!     .key_replacement("(User|Admin)_", "")
 //!     .value_replacement("@example.com", "@company.org")
 //!     .remove_empty_strings(true)
 //!     .remove_nulls(true)
@@ -53,7 +53,7 @@
 //!     .unflatten()
 //!     .separator("::")
 //!     .lowercase_keys(true)
-//!     .key_replacement("regex:(User|Admin)_", "")
+//!     .key_replacement("(User|Admin)_", "")
 //!     .value_replacement("@company.org", "@example.com")
 //!     .remove_empty_strings(true)
 //!     .remove_nulls(true)
@@ -188,7 +188,7 @@
 //! let json = r#"{"user_name": "John", "admin_name": "Jane", "guest_name": "Bob"}"#;
 //! let result = JSONTools::new()
 //!     .flatten()
-//!     .key_replacement("regex:(user|admin)_", "person_") // Regex pattern
+//!     .key_replacement("(user|admin)_", "person_") // Regex pattern
 //!     .execute(json).unwrap();
 //!
 //! match result {
@@ -233,7 +233,7 @@
 //! let json = r#"{"role": "super", "level": "admin", "type": "user"}"#;
 //! let result = JSONTools::new()
 //!     .flatten()
-//!     .value_replacement("regex:^(super|admin)$", "administrator") // Regex pattern
+//!     .value_replacement("^(super|admin)$", "administrator") // Regex pattern
 //!     .execute(json).unwrap();
 //!
 //! match result {
@@ -328,7 +328,7 @@
 //! let json = r#"{"user_name": "John", "admin_name": "Jane"}"#;
 //! let result = JSONTools::new()
 //!     .flatten()
-//!     .key_replacement("regex:(user|admin)_", "") // This creates collision: both become "name"
+//!     .key_replacement("(user|admin)_", "") // This creates collision: both become "name"
 //!     .handle_key_collision(true) // Collect values into array
 //!     .execute(json).unwrap();
 //!
@@ -375,10 +375,10 @@
 //!     .flatten()
 //!     .separator("::") // Use custom separator
 //!     .lowercase_keys(true) // Convert all keys to lowercase
-//!     .key_replacement("regex:(user|admin)_profile::", "person::") // Normalize profile keys
+//!     .key_replacement("(user|admin)_profile::", "person::") // Normalize profile keys
 //!     .key_replacement("personal_info::", "info::") // Simplify nested keys
 //!     .value_replacement("@example.com", "@company.org") // Update email domain
-//!     .value_replacement("regex:^super$", "administrator") // Normalize role values
+//!     .value_replacement("^super$", "administrator") // Normalize role values
 //!     .remove_empty_strings(true) // Remove empty string values
 //!     .remove_nulls(true) // Remove null values
 //!     .remove_empty_objects(true) // Remove empty objects
@@ -879,8 +879,8 @@ impl JsonToolsError {
         let msg = message.into();
         let suggestion = if msg.contains("pairs") {
             "Replacement patterns must be provided in pairs (pattern, replacement). Ensure you have an even number of arguments."
-        } else if msg.contains("regex:") {
-            "When using regex patterns, prefix with 'regex:' followed by a valid regex pattern. Example: 'regex:user_.*' to match keys starting with 'user_'."
+        } else if msg.contains("regex") {
+            "Patterns use standard Rust regex syntax. If a pattern fails to compile as regex, it falls back to literal string matching. Example: 'user_.*' to match keys starting with 'user_'."
         } else {
             "Check your replacement pattern configuration. Patterns should be in the format: pattern1, replacement1, pattern2, replacement2, etc."
         };
@@ -1269,8 +1269,28 @@ impl JSONTools {
 
     /// Add a key replacement pattern
     ///
-    /// Supports both literal strings and regex patterns (prefix with "regex:")
-    /// Works for both flatten and unflatten operations
+    /// Patterns are treated as regex patterns using standard Rust regex syntax.
+    /// If a pattern fails to compile as regex, it falls back to literal string replacement.
+    /// Works for both flatten and unflatten operations.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use json_tools_rs::{JSONTools, JsonOutput};
+    ///
+    /// // Regex pattern (standard Rust regex syntax)
+    /// let json = r#"{"user_name": "John", "admin_name": "Jane"}"#;
+    /// let result = JSONTools::new()
+    ///     .flatten()
+    ///     .key_replacement("(user|admin)_", "person_")
+    ///     .execute(json).unwrap();
+    ///
+    /// // Literal pattern (if regex compilation fails)
+    /// let result2 = JSONTools::new()
+    ///     .flatten()
+    ///     .key_replacement("user_", "person_")
+    ///     .execute(json).unwrap();
+    /// ```
     pub fn key_replacement<S1: Into<Cow<'static, str>>, S2: Into<Cow<'static, str>>>(
         mut self,
         find: S1,
@@ -1295,8 +1315,28 @@ impl JSONTools {
 
     /// Add a value replacement pattern
     ///
-    /// Supports both literal strings and regex patterns (prefix with "regex:")
-    /// Works for both flatten and unflatten operations
+    /// Patterns are treated as regex patterns using standard Rust regex syntax.
+    /// If a pattern fails to compile as regex, it falls back to literal string replacement.
+    /// Works for both flatten and unflatten operations.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use json_tools_rs::{JSONTools, JsonOutput};
+    ///
+    /// // Regex pattern (standard Rust regex syntax)
+    /// let json = r#"{"role": "super", "level": "admin"}"#;
+    /// let result = JSONTools::new()
+    ///     .flatten()
+    ///     .value_replacement("^(super|admin)$", "administrator")
+    ///     .execute(json).unwrap();
+    ///
+    /// // Literal pattern (if regex compilation fails)
+    /// let result2 = JSONTools::new()
+    ///     .flatten()
+    ///     .value_replacement("@example.com", "@company.org")
+    ///     .execute(json).unwrap();
+    /// ```
     pub fn value_replacement<S1: Into<Cow<'static, str>>, S2: Into<Cow<'static, str>>>(
         mut self,
         find: S1,
@@ -1830,6 +1870,9 @@ fn apply_filtering_flatten(
 /// Core key replacement logic that works with both string keys and Cow<str>
 /// This eliminates duplication between flatten and unflatten key replacement functions
 /// Optimized to minimize string allocations by using efficient Cow operations
+///
+/// Patterns are treated as regex patterns. If a pattern fails to compile as regex,
+/// it falls back to literal string replacement.
 #[inline]
 fn apply_key_replacement_patterns(
     key: &str,
@@ -1840,17 +1883,22 @@ fn apply_key_replacement_patterns(
 
     // Apply each replacement pattern
     for (pattern, replacement) in patterns {
-        if let Some(regex_pattern) = pattern.strip_prefix("regex:") {
-            // Handle regex replacement
-            let regex = get_cached_regex(regex_pattern)?;
-            if regex.is_match(&new_key) {
-                new_key = Cow::Owned(regex.replace_all(&new_key, replacement).into_owned());
-                changed = true;
+        // Try to compile as regex first
+        match get_cached_regex(pattern) {
+            Ok(regex) => {
+                // Successfully compiled as regex - use regex replacement
+                if regex.is_match(&new_key) {
+                    new_key = Cow::Owned(regex.replace_all(&new_key, replacement).into_owned());
+                    changed = true;
+                }
             }
-        } else if new_key.contains(pattern) {
-            // Handle literal replacement - use replace which is more efficient for literals
-            new_key = Cow::Owned(new_key.replace(pattern, replacement));
-            changed = true;
+            Err(_) => {
+                // Failed to compile as regex - fall back to literal replacement
+                if new_key.contains(pattern) {
+                    new_key = Cow::Owned(new_key.replace(pattern, replacement));
+                    changed = true;
+                }
+            }
         }
     }
 
@@ -1864,6 +1912,9 @@ fn apply_key_replacement_patterns(
 /// Core value replacement logic that works with any Value type
 /// This eliminates duplication between flatten and unflatten value replacement functions
 /// Optimized to minimize string allocations by using efficient Cow operations
+///
+/// Patterns are treated as regex patterns. If a pattern fails to compile as regex,
+/// it falls back to literal string replacement.
 #[inline]
 fn apply_value_replacement_patterns(
     value: &mut Value,
@@ -1875,19 +1926,22 @@ fn apply_value_replacement_patterns(
 
         // Apply each replacement pattern
         for (pattern, replacement) in patterns {
-            if let Some(regex_pattern) = pattern.strip_prefix("regex:") {
-                // Handle regex replacement - only compile if string might match
-                if current_value.len() >= regex_pattern.len() {
-                    let regex = get_cached_regex(regex_pattern)?;
+            // Try to compile as regex first
+            match get_cached_regex(pattern) {
+                Ok(regex) => {
+                    // Successfully compiled as regex - use regex replacement
                     if regex.is_match(&current_value) {
                         current_value = Cow::Owned(regex.replace_all(&current_value, replacement).into_owned());
                         changed = true;
                     }
                 }
-            } else if current_value.contains(pattern) {
-                // Handle literal replacement - more efficient for simple patterns
-                current_value = Cow::Owned(current_value.replace(pattern, replacement));
-                changed = true;
+                Err(_) => {
+                    // Failed to compile as regex - fall back to literal replacement
+                    if current_value.contains(pattern) {
+                        current_value = Cow::Owned(current_value.replace(pattern, replacement));
+                        changed = true;
+                    }
+                }
             }
         }
 
@@ -2133,6 +2187,9 @@ fn estimate_max_key_length(value: &Value) -> usize {
 
 /// Apply value replacements to a single value (for root-level primitives)
 /// Optimized with Cow to avoid unnecessary string allocations
+///
+/// Patterns are treated as regex patterns. If a pattern fails to compile as regex,
+/// it falls back to literal string replacement.
 fn apply_value_replacements_to_single(
     value: &mut Value,
     patterns: &[(String, String)],
@@ -2142,15 +2199,22 @@ fn apply_value_replacements_to_single(
         let mut changed = false;
 
         for (pattern, replacement) in patterns {
-            if let Some(regex_pattern) = pattern.strip_prefix("regex:") {
-                let regex = get_cached_regex(regex_pattern)?;
-                if regex.is_match(&current_value) {
-                    current_value = Cow::Owned(regex.replace_all(&current_value, replacement).into_owned());
-                    changed = true;
+            // Try to compile as regex first
+            match get_cached_regex(pattern) {
+                Ok(regex) => {
+                    // Successfully compiled as regex - use regex replacement
+                    if regex.is_match(&current_value) {
+                        current_value = Cow::Owned(regex.replace_all(&current_value, replacement).into_owned());
+                        changed = true;
+                    }
                 }
-            } else if current_value.contains(pattern) {
-                current_value = Cow::Owned(current_value.replace(pattern, replacement));
-                changed = true;
+                Err(_) => {
+                    // Failed to compile as regex - fall back to literal replacement
+                    if current_value.contains(pattern) {
+                        current_value = Cow::Owned(current_value.replace(pattern, replacement));
+                        changed = true;
+                    }
+                }
             }
         }
 
@@ -2267,6 +2331,9 @@ fn apply_key_transformations_normal(value: Value, config: &ProcessingConfig) -> 
 }
 
 /// Value replacement with regex caching - optimized to use string references
+///
+/// Patterns are treated as regex patterns. If a pattern fails to compile as regex,
+/// it falls back to literal string replacement.
 fn apply_value_replacements(
     flattened: &mut FxHashMap<String, Value>,
     patterns: &[&str],
@@ -2277,17 +2344,16 @@ fn apply_value_replacements(
         ));
     }
 
-    // Pre-compile all regex patterns
+    // Pre-compile all regex patterns (or mark as literal if compilation fails)
     let mut compiled_patterns = Vec::with_capacity(patterns.len() / 2);
     for chunk in patterns.chunks(2) {
         let pattern = chunk[0];
         let replacement = chunk[1];
 
-        if let Some(regex_pattern) = pattern.strip_prefix("regex:") {
-            let regex = get_cached_regex(regex_pattern)?;
-            compiled_patterns.push((Some(regex), replacement));
-        } else {
-            compiled_patterns.push((None, replacement));
+        // Try to compile as regex
+        match get_cached_regex(pattern) {
+            Ok(regex) => compiled_patterns.push((Some(regex), replacement)),
+            Err(_) => compiled_patterns.push((None, replacement)),
         }
     }
 
@@ -3356,16 +3422,16 @@ fn apply_key_replacements_with_collision_handling(
     }
 
     // Pre-compile all regex patterns to avoid repeated compilation
+    // Patterns are treated as regex. If compilation fails, fall back to literal matching.
     let mut compiled_patterns = Vec::with_capacity(patterns.len() / 2);
     for chunk in patterns.chunks(2) {
         let pattern = chunk[0];
         let replacement = chunk[1];
 
-        if let Some(regex_pattern) = pattern.strip_prefix("regex:") {
-            let regex = get_cached_regex(regex_pattern)?;
-            compiled_patterns.push((Some(regex), replacement));
-        } else {
-            compiled_patterns.push((None, replacement));
+        // Try to compile as regex
+        match get_cached_regex(pattern) {
+            Ok(regex) => compiled_patterns.push((Some(regex), replacement)),
+            Err(_) => compiled_patterns.push((None, replacement)),
         }
     }
 
@@ -3517,15 +3583,18 @@ fn apply_key_replacements_unflatten_with_collisions(
         let mut new_key = original_key.clone();
 
         // Apply all key replacement patterns
+        // Patterns are treated as regex. If compilation fails, fall back to literal matching.
         for (find, replace) in &config.replacements.key_replacements {
-            if find.starts_with("regex:") {
-                // Handle regex replacement
-                let pattern = &find[6..]; // Remove "regex:" prefix
-                let regex = get_cached_regex(pattern)?;
-                new_key = regex.replace_all(&new_key, replace).to_string();
-            } else {
-                // Handle literal replacement
-                new_key = new_key.replace(find, replace);
+            // Try to compile as regex first
+            match get_cached_regex(find) {
+                Ok(regex) => {
+                    // Successfully compiled as regex - use regex replacement
+                    new_key = regex.replace_all(&new_key, replace).to_string();
+                }
+                Err(_) => {
+                    // Failed to compile as regex - fall back to literal replacement
+                    new_key = new_key.replace(find, replace);
+                }
             }
         }
 

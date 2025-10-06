@@ -9,7 +9,7 @@ A high-performance Rust library for advanced JSON manipulation with SIMD-acceler
 - ⚡ High Performance: SIMD-accelerated JSON parsing with FxHashMap and fewer allocations
 - 🎯 Complete Roundtrip: Flatten JSON and unflatten back to original structure
 - 🧹 Comprehensive Filtering: Remove empty strings, nulls, empty objects, and empty arrays (works for flatten and unflatten)
-- 🔄 Advanced Replacements: Literal and regex-based key/value replacements (prefix patterns with `regex:`)
+- 🔄 Advanced Replacements: Literal and regex-based key/value replacements using standard Rust regex syntax
 - 🛡️ Collision Handling: Single strategy `.handle_key_collision(true)` to collect colliding values into arrays
 - 📦 Batch Processing: Process single JSON or batches; Python also supports dicts and lists of dicts
 - 🐍 Python Bindings: Full support with type preservation (input type = output type)
@@ -48,7 +48,7 @@ let result = JSONTools::new()
     .flatten()
     .separator("::")
     .lowercase_keys(true)
-    .key_replacement("regex:(User|Admin)_", "")
+    .key_replacement("(User|Admin)_", "")
     .value_replacement("@example.com", "@company.org")
     .remove_empty_strings(true)
     .remove_nulls(true)
@@ -110,7 +110,7 @@ use json_tools_rs::{JSONTools, JsonOutput};
 let json = r#"{"user_name": "John", "admin_name": "Jane"}"#;
 let result = JSONTools::new()
     .flatten()
-    .key_replacement("regex:(user|admin)_", "") // both become "name"
+    .key_replacement("(user|admin)_", "") // both become "name"
     .handle_key_collision(true)                    // collect colliding values
     .execute(json)?;
 
@@ -180,7 +180,7 @@ tools = (jt.JSONTools()
     .remove_nulls(True)
     .remove_empty_objects(True)
     .remove_empty_arrays(True)
-    .key_replacement("regex:(User|Admin)_", "")
+    .key_replacement("(User|Admin)_", "")
     .value_replacement("@example.com", "@company.org"))
 
 data = {"User_name": "John", "Admin_email": "john@example.com", "empty": "", "null_val": None}
@@ -209,7 +209,7 @@ import json_tools_rs as jt
 
 tools = (jt.JSONTools()
     .flatten()
-    .key_replacement("regex:(user|admin)_", "")  # both become "name"
+    .key_replacement("(user|admin)_", "")  # both become "name"
     .handle_key_collision(True))                    # collect colliding values
 
 data = {"user_name": "John", "admin_name": "Jane"}
@@ -362,8 +362,8 @@ All configuration methods are available for both flattening and unflattening ope
 - **`.remove_nulls(value: bool)`** - Remove keys with null values
 - **`.remove_empty_objects(value: bool)`** - Remove keys with empty object values
 - **`.remove_empty_arrays(value: bool)`** - Remove keys with empty array values
-- **`.key_replacement(find: &str, replace: &str)`** - Add key replacement pattern (supports regex with "regex:" prefix)
-- **`.value_replacement(find: &str, replace: &str)`** - Add value replacement pattern (supports regex with "regex:" prefix)
+- **`.key_replacement(find: &str, replace: &str)`** - Add key replacement pattern (uses standard Rust regex syntax; falls back to literal if regex compilation fails)
+- **`.value_replacement(find: &str, replace: &str)`** - Add value replacement pattern (uses standard Rust regex syntax; falls back to literal if regex compilation fails)
 
 #### Collision Handling Methods
 

@@ -137,7 +137,7 @@ impl PyJsonOutput {
 ///     .remove_empty_strings(True)
 ///     .remove_nulls(True)
 ///     .lowercase_keys(True)
-///     .key_replacement("regex:(User|Admin|Guest)_", "")
+///     .key_replacement("(User|Admin|Guest)_", "")
 ///     .handle_key_collision(True))
 ///
 /// result = tools.execute({"User_name": "John", "Admin_name": "", "Guest_name": "Bob"})
@@ -232,7 +232,7 @@ impl PyJSONTools {
     /// Add a key replacement pattern
     ///
     /// # Arguments
-    /// * `find` - Pattern to find (use "regex:" prefix for regex patterns)
+    /// * `find` - Pattern to find (uses standard Rust regex syntax; falls back to literal if regex compilation fails)
     /// * `replace` - Replacement string
     pub fn key_replacement(slf: PyRef<'_, Self>, find: String, replace: String) -> PyJSONTools {
         PyJSONTools {
@@ -243,7 +243,7 @@ impl PyJSONTools {
     /// Add a value replacement pattern
     ///
     /// # Arguments
-    /// * `find` - Pattern to find (use "regex:" prefix for regex patterns)
+    /// * `find` - Pattern to find (uses standard Rust regex syntax; falls back to literal if regex compilation fails)
     /// * `replace` - Replacement string
     pub fn value_replacement(
         slf: PyRef<'_, Self>,

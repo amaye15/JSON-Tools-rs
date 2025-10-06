@@ -86,7 +86,7 @@ fn main() {
     let json6 = r#"{"user_name": "John", "admin_name": "Jane", "guest_name": "Bob"}"#;
     match JSONTools::new()
         .flatten()
-        .key_replacement("regex:(user|admin)_", "person_")
+        .key_replacement("(user|admin)_", "person_")
         .execute(json6)
     {
         Ok(JsonOutput::Single(result)) => {
@@ -122,7 +122,7 @@ fn main() {
     let json8 = r#"{"role": "super", "level": "admin", "type": "user"}"#;
     match JSONTools::new()
         .flatten()
-        .value_replacement("regex:^(super|admin)$", "administrator")
+        .value_replacement("^(super|admin)$", "administrator")
         .execute(json8)
     {
         Ok(JsonOutput::Single(result)) => {
@@ -196,7 +196,7 @@ fn main() {
     match JSONTools::new()
         .flatten()
         .separator("::")
-        .key_replacement("regex:(user|admin)_", "")
+        .key_replacement("(user|admin)_", "")
         .handle_key_collision(true)
         .execute(collision_json)
     {
@@ -214,7 +214,7 @@ fn main() {
     println!("    When key replacements cause collisions, collect all values into an array");
     match JSONTools::new()
         .flatten()
-        .key_replacement("regex:(user|admin)_", "")
+        .key_replacement("(user|admin)_", "")
         .handle_key_collision(true)
         .execute(collision_json)
     {
@@ -249,7 +249,7 @@ fn main() {
         .flatten()
         .separator("::")
         .lowercase_keys(true)
-        .key_replacement("regex:(user_profile|personal_info)::", "person::")
+        .key_replacement("(user_profile|personal_info)::", "person::")
         .value_replacement("@example.com", "@company.org")
         .remove_empty_strings(true)
         .remove_nulls(true)
