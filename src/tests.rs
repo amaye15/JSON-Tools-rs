@@ -730,4 +730,216 @@ mod tests {
             panic!("Expected array for 'name' key");
         }
     }
+
+    // ===== TYPE CONVERSION TESTS =====
+
+    #[test]
+    fn test_basic_number_conversion() {
+        let json = r#"{"id": "123", "price": "45.67", "count": "-10"}"#;
+        let result = JSONTools::new()
+            .flatten()
+            .auto_convert_types(true)
+            .execute(json)
+            .unwrap();
+        let flattened = extract_single(result);
+        let parsed: Value = serde_json::from_str(&flattened).unwrap();
+
+        assert_eq!(parsed["id"], 123);
+        assert_eq!(parsed["price"], 45.67);
+        assert_eq!(parsed["count"], -10);
+    }
+
+    #[test]
+    fn test_thousands_separator_us_format() {
+        let json = r#"{"amount": "1,234.56", "total": "1,000,000"}"#;
+        let result = JSONTools::new()
+            .flatten()
+            .auto_convert_types(true)
+            .execute(json)
+            .unwrap();
+        let flattened = extract_single(result);
+        let parsed: Value = serde_json::from_str(&flattened).unwrap();
+
+        assert_eq!(parsed["amount"], 1234.56);
+        assert_eq!(parsed["total"], 1000000);
+    }
+
+    #[test]
+    fn test_thousands_separator_european_format() {
+        let json = r#"{"amount": "1.234,56", "total": "1.000.000,00"}"#;
+        let result = JSONTools::new()
+            .flatten()
+            .auto_convert_types(true)
+            .execute(json)
+            .unwrap();
+        let flattened = extract_single(result);
+        let parsed: Value = serde_json::from_str(&flattened).unwrap();
+
+        assert_eq!(parsed["amount"], 1234.56);
+        assert_eq!(parsed["total"], 1000000.0);
+    }
+
+    #[test]
+    fn test_currency_symbols() {
+        let json = r#"{"usd": "$123.45", "eur": "€99.99", "gbp": "£50.00"}"#;
+        let result = JSONTools::new()
+            .flatten()
+            .auto_convert_types(true)
+            .execute(json)
+            .unwrap();
+        let flattened = extract_single(result);
+        let parsed: Value = serde_json::from_str(&flattened).unwrap();
+
+        assert_eq!(parsed["usd"], 123.45);
+        assert_eq!(parsed["eur"], 99.99);
+        assert_eq!(parsed["gbp"], 50.0);
+    }
+
+    #[test]
+    fn test_scientific_notation() {
+        let json = r#"{"small": "1.23e-4", "large": "1e5", "negative": "-2.5e3"}"#;
+        let result = JSONTools::new()
+            .flatten()
+            .auto_convert_types(true)
+            .execute(json)
+            .unwrap();
+        let flattened = extract_single(result);
+        let parsed: Value = serde_json::from_str(&flattened).unwrap();
+
+        assert_eq!(parsed["small"], 0.000123);
+        assert_eq!(parsed["large"], 100000.0);
+        assert_eq!(parsed["negative"], -2500.0);
+    }
+
+    #[test]
+    fn test_boolean_conversion() {
+        let json = r#"{"a": "true", "b": "TRUE", "c": "True", "d": "false", "e": "FALSE", "f": "False"}"#;
+        let result = JSONTools::new()
+            .flatten()
+            .auto_convert_types(true)
+            .execute(json)
+            .unwrap();
+        let flattened = extract_single(result);
+        let parsed: Value = serde_json::from_str(&flattened).unwrap();
+
+        assert_eq!(parsed["a"], true);
+        assert_eq!(parsed["b"], true);
+        assert_eq!(parsed["c"], true);
+        assert_eq!(parsed["d"], false);
+        assert_eq!(parsed["e"], false);
+        assert_eq!(parsed["f"], false);
+    }
+
+    #[test]
+    fn test_keep_invalid_strings() {
+        let json = r#"{"name": "John", "code": "ABC123", "maybe": "yes", "invalid": "12.34.56"}"#;
+        let result = JSONTools::new()
+            .flatten()
+            .auto_convert_types(true)
+            .execute(json)
+            .unwrap();
+        let flattened = extract_single(result);
+        let parsed: Value = serde_json::from_str(&flattened).unwrap();
+
+        assert_eq!(parsed["name"], "John");
+        assert_eq!(parsed["code"], "ABC123");
+        assert_eq!(parsed["maybe"], "yes"); // Not a valid boolean
+        assert_eq!(parsed["invalid"], "12.34.56"); // Invalid number
+    }
+
+    #[test]
+    fn test_mixed_conversion() {
+        let json = r#"{"id": "123", "name": "Alice", "price": "$1,234.56", "active": "true", "code": "XYZ"}"#;
+        let result = JSONTools::new()
+            .flatten()
+            .auto_convert_types(true)
+            .execute(json)
+            .unwrap();
+        let flattened = extract_single(result);
+        let parsed: Value = serde_json::from_str(&flattened).unwrap();
+
+        assert_eq!(parsed["id"], 123);
+        assert_eq!(parsed["name"], "Alice");
+        assert_eq!(parsed["price"], 1234.56);
+        assert_eq!(parsed["active"], true);
+        assert_eq!(parsed["code"], "XYZ");
+    }
+
+    #[test]
+    fn test_nested_conversion() {
+        let json = r#"{"user": {"id": "456", "age": "25", "verified": "true"}}"#;
+        let result = JSONTools::new()
+            .flatten()
+            .auto_convert_types(true)
+            .execute(json)
+            .unwrap();
+        let flattened = extract_single(result);
+        let parsed: Value = serde_json::from_str(&flattened).unwrap();
+
+        assert_eq!(parsed["user.id"], 456);
+        assert_eq!(parsed["user.age"], 25);
+        assert_eq!(parsed["user.verified"], true);
+    }
+
+    #[test]
+    fn test_array_conversion() {
+        let json = r#"{"numbers": ["123", "45.6", "true", "invalid"]}"#;
+        let result = JSONTools::new()
+            .flatten()
+            .auto_convert_types(true)
+            .execute(json)
+            .unwrap();
+        let flattened = extract_single(result);
+        let parsed: Value = serde_json::from_str(&flattened).unwrap();
+
+        assert_eq!(parsed["numbers.0"], 123);
+        assert_eq!(parsed["numbers.1"], 45.6);
+        assert_eq!(parsed["numbers.2"], true);
+        assert_eq!(parsed["numbers.3"], "invalid");
+    }
+
+    #[test]
+    fn test_conversion_disabled_by_default() {
+        let json = r#"{"id": "123", "active": "true"}"#;
+        let result = JSONTools::new()
+            .flatten()
+            .execute(json)
+            .unwrap();
+        let flattened = extract_single(result);
+        let parsed: Value = serde_json::from_str(&flattened).unwrap();
+
+        // Should keep as strings when conversion is disabled
+        assert_eq!(parsed["id"], "123");
+        assert_eq!(parsed["active"], "true");
+    }
+
+    #[test]
+    fn test_unflatten_with_conversion() {
+        let json = r#"{"user.id": "789", "user.active": "false"}"#;
+        let result = JSONTools::new()
+            .unflatten()
+            .auto_convert_types(true)
+            .execute(json)
+            .unwrap();
+        let unflattened = extract_single(result);
+        let parsed: Value = serde_json::from_str(&unflattened).unwrap();
+
+        assert_eq!(parsed["user"]["id"], 789);
+        assert_eq!(parsed["user"]["active"], false);
+    }
+
+    #[test]
+    fn test_normal_mode_with_conversion() {
+        let json = r#"{"user": {"id": "999", "enabled": "TRUE"}}"#;
+        let result = JSONTools::new()
+            .normal()
+            .auto_convert_types(true)
+            .execute(json)
+            .unwrap();
+        let processed = extract_single(result);
+        let parsed: Value = serde_json::from_str(&processed).unwrap();
+
+        assert_eq!(parsed["user"]["id"], 999);
+        assert_eq!(parsed["user"]["enabled"], true);
+    }
 }

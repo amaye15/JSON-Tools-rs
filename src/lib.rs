@@ -1103,6 +1103,8 @@ pub struct ProcessingConfig {
     pub collision: CollisionConfig,
     /// Replacement configuration
     pub replacements: ReplacementConfig,
+    /// Automatically convert string values to numbers and booleans
+    pub auto_convert_types: bool,
 }
 
 impl Default for ProcessingConfig {
@@ -1113,6 +1115,7 @@ impl Default for ProcessingConfig {
             filtering: FilteringConfig::default(),
             collision: CollisionConfig::default(),
             replacements: ReplacementConfig::default(),
+            auto_convert_types: false,
         }
     }
 }
@@ -1171,6 +1174,7 @@ impl ProcessingConfig {
                 key_replacements: tools.key_replacements.clone(),
                 value_replacements: tools.value_replacements.clone(),
             },
+            auto_convert_types: tools.auto_convert_types,
         }
     }
 }
@@ -1206,6 +1210,8 @@ pub struct JSONTools {
     lower_case_keys: bool,
     /// Handle key collisions by collecting values into arrays
     handle_key_collision: bool,
+    /// Automatically convert string values to numbers and booleans
+    auto_convert_types: bool,
 }
 
 impl Default for JSONTools {
@@ -1221,6 +1227,7 @@ impl Default for JSONTools {
             separator: ".".to_string(),
             lower_case_keys: false,
             handle_key_collision: false,
+            auto_convert_types: false,
         }
     }
 }
@@ -1405,6 +1412,42 @@ impl JSONTools {
     /// Works for all operations (flatten, unflatten, normal).
     pub fn handle_key_collision(mut self, value: bool) -> Self {
         self.handle_key_collision = value;
+        self
+    }
+
+    /// Enable automatic type conversion from strings to numbers and booleans
+    ///
+    /// When enabled, the library will attempt to convert string values to numbers or booleans:
+    /// - **Numbers**: "123" → 123, "1,234.56" → 1234.56, "$99.99" → 99.99, "1e5" → 100000
+    /// - **Booleans**: "true"/"TRUE"/"True" → true, "false"/"FALSE"/"False" → false
+    ///
+    /// If conversion fails, the original string value is kept. No errors are thrown.
+    ///
+    /// Works for all operations (flatten, unflatten, normal).
+    ///
+    /// # Example
+    /// ```
+    /// use json_tools_rs::{JSONTools, JsonOutput};
+    ///
+    /// let json = r#"{"id": "123", "price": "1,234.56", "active": "true"}"#;
+    /// let result = JSONTools::new()
+    ///     .flatten()
+    ///     .auto_convert_types(true)
+    ///     .execute(json)
+    ///     .unwrap();
+    ///
+    /// match result {
+    ///     JsonOutput::Single(output) => {
+    ///         // Result: {"id": 123, "price": 1234.56, "active": true}
+    ///         assert!(output.contains(r#""id":123"#));
+    ///         assert!(output.contains(r#""price":1234.56"#));
+    ///         assert!(output.contains(r#""active":true"#));
+    ///     }
+    ///     _ => unreachable!(),
+    /// }
+    /// ```
+    pub fn auto_convert_types(mut self, enable: bool) -> Self {
+        self.auto_convert_types = enable;
         self
     }
 
@@ -1675,7 +1718,12 @@ fn process_single_json_for_unflatten(
     config: &ProcessingConfig,
 ) -> Result<String, JsonToolsError> {
     // Parse JSON using optimized SIMD parsing
-    let flattened = parse_json_optimized(json)?;
+    let mut flattened = parse_json_optimized(json)?;
+
+    // Apply type conversion FIRST (before other transformations)
+    if config.auto_convert_types {
+        apply_type_conversion_recursive(&mut flattened);
+    }
 
     // Handle root-level primitives and empty containers
     if let Some(result) = handle_root_level_primitives_unflatten(&flattened, &config.replacements.value_replacements)? {
@@ -2007,7 +2055,12 @@ fn process_single_json(
     config: &ProcessingConfig,
 ) -> Result<String, JsonToolsError> {
     // Parse JSON using optimized SIMD parsing
-    let value = parse_json_optimized(json)?;
+    let mut value = parse_json_optimized(json)?;
+
+    // Apply type conversion FIRST (before other transformations)
+    if config.auto_convert_types {
+        apply_type_conversion_recursive(&mut value);
+    }
 
     // Handle root-level primitives and empty containers
     if let Some(result) = handle_root_level_primitives_flatten(&value, Some(&config.replacements.value_replacements))? {
@@ -2239,6 +2292,11 @@ fn process_single_json_normal(
 ) -> Result<String, JsonToolsError> {
     // Parse JSON using optimized SIMD parsing
     let mut value = parse_json_optimized(json)?;
+
+    // Apply type conversion FIRST (before other transformations)
+    if config.auto_convert_types {
+        apply_type_conversion_recursive(&mut value);
+    }
 
     // Apply value replacements recursively to all strings
     if config.replacements.has_value_replacements() {
@@ -2818,6 +2876,164 @@ fn apply_lowercase_keys_for_unflatten(obj: Map<String, Value>) -> Map<String, Va
     }
 
     new_obj
+}
+
+// ================================================================================================
+// MODULE: Type Conversion Functions
+// ================================================================================================
+
+/// Try to parse a string into a number, handling various formats
+/// Returns None if the string cannot be parsed as a valid number
+///
+/// Supports:
+/// - Basic numbers: "123", "45.67", "-10"
+/// - Scientific notation: "1e5", "1.23e-4"
+/// - Thousands separators: "1,234.56" (US), "1.234,56" (EU), "1 234.56" (FR)
+/// - Currency symbols: "$123.45", "€99.99", "£50.00"
+#[inline]
+fn try_parse_number(s: &str) -> Option<f64> {
+    let trimmed = s.trim();
+
+    // Fast path: try direct parse first (handles basic numbers and scientific notation)
+    if let Ok(num) = fast_float::parse(trimmed) {
+        return Some(num);
+    }
+
+    // Clean common number formats and try again
+    let cleaned = clean_number_string(trimmed);
+    fast_float::parse(&cleaned).ok()
+}
+
+/// Clean a number string by removing common formatting characters
+/// Handles: thousands separators (comma, space, apostrophe), currency symbols
+#[inline]
+fn clean_number_string(s: &str) -> String {
+    // Remove currency symbols from start
+    let without_currency = s
+        .trim_start_matches(&['$', '€', '£', '¥', '₹'][..])
+        .trim();
+
+    // Detect format by looking for decimal separator
+    // If we find both comma and dot, determine which is decimal separator
+    let has_comma = without_currency.contains(',');
+    let has_dot = without_currency.contains('.');
+
+    let cleaned = if has_comma && has_dot {
+        // Both present - determine which is decimal separator
+        let last_comma = without_currency.rfind(',');
+        let last_dot = without_currency.rfind('.');
+
+        match (last_comma, last_dot) {
+            (Some(comma_pos), Some(dot_pos)) => {
+                if dot_pos > comma_pos {
+                    // US format: 1,234.56 - remove commas
+                    without_currency.replace(',', "")
+                } else {
+                    // European format: 1.234,56 - remove dots, replace comma with dot
+                    without_currency.replace('.', "").replace(',', ".")
+                }
+            }
+            _ => without_currency.to_string(),
+        }
+    } else if has_comma {
+        // Only comma - could be thousands separator or decimal separator
+        // Heuristic: if comma is followed by exactly 3 digits and more digits before, it's thousands
+        // Otherwise, treat as decimal separator
+        let comma_count = without_currency.matches(',').count();
+        if comma_count == 1 {
+            // Single comma - likely decimal separator (European format)
+            without_currency.replace(',', ".")
+        } else {
+            // Multiple commas - thousands separators (US format)
+            without_currency.replace(',', "")
+        }
+    } else {
+        without_currency.to_string()
+    };
+
+    // Remove spaces and apostrophes (Swiss/French format)
+    cleaned
+        .replace(' ', "")
+        .replace('\'', "")
+        .trim()
+        .to_string()
+}
+
+/// Try to parse a string into a boolean
+/// Only accepts: "true", "TRUE", "True", "false", "FALSE", "False"
+/// Returns None for any other value
+#[inline]
+fn try_parse_bool(s: &str) -> Option<bool> {
+    match s.trim() {
+        "true" | "TRUE" | "True" => Some(true),
+        "false" | "FALSE" | "False" => Some(false),
+        _ => None,
+    }
+}
+
+/// Convert f64 to JSON Number value
+/// Returns None for NaN or Infinity (invalid JSON numbers)
+/// Converts to integer if the number has no fractional part
+#[inline]
+fn f64_to_json_number(num: f64) -> Option<Value> {
+    // Check if the number is an integer (no fractional part)
+    if num.is_finite() && num.fract() == 0.0 {
+        // Try to convert to i64 first for better representation
+        if num >= i64::MIN as f64 && num <= i64::MAX as f64 {
+            return Some(Value::Number(serde_json::Number::from(num as i64)));
+        }
+        // If it's too large for i64, try u64
+        if num >= 0.0 && num <= u64::MAX as f64 {
+            return Some(Value::Number(serde_json::Number::from(num as u64)));
+        }
+    }
+
+    // Otherwise, use f64
+    serde_json::Number::from_f64(num).map(Value::Number)
+}
+
+/// Apply automatic type conversion to a single value
+/// Tries number conversion first, then boolean conversion
+/// Keeps original string if no conversion succeeds
+#[inline]
+fn apply_type_conversion_to_value(value: &mut Value) {
+    if let Value::String(s) = value {
+        // Try number conversion first (more specific)
+        if let Some(num) = try_parse_number(s) {
+            if let Some(num_value) = f64_to_json_number(num) {
+                *value = num_value;
+                return;
+            }
+        }
+
+        // Try boolean conversion
+        if let Some(b) = try_parse_bool(s) {
+            *value = Value::Bool(b);
+            return;
+        }
+
+        // Keep as string if no conversion succeeded
+    }
+}
+
+/// Recursively apply type conversion to all string values in a JSON structure
+fn apply_type_conversion_recursive(value: &mut Value) {
+    match value {
+        Value::Object(map) => {
+            for v in map.values_mut() {
+                apply_type_conversion_recursive(v);
+            }
+        }
+        Value::Array(arr) => {
+            for v in arr.iter_mut() {
+                apply_type_conversion_recursive(v);
+            }
+        }
+        Value::String(_) => {
+            apply_type_conversion_to_value(value);
+        }
+        _ => {} // Leave other types unchanged
+    }
 }
 
 // ================================================================================================

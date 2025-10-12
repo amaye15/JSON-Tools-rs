@@ -2021,3 +2021,283 @@ class TestJsonUnflattenerRoundtrip:
 
         # Should be equivalent to original
         assert restored == original
+
+
+class TestTypeConversion:
+    """Test automatic type conversion from strings to numbers and booleans"""
+
+    def test_basic_number_conversion_dict(self):
+        """Test basic number conversion with dict input"""
+        tools = json_tools_rs.JSONTools().flatten().auto_convert_types(True)
+        input_data = {"id": "123", "price": "45.67", "count": "-10"}
+        result = tools.execute(input_data)
+
+        assert isinstance(result, dict)
+        assert result["id"] == 123
+        assert result["price"] == 45.67
+        assert result["count"] == -10
+
+    def test_basic_number_conversion_str(self):
+        """Test basic number conversion with JSON string input"""
+        tools = json_tools_rs.JSONTools().flatten().auto_convert_types(True)
+        input_json = '{"id": "123", "price": "45.67", "count": "-10"}'
+        result = tools.execute(input_json)
+
+        assert isinstance(result, str)
+        parsed = json.loads(result)
+        assert parsed["id"] == 123
+        assert parsed["price"] == 45.67
+        assert parsed["count"] == -10
+
+    def test_thousands_separator_us_format(self):
+        """Test US format thousands separators (1,234.56)"""
+        tools = json_tools_rs.JSONTools().flatten().auto_convert_types(True)
+        input_data = {"amount": "1,234.56", "total": "1,000,000"}
+        result = tools.execute(input_data)
+
+        assert result["amount"] == 1234.56
+        assert result["total"] == 1000000
+
+    def test_thousands_separator_european_format(self):
+        """Test European format thousands separators (1.234,56)"""
+        tools = json_tools_rs.JSONTools().flatten().auto_convert_types(True)
+        input_data = {"amount": "1.234,56", "total": "1.000.000,00"}
+        result = tools.execute(input_data)
+
+        assert result["amount"] == 1234.56
+        assert result["total"] == 1000000.0
+
+    def test_currency_symbols(self):
+        """Test currency symbol removal and conversion"""
+        tools = json_tools_rs.JSONTools().flatten().auto_convert_types(True)
+        input_data = {
+            "usd": "$123.45",
+            "eur": "€99.99",
+            "gbp": "£50.00",
+            "yen": "¥1000"
+        }
+        result = tools.execute(input_data)
+
+        assert result["usd"] == 123.45
+        assert result["eur"] == 99.99
+        assert result["gbp"] == 50.0
+        assert result["yen"] == 1000
+
+    def test_scientific_notation(self):
+        """Test scientific notation conversion"""
+        tools = json_tools_rs.JSONTools().flatten().auto_convert_types(True)
+        input_data = {
+            "small": "1.23e-4",
+            "large": "1e5",
+            "negative": "-2.5e3"
+        }
+        result = tools.execute(input_data)
+
+        assert result["small"] == 0.000123
+        assert result["large"] == 100000.0
+        assert result["negative"] == -2500.0
+
+    def test_boolean_conversion(self):
+        """Test boolean conversion (only exact variants)"""
+        tools = json_tools_rs.JSONTools().flatten().auto_convert_types(True)
+        input_data = {
+            "a": "true",
+            "b": "TRUE",
+            "c": "True",
+            "d": "false",
+            "e": "FALSE",
+            "f": "False"
+        }
+        result = tools.execute(input_data)
+
+        assert result["a"] is True
+        assert result["b"] is True
+        assert result["c"] is True
+        assert result["d"] is False
+        assert result["e"] is False
+        assert result["f"] is False
+
+    def test_keep_invalid_strings(self):
+        """Test that invalid strings are kept as-is"""
+        tools = json_tools_rs.JSONTools().flatten().auto_convert_types(True)
+        input_data = {
+            "name": "John",
+            "code": "ABC123",
+            "maybe": "yes",  # Not a valid boolean
+            "invalid": "12.34.56"  # Invalid number
+        }
+        result = tools.execute(input_data)
+
+        assert result["name"] == "John"
+        assert result["code"] == "ABC123"
+        assert result["maybe"] == "yes"
+        assert result["invalid"] == "12.34.56"
+
+    def test_mixed_conversion(self):
+        """Test mixed conversion with valid and invalid strings"""
+        tools = json_tools_rs.JSONTools().flatten().auto_convert_types(True)
+        input_data = {
+            "id": "123",
+            "name": "Alice",
+            "price": "$1,234.56",
+            "active": "true",
+            "code": "XYZ"
+        }
+        result = tools.execute(input_data)
+
+        assert result["id"] == 123
+        assert result["name"] == "Alice"
+        assert result["price"] == 1234.56
+        assert result["active"] is True
+        assert result["code"] == "XYZ"
+
+    def test_nested_conversion(self):
+        """Test type conversion in nested structures"""
+        tools = json_tools_rs.JSONTools().flatten().auto_convert_types(True)
+        input_data = {
+            "user": {
+                "id": "456",
+                "age": "25",
+                "verified": "true"
+            }
+        }
+        result = tools.execute(input_data)
+
+        assert result["user.id"] == 456
+        assert result["user.age"] == 25
+        assert result["user.verified"] is True
+
+    def test_array_conversion(self):
+        """Test type conversion in arrays"""
+        tools = json_tools_rs.JSONTools().flatten().auto_convert_types(True)
+        input_data = {"numbers": ["123", "45.6", "true", "invalid"]}
+        result = tools.execute(input_data)
+
+        assert result["numbers.0"] == 123
+        assert result["numbers.1"] == 45.6
+        assert result["numbers.2"] is True
+        assert result["numbers.3"] == "invalid"
+
+    def test_conversion_disabled_by_default(self):
+        """Test that conversion is disabled by default"""
+        tools = json_tools_rs.JSONTools().flatten()
+        input_data = {"id": "123", "active": "true"}
+        result = tools.execute(input_data)
+
+        # Should keep as strings when conversion is disabled
+        assert result["id"] == "123"
+        assert result["active"] == "true"
+
+    def test_unflatten_with_conversion(self):
+        """Test type conversion with unflatten operation"""
+        tools = json_tools_rs.JSONTools().unflatten().auto_convert_types(True)
+        input_data = {
+            "user.id": "789",
+            "user.active": "false"
+        }
+        result = tools.execute(input_data)
+
+        assert result["user"]["id"] == 789
+        assert result["user"]["active"] is False
+
+    def test_normal_mode_with_conversion(self):
+        """Test type conversion with normal mode (no flatten/unflatten)"""
+        tools = json_tools_rs.JSONTools().normal().auto_convert_types(True)
+        input_data = {
+            "user": {
+                "id": "999",
+                "enabled": "TRUE"
+            }
+        }
+        result = tools.execute(input_data)
+
+        assert result["user"]["id"] == 999
+        assert result["user"]["enabled"] is True
+
+    def test_conversion_with_other_transformations(self):
+        """Test type conversion combined with other transformations"""
+        tools = (json_tools_rs.JSONTools()
+                .flatten()
+                .auto_convert_types(True)
+                .lowercase_keys(True)
+                .remove_empty_strings(True))
+
+        input_data = {
+            "User_ID": "123",
+            "User_Active": "true",
+            "User_Name": "Alice",
+            "Empty": ""
+        }
+        result = tools.execute(input_data)
+
+        assert result["user_id"] == 123
+        assert result["user_active"] is True
+        assert result["user_name"] == "Alice"
+        assert "empty" not in result  # Removed empty string
+
+    def test_batch_processing_with_conversion(self):
+        """Test type conversion with batch processing"""
+        tools = json_tools_rs.JSONTools().flatten().auto_convert_types(True)
+        input_batch = [
+            {"id": "101", "price": "$99.99"},
+            {"id": "102", "price": "$149.00"}
+        ]
+        result = tools.execute(input_batch)
+
+        assert isinstance(result, list)
+        assert len(result) == 2
+        assert result[0]["id"] == 101
+        assert result[0]["price"] == 99.99
+        assert result[1]["id"] == 102
+        assert result[1]["price"] == 149.0
+
+    def test_complex_real_world_example(self):
+        """Test complex real-world scenario with type conversion"""
+        tools = json_tools_rs.JSONTools().flatten().auto_convert_types(True)
+        input_data = {
+            "order": {
+                "id": "ORD-12345",
+                "total": "$1,234.56",
+                "items": [
+                    {
+                        "id": "101",
+                        "quantity": "5",
+                        "price": "€99.99",
+                        "available": "true"
+                    },
+                    {
+                        "id": "102",
+                        "quantity": "2",
+                        "price": "$49.50",
+                        "available": "FALSE"
+                    }
+                ],
+                "customer": {
+                    "id": "CUST-789",
+                    "verified": "True",
+                    "balance": "1,500.00"
+                }
+            }
+        }
+        result = tools.execute(input_data)
+
+        # Check order fields
+        assert result["order.id"] == "ORD-12345"  # Kept as string (not a number)
+        assert result["order.total"] == 1234.56
+
+        # Check item 0
+        assert result["order.items.0.id"] == 101
+        assert result["order.items.0.quantity"] == 5
+        assert result["order.items.0.price"] == 99.99
+        assert result["order.items.0.available"] is True
+
+        # Check item 1
+        assert result["order.items.1.id"] == 102
+        assert result["order.items.1.quantity"] == 2
+        assert result["order.items.1.price"] == 49.50
+        assert result["order.items.1.available"] is False
+
+        # Check customer
+        assert result["order.customer.id"] == "CUST-789"  # Kept as string
+        assert result["order.customer.verified"] is True
+        assert result["order.customer.balance"] == 1500.0

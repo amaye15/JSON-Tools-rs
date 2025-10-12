@@ -187,6 +187,13 @@ impl PyJSONTools {
         }
     }
 
+    /// Configure for normal mode (apply transformations without flattening/unflattening)
+    pub fn normal(slf: PyRef<'_, Self>) -> PyJSONTools {
+        PyJSONTools {
+            inner: slf.inner.clone().normal(),
+        }
+    }
+
     /// Set the separator for nested keys (default: ".")
     pub fn separator(slf: PyRef<'_, Self>, separator: String) -> PyJSONTools {
         PyJSONTools {
@@ -266,6 +273,32 @@ impl PyJSONTools {
     pub fn handle_key_collision(slf: PyRef<'_, Self>, value: bool) -> PyJSONTools {
         PyJSONTools {
             inner: slf.inner.clone().handle_key_collision(value),
+        }
+    }
+
+    /// Enable automatic type conversion from strings to numbers and booleans
+    ///
+    /// When enabled, the library will attempt to convert string values:
+    /// - Numbers: "123" → 123, "1,234.56" → 1234.56, "$99.99" → 99.99
+    /// - Booleans: "true"/"TRUE"/"True" → true, "false"/"FALSE"/"False" → false
+    ///
+    /// If conversion fails, the original string value is kept.
+    ///
+    /// # Arguments
+    /// * `enable` - Whether to enable automatic type conversion
+    ///
+    /// # Returns
+    /// Self for method chaining
+    ///
+    /// # Example
+    /// ```python
+    /// import json_tools_rs as jt
+    /// result = jt.JSONTools().flatten().auto_convert_types(True).execute({"id": "123", "active": "true"})
+    /// print(result)  # {'id': 123, 'active': True}
+    /// ```
+    pub fn auto_convert_types(slf: PyRef<'_, Self>, enable: bool) -> PyJSONTools {
+        PyJSONTools {
+            inner: slf.inner.clone().auto_convert_types(enable),
         }
     }
 

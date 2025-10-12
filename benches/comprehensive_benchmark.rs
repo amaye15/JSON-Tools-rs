@@ -246,6 +246,113 @@ fn bench_batch_processing(c: &mut Criterion) {
     group.finish();
 }
 
+/// Benchmark type conversion feature
+fn bench_type_conversion(c: &mut Criterion) {
+    let mut group = c.benchmark_group("type_conversion");
+    group.measurement_time(Duration::from_secs(10));
+
+    // Test data with various string types that can be converted
+    let json_with_convertible_strings = r#"{
+        "user": {
+            "id": "12345",
+            "age": "30",
+            "balance": "$1,234.56",
+            "score": "98.5",
+            "count": "1,000,000",
+            "active": "true",
+            "verified": "FALSE",
+            "premium": "True",
+            "ratio": "1.23e-4",
+            "large": "1e6",
+            "name": "John Doe",
+            "email": "john@example.com",
+            "code": "ABC123"
+        },
+        "products": [
+            {
+                "id": "101",
+                "price": "€99.99",
+                "quantity": "50",
+                "available": "true",
+                "name": "Widget"
+            },
+            {
+                "id": "102",
+                "price": "$1,499.00",
+                "quantity": "25",
+                "available": "false",
+                "name": "Gadget"
+            }
+        ],
+        "metadata": {
+            "total": "1,234,567",
+            "average": "456.78",
+            "enabled": "TRUE"
+        }
+    }"#;
+
+    // Benchmark with type conversion enabled
+    group.bench_function("with_conversion", |b| {
+        b.iter(|| {
+            let result = JSONTools::new()
+                .flatten()
+                .auto_convert_types(true)
+                .execute(black_box(json_with_convertible_strings))
+                .expect("Type conversion flatten failed");
+            black_box(result);
+        });
+    });
+
+    // Benchmark without type conversion (baseline)
+    group.bench_function("without_conversion", |b| {
+        b.iter(|| {
+            let result = JSONTools::new()
+                .flatten()
+                .execute(black_box(json_with_convertible_strings))
+                .expect("Flatten failed");
+            black_box(result);
+        });
+    });
+
+    // Benchmark type conversion with comprehensive transformations
+    group.bench_function("with_conversion_and_transformations", |b| {
+        b.iter(|| {
+            let result = JSONTools::new()
+                .flatten()
+                .auto_convert_types(true)
+                .separator("::")
+                .lowercase_keys(true)
+                .remove_empty_strings(true)
+                .remove_nulls(true)
+                .execute(black_box(json_with_convertible_strings))
+                .expect("Comprehensive with conversion failed");
+            black_box(result);
+        });
+    });
+
+    // Benchmark unflatten with type conversion
+    let flattened_json = r#"{
+        "user.id": "789",
+        "user.age": "35",
+        "user.balance": "$5,678.90",
+        "user.active": "true",
+        "user.name": "Jane Smith"
+    }"#;
+
+    group.bench_function("unflatten_with_conversion", |b| {
+        b.iter(|| {
+            let result = JSONTools::new()
+                .unflatten()
+                .auto_convert_types(true)
+                .execute(black_box(flattened_json))
+                .expect("Unflatten with conversion failed");
+            black_box(result);
+        });
+    });
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_flatten_basic,
@@ -253,7 +360,8 @@ criterion_group!(
     bench_flatten_collision_avoidance,
     bench_roundtrip_basic,
     bench_roundtrip_comprehensive,
-    bench_batch_processing
+    bench_batch_processing,
+    bench_type_conversion
 );
 
 criterion_main!(benches);
