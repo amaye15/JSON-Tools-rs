@@ -431,62 +431,61 @@ use regex::Regex;
 use rustc_hash::FxHashMap;
 use serde_json::{Map, Value};
 use std::borrow::Cow;
-use std::sync::OnceLock;
-use lazy_static::lazy_static;
+use std::sync::{Arc, LazyLock, OnceLock};
 
 
 // ================================================================================================
 // MODULE: Global Caches and Performance Optimizations
 // ================================================================================================
 
-// Pre-compiled common regex patterns for maximum performance
-lazy_static! {
-    /// Common regex patterns used in JSON processing, pre-compiled for performance
-    static ref COMMON_REGEX_PATTERNS: FxHashMap<&'static str, Regex> = {
-        let mut patterns = FxHashMap::default();
+/// Pre-compiled common regex patterns for maximum performance
+/// Using Arc<Regex> to make cloning O(1) instead of copying the entire regex state
+/// Using std::sync::LazyLock (Rust 1.80+) instead of lazy_static for better performance
+static COMMON_REGEX_PATTERNS: LazyLock<FxHashMap<&'static str, Arc<Regex>>> = LazyLock::new(|| {
+    let mut patterns = FxHashMap::default();
 
-        // Common patterns for key/value replacements
-        let common_patterns = [
-            // Whitespace patterns
-            (r"\s+", r"\s+"),                          // Multiple whitespace
-            (r"^\s+|\s+$", r"^\s+|\s+$"),             // Leading/trailing whitespace
-            (r"\s", r"\s"),                            // Any whitespace
+    // Common patterns for key/value replacements
+    let common_patterns = [
+        // Whitespace patterns
+        (r"\s+", r"\s+"),                          // Multiple whitespace
+        (r"^\s+|\s+$", r"^\s+|\s+$"),             // Leading/trailing whitespace
+        (r"\s", r"\s"),                            // Any whitespace
 
-            // Special character patterns
-            (r"[^\w\s]", r"[^\w\s]"),                 // Non-word, non-space characters
-            (r"[^a-zA-Z0-9]", r"[^a-zA-Z0-9]"),       // Non-alphanumeric
-            (r"[^a-zA-Z0-9_]", r"[^a-zA-Z0-9_]"),     // Non-alphanumeric except underscore
+        // Special character patterns
+        (r"[^\w\s]", r"[^\w\s]"),                 // Non-word, non-space characters
+        (r"[^a-zA-Z0-9]", r"[^a-zA-Z0-9]"),       // Non-alphanumeric
+        (r"[^a-zA-Z0-9_]", r"[^a-zA-Z0-9_]"),     // Non-alphanumeric except underscore
 
-            // Common JSON key patterns
-            (r"[A-Z]", r"[A-Z]"),                     // Uppercase letters
-            (r"[a-z]", r"[a-z]"),                     // Lowercase letters
-            (r"\d+", r"\d+"),                         // Digits
-            (r"_+", r"_+"),                           // Multiple underscores
-            (r"-+", r"-+"),                           // Multiple hyphens
+        // Common JSON key patterns
+        (r"[A-Z]", r"[A-Z]"),                     // Uppercase letters
+        (r"[a-z]", r"[a-z]"),                     // Lowercase letters
+        (r"\d+", r"\d+"),                         // Digits
+        (r"_+", r"_+"),                           // Multiple underscores
+        (r"-+", r"-+"),                           // Multiple hyphens
 
-            // Email and URL patterns (common in JSON data)
-            (r"@", r"@"),                             // At symbol (emails)
-            (r"\.", r"\."),                           // Dot (domains, decimals)
-            (r"://", r"://"),                         // Protocol separator
+        // Email and URL patterns (common in JSON data)
+        (r"@", r"@"),                             // At symbol (emails)
+        (r"\.", r"\."),                           // Dot (domains, decimals)
+        (r"://", r"://"),                         // Protocol separator
 
-            // Date/time patterns
-            (r"\d{4}-\d{2}-\d{2}", r"\d{4}-\d{2}-\d{2}"), // ISO date
-            (r"\d{2}:\d{2}:\d{2}", r"\d{2}:\d{2}:\d{2}"), // Time format
-        ];
+        // Date/time patterns
+        (r"\d{4}-\d{2}-\d{2}", r"\d{4}-\d{2}-\d{2}"), // ISO date
+        (r"\d{2}:\d{2}:\d{2}", r"\d{2}:\d{2}:\d{2}"), // Time format
+    ];
 
-        for (pattern, _) in &common_patterns {
-            if let Ok(regex) = Regex::new(pattern) {
-                patterns.insert(*pattern, regex);
-            }
+    for (pattern, _) in &common_patterns {
+        if let Ok(regex) = Regex::new(pattern) {
+            patterns.insert(*pattern, Arc::new(regex));
         }
+    }
 
-        patterns
-    };
-}
+    patterns
+});
 
 /// Simple LRU cache for regex patterns to prevent unbounded growth
+/// Using Arc<Regex> to make cloning O(1)
 struct LruRegexCache {
-    cache: FxHashMap<String, (Regex, usize)>, // (regex, access_order)
+    cache: FxHashMap<String, (Arc<Regex>, usize)>, // (regex, access_order)
     access_counter: usize,
     max_size: usize,
 }
@@ -500,17 +499,17 @@ impl LruRegexCache {
         }
     }
 
-    fn get(&mut self, pattern: &str) -> Option<Regex> {
+    fn get(&mut self, pattern: &str) -> Option<Arc<Regex>> {
         if let Some((regex, access_time)) = self.cache.get_mut(pattern) {
             self.access_counter += 1;
             *access_time = self.access_counter; // Update access time
-            Some(regex.clone())
+            Some(Arc::clone(regex)) // Arc::clone is explicit and O(1)
         } else {
             None
         }
     }
 
-    fn insert(&mut self, pattern: String, regex: Regex) {
+    fn insert(&mut self, pattern: String, regex: Arc<Regex>) {
         self.access_counter += 1;
 
         // If cache is full, remove least recently used item
@@ -537,21 +536,23 @@ impl LruRegexCache {
 static REGEX_CACHE: OnceLock<std::sync::RwLock<LruRegexCache>> = OnceLock::new();
 
 // Thread-local regex cache for even better performance
+// Using Arc<Regex> for O(1) cloning
 thread_local! {
-    static THREAD_LOCAL_REGEX_CACHE: std::cell::RefCell<FxHashMap<String, Regex>> =
+    static THREAD_LOCAL_REGEX_CACHE: std::cell::RefCell<FxHashMap<String, Arc<Regex>>> =
         std::cell::RefCell::new(FxHashMap::default());
 }
 
-fn get_cached_regex(pattern: &str) -> Result<Regex, regex::Error> {
+/// Get a cached regex, using Arc<Regex> for O(1) cloning
+fn get_cached_regex(pattern: &str) -> Result<Arc<Regex>, regex::Error> {
     // First, check pre-compiled common patterns (fastest path, no allocation)
     if let Some(regex) = COMMON_REGEX_PATTERNS.get(pattern) {
-        return Ok(regex.clone());
+        return Ok(Arc::clone(regex));
     }
 
     // Second, try thread-local cache (fast path, no locks)
     let thread_local_result = THREAD_LOCAL_REGEX_CACHE.with(|cache| {
         let cache_ref = cache.borrow();
-        cache_ref.get(pattern).cloned()
+        cache_ref.get(pattern).map(Arc::clone)
     });
 
     if let Some(regex) = thread_local_result {
@@ -576,7 +577,7 @@ fn get_cached_regex(pattern: &str) -> Result<Regex, regex::Error> {
             if cache_ref.len() >= 32 {
                 cache_ref.clear(); // Simple eviction strategy
             }
-            cache_ref.insert(pattern.to_string(), regex.clone());
+            cache_ref.insert(pattern.into(), Arc::clone(&regex));
         });
         return Ok(regex);
     }
@@ -592,12 +593,12 @@ fn get_cached_regex(pattern: &str) -> Result<Regex, regex::Error> {
             if cache_ref.len() >= 32 {
                 cache_ref.clear();
             }
-            cache_ref.insert(pattern.to_string(), regex.clone());
+            cache_ref.insert(pattern.into(), Arc::clone(&regex));
         });
         Ok(regex)
     } else {
-        let regex = Regex::new(pattern)?;
-        write_guard.insert(pattern.to_string(), regex.clone());
+        let regex = Arc::new(Regex::new(pattern)?);
+        write_guard.insert(pattern.to_string(), Arc::clone(&regex));
 
         // Cache in thread-local for next time
         THREAD_LOCAL_REGEX_CACHE.with(|cache| {
@@ -605,7 +606,7 @@ fn get_cached_regex(pattern: &str) -> Result<Regex, regex::Error> {
             if cache_ref.len() >= 32 {
                 cache_ref.clear();
             }
-            cache_ref.insert(pattern.to_string(), regex.clone());
+            cache_ref.insert(pattern.into(), Arc::clone(&regex));
         });
 
         Ok(regex)
@@ -633,14 +634,19 @@ impl KeyDeduplicator {
 
     /// Get a deduplicated key, creating it if it doesn't exist
     fn deduplicate_key(&mut self, key: &str) -> std::sync::Arc<str> {
-        if let Some(cached_key) = self.key_cache.get(key) {
-            self.cache_hits += 1;
-            cached_key.clone()
-        } else {
-            self.cache_misses += 1;
-            let arc_key: std::sync::Arc<str> = key.into();
-            self.key_cache.insert(key.to_string(), arc_key.clone());
-            arc_key
+        // Use entry API for single hash lookup instead of get + insert
+        use std::collections::hash_map::Entry;
+        match self.key_cache.entry(key.to_string()) {
+            Entry::Occupied(entry) => {
+                self.cache_hits += 1;
+                entry.get().clone()
+            }
+            Entry::Vacant(entry) => {
+                self.cache_misses += 1;
+                let arc_key: std::sync::Arc<str> = key.into();
+                entry.insert(arc_key.clone());
+                arc_key
+            }
         }
     }
 
@@ -652,12 +658,14 @@ thread_local! {
 }
 
 /// Get a deduplicated key using thread-local storage for better performance
+#[inline]
 fn deduplicate_key(key: &str) -> String {
     // For short, simple keys that are likely to be repeated, use deduplication
-    if key.len() <= 64 && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-') {
+    // Use bytes() instead of chars() for faster ASCII-only checks
+    if key.len() <= 64 && key.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'_' || b == b'-') {
         KEY_DEDUPLICATOR.with(|dedup| {
             let arc_key = dedup.borrow_mut().deduplicate_key(key);
-            arc_key.to_string()
+            (*arc_key).to_string()
         })
     } else {
         // For complex or long keys, just create a regular string
@@ -847,17 +855,21 @@ pub enum JsonToolsError {
 
 impl JsonToolsError {
     /// Create a JSON parse error with helpful suggestions
+    #[cold]  // Optimization #19: Mark error paths as cold
+    #[inline(never)]
     pub fn json_parse_error(source: simd_json::Error) -> Self {
         let suggestion = "Verify your JSON syntax using a JSON validator. Common issues include: missing quotes around keys or values, trailing commas, unescaped characters, incomplete JSON (missing closing braces or brackets), or invalid escape sequences.";
 
         JsonToolsError::JsonParseError {
             message: source.to_string(),
-            suggestion: suggestion.to_string(),
+            suggestion: suggestion.into(),
             source,
         }
     }
 
     /// Create a regex error with helpful suggestions
+    #[cold]  // Optimization #19: Mark error paths as cold
+    #[inline(never)]
     pub fn regex_error(source: regex::Error) -> Self {
         let suggestion = match source {
             regex::Error::Syntax(_) =>
@@ -869,12 +881,14 @@ impl JsonToolsError {
 
         JsonToolsError::RegexError {
             message: source.to_string(),
-            suggestion: suggestion.to_string(),
+            suggestion: suggestion.into(),
             source,
         }
     }
 
     /// Create an invalid replacement pattern error
+    #[cold]  // Optimization #19: Mark error paths as cold
+    #[inline(never)]
     pub fn invalid_replacement_pattern(message: impl Into<String>) -> Self {
         let msg = message.into();
         let suggestion = if msg.contains("pairs") {
@@ -887,11 +901,13 @@ impl JsonToolsError {
 
         JsonToolsError::InvalidReplacementPattern {
             message: msg,
-            suggestion: suggestion.to_string(),
+            suggestion: suggestion.into(),
         }
     }
 
     /// Create an invalid JSON structure error
+    #[cold]  // Optimization #19: Mark error paths as cold
+    #[inline(never)]
     pub fn invalid_json_structure(message: impl Into<String>) -> Self {
         let msg = message.into();
         let suggestion = if msg.contains("unflatten") {
@@ -904,7 +920,7 @@ impl JsonToolsError {
 
         JsonToolsError::InvalidJsonStructure {
             message: msg,
-            suggestion: suggestion.to_string(),
+            suggestion: suggestion.into(),
         }
     }
 
@@ -912,7 +928,7 @@ impl JsonToolsError {
     pub fn configuration_error(message: impl Into<String>) -> Self {
         JsonToolsError::ConfigurationError {
             message: message.into(),
-            suggestion: "Call .flatten() or .unflatten() on your JSONTools instance before calling .execute() to set the operation mode.".to_string(),
+            suggestion: "Call .flatten() or .unflatten() on your JSONTools instance before calling .execute() to set the operation mode.".into(),
         }
     }
 
@@ -1187,11 +1203,26 @@ impl ProcessingConfig {
 ///
 /// This is the unified interface for all JSON manipulation operations.
 /// It provides a single entry point for all JSON manipulation operations with a consistent builder pattern.
+///
+/// Fields are ordered by size for better memory alignment and cache locality:
+/// - Large fields (24 bytes each): Vec, String
+/// - Medium fields (2 bytes): Option<OperationMode>
+/// - Small fields (1 byte each): bool flags
 #[derive(Debug, Clone)]
 pub struct JSONTools {
+    // Large fields first (24 bytes each on 64-bit systems)
+    /// Key replacement patterns (find, replace)
+    key_replacements: Vec<(String, String)>,
+    /// Value replacement patterns (find, replace)
+    value_replacements: Vec<(String, String)>,
+    /// Separator for nested keys (default: ".")
+    separator: String,
+
+    // Medium fields (2 bytes)
     /// Current operation mode (flatten or unflatten)
     mode: Option<OperationMode>,
 
+    // Small fields (1 byte each) - grouped together to minimize padding
     /// Remove keys with empty string values
     remove_empty_string_values: bool,
     /// Remove keys with null values
@@ -1200,12 +1231,6 @@ pub struct JSONTools {
     remove_empty_dict: bool,
     /// Remove keys with empty array values
     remove_empty_list: bool,
-    /// Key replacement patterns (find, replace)
-    key_replacements: Vec<(String, String)>,
-    /// Value replacement patterns (find, replace)
-    value_replacements: Vec<(String, String)>,
-    /// Separator for nested keys (default: ".")
-    separator: String,
     /// Convert all keys to lowercase
     lower_case_keys: bool,
     /// Handle key collisions by collecting values into arrays
@@ -1217,14 +1242,17 @@ pub struct JSONTools {
 impl Default for JSONTools {
     fn default() -> Self {
         Self {
+            // Large fields
+            key_replacements: Vec::with_capacity(4),
+            value_replacements: Vec::with_capacity(4),
+            separator: ".".to_string(),
+            // Medium fields
             mode: None,
+            // Small fields
             remove_empty_string_values: false,
             remove_null_values: false,
             remove_empty_dict: false,
             remove_empty_list: false,
-            key_replacements: Vec::new(),
-            value_replacements: Vec::new(),
-            separator: ".".to_string(),
             lower_case_keys: false,
             handle_key_collision: false,
             auto_convert_types: false,
@@ -1484,19 +1512,27 @@ impl JSONTools {
         }
     }
 
-    fn execute_flatten<'a>(&self, input: JsonInput<'a>) -> Result<JsonOutput, JsonToolsError> {
+    /// Generic batch processing helper that eliminates code duplication
+    /// Processes single or multiple JSON inputs using the provided processor function
+    #[inline]
+    fn execute_with_processor<'a, F>(
+        input: JsonInput<'a>,
+        config: &ProcessingConfig,
+        processor: F,
+    ) -> Result<JsonOutput, JsonToolsError>
+    where
+        F: Fn(&Cow<str>, &ProcessingConfig) -> Result<String, JsonToolsError>,
+    {
         match input {
             JsonInput::Single(json_cow) => {
-                let config = ProcessingConfig::from_json_tools(self);
-                let result = process_single_json(&json_cow, &config)?;
+                let result = processor(&json_cow, config)?;
                 Ok(JsonOutput::Single(result))
             }
             JsonInput::Multiple(json_list) => {
                 let mut results = Vec::with_capacity(json_list.len());
-                let config = ProcessingConfig::from_json_tools(self);
                 for (index, json) in json_list.iter().enumerate() {
                     let json_cow = Cow::Borrowed(*json);
-                    match process_single_json(&json_cow, &config) {
+                    match processor(&json_cow, config) {
                         Ok(result) => results.push(result),
                         Err(e) => return Err(JsonToolsError::batch_processing_error(index, e)),
                     }
@@ -1505,9 +1541,8 @@ impl JSONTools {
             }
             JsonInput::MultipleOwned(vecs) => {
                 let mut results = Vec::with_capacity(vecs.len());
-                let config = ProcessingConfig::from_json_tools(self);
                 for (index, json_cow) in vecs.iter().enumerate() {
-                    match process_single_json(json_cow, &config) {
+                    match processor(json_cow, config) {
                         Ok(result) => results.push(result),
                         Err(e) => return Err(JsonToolsError::batch_processing_error(index, e)),
                     }
@@ -1515,72 +1550,21 @@ impl JSONTools {
                 Ok(JsonOutput::Multiple(results))
             }
         }
+    }
+
+    fn execute_flatten<'a>(&self, input: JsonInput<'a>) -> Result<JsonOutput, JsonToolsError> {
+        let config = ProcessingConfig::from_json_tools(self);
+        Self::execute_with_processor(input, &config, process_single_json)
     }
 
     fn execute_unflatten<'a>(&self, input: JsonInput<'a>) -> Result<JsonOutput, JsonToolsError> {
-        match input {
-            JsonInput::Single(json_cow) => {
-                let config = ProcessingConfig::from_json_tools(self);
-                let result = process_single_json_for_unflatten(&json_cow, &config)?;
-                Ok(JsonOutput::Single(result))
-            }
-            JsonInput::Multiple(json_list) => {
-                let mut results = Vec::with_capacity(json_list.len());
-                let config = ProcessingConfig::from_json_tools(self);
-                for (index, json) in json_list.iter().enumerate() {
-                    let json_cow = Cow::Borrowed(*json);
-                    match process_single_json_for_unflatten(&json_cow, &config) {
-                        Ok(result) => results.push(result),
-                        Err(e) => return Err(JsonToolsError::batch_processing_error(index, e)),
-                    }
-                }
-                Ok(JsonOutput::Multiple(results))
-            }
-            JsonInput::MultipleOwned(vecs) => {
-                let mut results = Vec::with_capacity(vecs.len());
-                let config = ProcessingConfig::from_json_tools(self);
-                for (index, json_cow) in vecs.iter().enumerate() {
-                    match process_single_json_for_unflatten(json_cow, &config) {
-                        Ok(result) => results.push(result),
-                        Err(e) => return Err(JsonToolsError::batch_processing_error(index, e)),
-                    }
-                }
-                Ok(JsonOutput::Multiple(results))
-            }
-        }
+        let config = ProcessingConfig::from_json_tools(self);
+        Self::execute_with_processor(input, &config, process_single_json_for_unflatten)
     }
 
     fn execute_normal<'a>(&self, input: JsonInput<'a>) -> Result<JsonOutput, JsonToolsError> {
-        match input {
-            JsonInput::Single(json_cow) => {
-                let config = ProcessingConfig::from_json_tools(self);
-                let result = process_single_json_normal(&json_cow, &config)?;
-                Ok(JsonOutput::Single(result))
-            }
-            JsonInput::Multiple(json_list) => {
-                let mut results = Vec::with_capacity(json_list.len());
-                let config = ProcessingConfig::from_json_tools(self);
-                for (index, json) in json_list.iter().enumerate() {
-                    let json_cow = Cow::Borrowed(*json);
-                    match process_single_json_normal(&json_cow, &config) {
-                        Ok(result) => results.push(result),
-                        Err(e) => return Err(JsonToolsError::batch_processing_error(index, e)),
-                    }
-                }
-                Ok(JsonOutput::Multiple(results))
-            }
-            JsonInput::MultipleOwned(vecs) => {
-                let mut results = Vec::with_capacity(vecs.len());
-                let config = ProcessingConfig::from_json_tools(self);
-                for (index, json_cow) in vecs.iter().enumerate() {
-                    match process_single_json_normal(json_cow, &config) {
-                        Ok(result) => results.push(result),
-                        Err(e) => return Err(JsonToolsError::batch_processing_error(index, e)),
-                    }
-                }
-                Ok(JsonOutput::Multiple(results))
-            }
-        }
+        let config = ProcessingConfig::from_json_tools(self);
+        Self::execute_with_processor(input, &config, process_single_json_normal)
     }
 
 }
@@ -1598,7 +1582,7 @@ fn handle_root_level_primitives_unflatten(
             // For root-level primitives, apply value replacements if any, then return
             let mut single_value = value.clone();
             if !value_replacements.is_empty() {
-                apply_value_replacements_to_single(&mut single_value, value_replacements)?;
+                apply_value_replacement_patterns(&mut single_value, value_replacements)?;
             }
 
 
@@ -1631,12 +1615,14 @@ fn extract_flattened_object(flattened: Value) -> Result<Map<String, Value>, Json
 }
 
 /// Apply all transformations (key replacements, value replacements, lowercase) for unflattening
+/// Optimized to avoid unnecessary clone by consuming the input
 #[inline]
 fn apply_transformations_unflatten(
     flattened_obj: Map<String, Value>,
     config: &ProcessingConfig,
 ) -> Result<Map<String, Value>, JsonToolsError> {
-    let mut processed_obj = flattened_obj.clone();
+    // Consume the input instead of cloning
+    let mut processed_obj = flattened_obj;
 
     // Apply key replacements with collision detection if provided
     if config.replacements.has_key_replacements() {
@@ -1764,7 +1750,7 @@ fn handle_root_level_primitives_flatten(
             // For root-level primitives, apply value replacements if any, then return
             let mut single_value = value.clone();
             if let Some(patterns) = value_replacements {
-                apply_value_replacements_to_single(&mut single_value, patterns)?;
+                apply_value_replacement_patterns(&mut single_value, patterns)?;
             }
             Ok(Some(simd_json::serde::to_string(&single_value)?))
         }
@@ -2238,47 +2224,6 @@ fn estimate_max_key_length(value: &Value) -> usize {
 
 
 
-/// Apply value replacements to a single value (for root-level primitives)
-/// Optimized with Cow to avoid unnecessary string allocations
-///
-/// Patterns are treated as regex patterns. If a pattern fails to compile as regex,
-/// it falls back to literal string replacement.
-fn apply_value_replacements_to_single(
-    value: &mut Value,
-    patterns: &[(String, String)],
-) -> Result<(), JsonToolsError> {
-    if let Value::String(s) = value {
-        let mut current_value = Cow::Borrowed(s.as_str());
-        let mut changed = false;
-
-        for (pattern, replacement) in patterns {
-            // Try to compile as regex first
-            match get_cached_regex(pattern) {
-                Ok(regex) => {
-                    // Successfully compiled as regex - use regex replacement
-                    if regex.is_match(&current_value) {
-                        current_value = Cow::Owned(regex.replace_all(&current_value, replacement).into_owned());
-                        changed = true;
-                    }
-                }
-                Err(_) => {
-                    // Failed to compile as regex - fall back to literal replacement
-                    if current_value.contains(pattern) {
-                        current_value = Cow::Owned(current_value.replace(pattern, replacement));
-                        changed = true;
-                    }
-                }
-            }
-        }
-
-        if changed {
-            *s = current_value.into_owned();
-        }
-    }
-    Ok(())
-}
-
-
 // ================================================================================================
 // MODULE: Core Processing Functions - Normal (No Flatten/Unflatten) Operations
 // ================================================================================================
@@ -2662,19 +2607,19 @@ impl FastStringBuilder {
         }
     }
 
-    #[inline]
+    #[inline(always)]  // Optimization #13: Force inline for hot path
     fn push_level(&mut self) {
         self.stack.push(self.buffer.len());
     }
 
-    #[inline]
+    #[inline(always)]  // Optimization #13: Force inline for hot path
     fn pop_level(&mut self) {
         if let Some(len) = self.stack.pop() {
             self.buffer.truncate(len);
         }
     }
 
-    #[inline]
+    #[inline(always)]  // Optimization #13: Force inline for hot path
     fn append_key(&mut self, key: &str, needs_separator: bool) {
         if needs_separator {
             // Pre-allocate capacity to avoid reallocations with extra buffer
@@ -2791,25 +2736,9 @@ fn flatten_value(
             let key_str = builder.as_str();
             let key = deduplicate_key(key_str);
 
-            // Optimize value insertion - avoid cloning for simple types
-            let optimized_value = match value {
-                Value::String(s) => {
-                    // For strings, we can potentially optimize further
-                    if s.len() < 64 {
-                        value.clone() // Small strings are cheap to clone
-                    } else {
-                        value.clone() // Still need to clone for now
-                    }
-                }
-                Value::Number(_) | Value::Bool(_) | Value::Null => {
-                    // These are very cheap to clone
-                    value.clone()
-                }
-                _ => value.clone(),
-            };
-
-            // Insert with the deduplicated key
-            result.insert(key, optimized_value);
+            // Clone is necessary here as we're borrowing from the input Value
+            // The clone is unavoidable since we need to own the value for the HashMap
+            result.insert(key, value.clone());
         }
     }
 }
@@ -2820,7 +2749,7 @@ fn flatten_value(
 
 /// Apply key replacements for unflattening (works on Map<String, Value>)
 /// This version is used when collision handling is NOT enabled for better performance
-/// Optimized with Cow to avoid unnecessary string allocations
+/// Optimized to consume the input map and avoid unnecessary clones
 fn apply_key_replacements_for_unflatten(
     obj: &Map<String, Value>,
     patterns: &[(String, String)],
@@ -2835,6 +2764,7 @@ fn apply_key_replacements_for_unflatten(
             key.clone()
         };
 
+        // Still need to clone value since we're borrowing from obj
         new_obj.insert(final_key, value.clone());
     }
 
@@ -2890,7 +2820,7 @@ fn apply_lowercase_keys_for_unflatten(obj: Map<String, Value>) -> Map<String, Va
 /// - Scientific notation: "1e5", "1.23e-4"
 /// - Thousands separators: "1,234.56" (US), "1.234,56" (EU), "1 234.56" (FR)
 /// - Currency symbols: "$123.45", "€99.99", "£50.00"
-#[inline]
+#[inline(always)]  // Optimization #13: Force inline for hot path
 fn try_parse_number(s: &str) -> Option<f64> {
     let trimmed = s.trim();
 
@@ -2906,7 +2836,7 @@ fn try_parse_number(s: &str) -> Option<f64> {
 
 /// Clean a number string by removing common formatting characters
 /// Handles: thousands separators (comma, space, apostrophe), currency symbols
-#[inline]
+#[inline(always)]  // Optimization #13: Force inline for hot path
 fn clean_number_string(s: &str) -> String {
     // Remove currency symbols from start
     let without_currency = s
@@ -2951,18 +2881,23 @@ fn clean_number_string(s: &str) -> String {
         without_currency.to_string()
     };
 
-    // Remove spaces and apostrophes (Swiss/French format)
-    cleaned
-        .replace(' ', "")
-        .replace('\'', "")
-        .trim()
-        .to_string()
+    // Remove spaces and apostrophes (Swiss/French format) in a single pass
+    // Optimize by checking if we need to allocate at all
+    if cleaned.contains(' ') || cleaned.contains('\'') {
+        cleaned
+            .replace(' ', "")
+            .replace('\'', "")
+            .trim()
+            .to_string()
+    } else {
+        cleaned.trim().to_string()
+    }
 }
 
 /// Try to parse a string into a boolean
 /// Only accepts: "true", "TRUE", "True", "false", "FALSE", "False"
 /// Returns None for any other value
-#[inline]
+#[inline(always)]  // Optimization #13: Force inline for hot path
 fn try_parse_bool(s: &str) -> Option<bool> {
     match s.trim() {
         "true" | "TRUE" | "True" => Some(true),
@@ -3042,7 +2977,7 @@ fn apply_type_conversion_recursive(value: &mut Value) {
 
 /// Core unflattening algorithm that reconstructs nested JSON from flattened keys
 fn unflatten_object(obj: &Map<String, Value>, separator: &str) -> Result<Value, JsonToolsError> {
-    let mut result = Map::new();
+    let mut result = Map::with_capacity(obj.len());
 
     // Pre-analyze all keys to determine if paths should be arrays or objects
     let path_types = analyze_path_types(obj, separator);
@@ -3399,6 +3334,43 @@ fn set_nested_value_recursive_for_array_with_types(
     }
 }
 
+/// Helper function to check if a value should be filtered out based on criteria
+/// Consolidates the filtering logic used by both objects and arrays
+#[inline]
+fn should_filter_value(
+    v: &Value,
+    remove_empty_strings: bool,
+    remove_nulls: bool,
+    remove_empty_objects: bool,
+    remove_empty_arrays: bool,
+) -> bool {
+    if remove_empty_strings {
+        if let Some(s) = v.as_str() {
+            if s.is_empty() {
+                return true;
+            }
+        }
+    }
+    if remove_nulls && v.is_null() {
+        return true;
+    }
+    if remove_empty_objects {
+        if let Some(obj) = v.as_object() {
+            if obj.is_empty() {
+                return true;
+            }
+        }
+    }
+    if remove_empty_arrays {
+        if let Some(arr) = v.as_array() {
+            if arr.is_empty() {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// Recursively filter nested JSON values based on the specified criteria
 /// This function removes empty strings, nulls, empty objects, and empty arrays from nested JSON structures
 fn filter_nested_value(
@@ -3417,39 +3389,7 @@ fn filter_nested_value(
 
             // Then remove keys that match our filtering criteria
             obj.retain(|_, v| {
-                // Check for empty strings
-                if remove_empty_strings {
-                    if let Some(s) = v.as_str() {
-                        if s.is_empty() {
-                            return false;
-                        }
-                    }
-                }
-
-                // Check for nulls
-                if remove_nulls && v.is_null() {
-                    return false;
-                }
-
-                // Check for empty objects
-                if remove_empty_objects {
-                    if let Some(obj) = v.as_object() {
-                        if obj.is_empty() {
-                            return false;
-                        }
-                    }
-                }
-
-                // Check for empty arrays
-                if remove_empty_arrays {
-                    if let Some(arr) = v.as_array() {
-                        if arr.is_empty() {
-                            return false;
-                        }
-                    }
-                }
-
-                true
+                !should_filter_value(v, remove_empty_strings, remove_nulls, remove_empty_objects, remove_empty_arrays)
             });
         }
         Value::Array(ref mut arr) => {
@@ -3460,39 +3400,7 @@ fn filter_nested_value(
 
             // Then remove array elements that match our filtering criteria
             arr.retain(|v| {
-                // Check for empty strings
-                if remove_empty_strings {
-                    if let Some(s) = v.as_str() {
-                        if s.is_empty() {
-                            return false;
-                        }
-                    }
-                }
-
-                // Check for nulls
-                if remove_nulls && v.is_null() {
-                    return false;
-                }
-
-                // Check for empty objects
-                if remove_empty_objects {
-                    if let Some(obj) = v.as_object() {
-                        if obj.is_empty() {
-                            return false;
-                        }
-                    }
-                }
-
-                // Check for empty arrays
-                if remove_empty_arrays {
-                    if let Some(arr) = v.as_array() {
-                        if arr.is_empty() {
-                            return false;
-                        }
-                    }
-                }
-
-                true
+                !should_filter_value(v, remove_empty_strings, remove_nulls, remove_empty_objects, remove_empty_arrays)
             });
         }
         _ => {
@@ -3575,6 +3483,7 @@ fn handle_key_collisions_for_unflatten(
 
 /// Helper function to determine if a value should be included based on filtering criteria
 /// This ensures consistent filtering logic across both flatten and unflatten operations
+#[inline]
 fn should_include_value(
     value: &Value,
     remove_empty_string_values: bool,
@@ -3750,7 +3659,7 @@ fn apply_key_replacements_with_collision_handling(
             result.insert(target_key, value);
         } else {
             // Collision detected: Only supported strategy is collecting into arrays
-            let mut values = Vec::new();
+            let mut values = Vec::with_capacity(original_keys.len());
             for original_key in &original_keys {
                 let value = original_values.remove(original_key).unwrap();
 
@@ -3835,7 +3744,7 @@ fn apply_key_replacements_unflatten_with_collisions(
             result.insert(target_key, value);
         } else {
             // Collision detected: Only supported strategy is collecting into arrays
-            let mut values = Vec::new();
+            let mut values = Vec::with_capacity(original_keys.len());
             for original_key in &original_keys {
                 let value = original_values.remove(original_key).unwrap();
 

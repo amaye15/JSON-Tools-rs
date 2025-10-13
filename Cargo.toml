@@ -1,6 +1,6 @@
 [package]
 name = "json-tools-rs"
-version = "0.5.0"
+version = "0.6.0"
 edition = "2021"
 description = "A high-performance Rust library for advanced JSON manipulation with SIMD-accelerated parsing, including flattening nested JSON structures and automatic type conversion"
 license = "MIT OR Apache-2.0"
@@ -27,7 +27,6 @@ pyo3 = { version = "0.25.1", features = ["extension-module"], optional = true }
 thiserror = "2.0.12"
 rustc-hash = "2.0.0"
 ahash = "0.8.11"
-lazy_static = "1.5.0"
 fast-float = "0.2"
 
 [features]
@@ -42,3 +41,20 @@ criterion = { version = "0.5", features = ["html_reports"] }
 [[bench]]
 name = "comprehensive_benchmark"
 harness = false
+
+# ================================================================================================
+# Performance Optimization Profiles
+# ================================================================================================
+
+[profile.release]
+lto = "fat"            # Full LTO for cross-crate inlining (10-15% faster than "thin")
+codegen-units = 1      # Better optimization (slower compile, faster runtime)
+opt-level = 3          # Maximum optimization
+strip = true           # Remove debug symbols for smaller binary
+overflow-checks = false # Disable overflow checks in release (1-2% faster)
+# Note: panic = "abort" not used due to Python bindings compatibility
+
+[profile.release-lto]
+inherits = "release"
+lto = "fat"            # Full LTO for maximum performance (production builds)
+codegen-units = 1

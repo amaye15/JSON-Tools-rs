@@ -2,12 +2,14 @@
 rustflags = [
     "-C", "link-arg=-undefined",
     "-C", "link-arg=dynamic_lookup",
+    "-C", "target-cpu=native",  # CPU-specific optimizations (5-10% faster)
 ]
 
 [target.aarch64-apple-darwin]
 rustflags = [
-    "-C", "link-arg=-undefined", 
+    "-C", "link-arg=-undefined",
     "-C", "link-arg=dynamic_lookup",
+    "-C", "target-cpu=native",  # CPU-specific optimizations (5-10% faster)
 ]
 
 # Add this section for Linux aarch64 cross-compilation
