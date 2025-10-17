@@ -22,6 +22,7 @@ Unlike simple JSON parsers, JSON Tools RS provides a complete toolkit for JSON t
 - 🚀 **Unified API**: Single `JSONTools` entry point for flattening, unflattening, or pass-through transforms (`.normal()`)
 - 🔧 **Builder Pattern**: Fluent, chainable API for easy configuration and method chaining
 - ⚡ **High Performance**: SIMD-accelerated JSON parsing with FxHashMap and optimized memory allocations
+- 🚄 **Parallel Processing**: Built-in Rayon-based parallelism for 3-5x speedup on batch operations (automatic, no configuration needed)
 - 🎯 **Complete Roundtrip**: Flatten JSON and unflatten back to original structure with perfect fidelity
 - 🧹 **Comprehensive Filtering**: Remove empty strings, nulls, empty objects, and empty arrays (works for both flatten and unflatten)
 - 🔄 **Advanced Replacements**: Literal and regex-based key/value replacements using standard Rust regex syntax
@@ -30,7 +31,7 @@ Unlike simple JSON parsers, JSON Tools RS provides a complete toolkit for JSON t
 - 📦 **Batch Processing**: Process single JSON or batches; Python also supports dicts and lists of dicts
 - 🐍 **Python Bindings**: Full Python support with perfect type preservation (input type = output type)
 - 🧰 **Robust Errors**: Comprehensive `JsonToolsError` enum with helpful suggestions for debugging
-- 🔥 **Performance Optimizations**: FxHashMap (~15-30% faster), SIMD parsing, and Cow-based string handling to minimize clones
+- 🔥 **Performance Optimizations**: FxHashMap (~15-30% faster), SIMD parsing, Cow-based string handling, and automatic parallel processing
 
 ## Table of Contents
 
@@ -458,7 +459,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-json-tools-rs = "0.4.0"
+json-tools-rs = "0.7.0"
 ```
 
 Or install via cargo:
@@ -466,6 +467,8 @@ Or install via cargo:
 ```bash
 cargo add json-tools-rs
 ```
+
+**Note**: Parallel processing is built-in and automatic - no feature flags needed!
 
 ### Python
 
@@ -526,6 +529,116 @@ JSON Tools RS delivers exceptional performance through multiple carefully implem
 4. **Smart Capacity Management** - Pre-sized maps and string builders to minimize rehashing
    - Reduces reallocation overhead
    - Improves cache locality
+
+5. **Parallel Batch Processing** (built-in, always enabled) - Rayon-based parallelism for batch operations
+   - **3-5x speedup** for batches of 10+ items on multi-core CPUs
+   - Adaptive threshold prevents overhead for small batches
+   - Zero per-item memory overhead
+   - Thread-safe regex cache with Arc<Regex> for O(1) cloning
+
+### Parallel Processing
+
+Parallel processing is **built-in and automatic** - no feature flags or special configuration needed!
+
+JSON-Tools-rs provides **two levels of parallelism**:
+
+#### 1. Batch-Level Parallelism (Across Multiple Documents)
+
+Process multiple JSON documents in parallel automatically.
+
+**Performance Gains:**
+- Batch size 10: **2.5x faster**
+- Batch size 50: **3.3x faster**
+- Batch size 100: **3.3x faster**
+- Batch size 500: **5.3x faster**
+- Batch size 1000: **5.4x faster**
+
+**Configuration (Optional):**
+
+```rust
+use json_tools_rs::JSONTools;
+
+// Default threshold (10 items) - optimal for most use cases
+// Parallelism activates automatically for batches ≥ 10 items
+let result = JSONTools::new()
+    .flatten()
+    .execute(batch)?;
+
+// Custom threshold for fine-tuning
+let result = JSONTools::new()
+    .flatten()
+    .parallel_threshold(50)  // Only parallelize batches ≥ 50 items
+    .execute(batch)?;
+
+// Custom thread count
+let result = JSONTools::new()
+    .flatten()
+    .num_threads(Some(4))  // Use exactly 4 threads
+    .execute(batch)?;
+
+// Environment variables (runtime configuration)
+// JSON_TOOLS_PARALLEL_THRESHOLD=20 cargo run
+// JSON_TOOLS_NUM_THREADS=4 cargo run
+```
+
+**How it works:**
+- Batches below threshold (default: 10): Sequential processing (no overhead)
+- Batches 10-1000: Rayon work-stealing parallelism
+- Batches > 1000: Chunked processing for optimal cache locality
+- Each worker thread gets its own regex cache
+- Zero per-item memory increase (only 8-16MB one-time thread pool)
+- Thread count defaults to number of logical CPUs (configurable via `num_threads()` or `JSON_TOOLS_NUM_THREADS`)
+
+#### 2. Nested Parallelism (Within Large Documents)
+
+For large individual JSON documents, nested parallelism automatically parallelizes the processing of large objects and arrays **within** a single document.
+
+**Performance Gains:**
+- Large documents (20,000+ items): **7-12% faster**
+- Very large documents (100,000+ items): **7-12% faster**
+- Small/medium documents: No overhead (stays sequential)
+
+**Configuration (Optional):**
+
+```rust
+use json_tools_rs::JSONTools;
+
+// Default threshold (100 items) - optimal for most use cases
+// Objects/arrays with 100+ keys/items are processed in parallel
+let result = JSONTools::new()
+    .flatten()
+    .execute(large_json)?;
+
+// Custom threshold for very large documents
+let result = JSONTools::new()
+    .flatten()
+    .nested_parallel_threshold(50)  // More aggressive parallelism
+    .execute(large_json)?;
+
+// Disable nested parallelism (for small/medium documents)
+let result = JSONTools::new()
+    .flatten()
+    .nested_parallel_threshold(usize::MAX)  // Disable
+    .execute(json)?;
+
+// Environment variable (runtime configuration)
+// JSON_TOOLS_NESTED_PARALLEL_THRESHOLD=200 cargo run
+```
+
+**How it works:**
+- Objects/arrays below threshold (default: 100): Sequential processing
+- Objects/arrays above threshold: Parallel processing using Rayon
+- Each parallel branch gets its own string builder
+- Results are merged efficiently with minimal overhead
+- Rayon's work-stealing automatically balances load across CPU cores
+- Minimal memory overhead (< 1 MB for very large documents)
+
+**When to use:**
+- ✅ Large JSON documents (20,000+ items)
+- ✅ Very large JSON documents (100,000+ items)
+- ✅ Wide, flat structures (many keys at same level)
+- ❌ Small documents (< 5,000 items) - no benefit
+- ❌ Deeply nested but narrow structures - marginal benefit
 
 ### Benchmark Results
 

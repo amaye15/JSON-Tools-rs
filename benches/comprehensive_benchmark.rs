@@ -246,6 +246,59 @@ fn bench_batch_processing(c: &mut Criterion) {
     group.finish();
 }
 
+/// Benchmark parallel processing with different batch sizes
+fn bench_parallel_processing(c: &mut Criterion) {
+    let test_files = load_test_files();
+
+    if test_files.is_empty() {
+        println!("No test files found, skipping parallel benchmark");
+        return;
+    }
+
+    // Create batches of different sizes
+    let batch_sizes = vec![1, 5, 10, 20, 50, 100, 500, 1000];
+
+    for &size in &batch_sizes {
+        let mut group = c.benchmark_group(format!("parallel_batch_size_{}", size));
+        group.measurement_time(Duration::from_secs(10));
+
+        // Create batch by repeating test files
+        let mut batch: Vec<String> = Vec::new();
+        for i in 0..size {
+            let file_idx = i % test_files.len();
+            batch.push(test_files[file_idx].1.clone());
+        }
+
+        // Sequential (threshold = usize::MAX to disable parallel)
+        group.bench_function("sequential", |b| {
+            b.iter(|| {
+                let batch_refs: Vec<&str> = batch.iter().map(|s| s.as_str()).collect();
+                let result = JSONTools::new()
+                    .flatten()
+                    .parallel_threshold(usize::MAX) // Force sequential
+                    .execute(black_box(batch_refs))
+                    .expect("Sequential batch failed");
+                black_box(result);
+            });
+        });
+
+        // Parallel (threshold = 1 to always use parallel)
+        group.bench_function("parallel", |b| {
+            b.iter(|| {
+                let batch_refs: Vec<&str> = batch.iter().map(|s| s.as_str()).collect();
+                let result = JSONTools::new()
+                    .flatten()
+                    .parallel_threshold(1) // Force parallel
+                    .execute(black_box(batch_refs))
+                    .expect("Parallel batch failed");
+                black_box(result);
+            });
+        });
+
+        group.finish();
+    }
+}
+
 /// Benchmark type conversion feature
 fn bench_type_conversion(c: &mut Criterion) {
     let mut group = c.benchmark_group("type_conversion");
@@ -353,6 +406,93 @@ fn bench_type_conversion(c: &mut Criterion) {
     group.finish();
 }
 
+/// Benchmark nested parallelism for large individual JSON documents
+fn bench_nested_parallelism(c: &mut Criterion) {
+    let mut group = c.benchmark_group("nested_parallelism");
+    group.measurement_time(Duration::from_secs(15));
+
+    // Create a large nested JSON document for testing
+    // Structure: Large object with many keys, each containing nested arrays/objects
+    let create_large_json = |num_keys: usize, array_size: usize| -> String {
+        let mut json = String::from("{");
+        for i in 0..num_keys {
+            if i > 0 {
+                json.push(',');
+            }
+            json.push_str(&format!(r#""key_{}": {{"nested": ["#, i));
+            for j in 0..array_size {
+                if j > 0 {
+                    json.push(',');
+                }
+                json.push_str(&format!(r#"{{"id": {}, "value": "item_{}_{}"}}"#, j, i, j));
+            }
+            json.push_str("]}");
+        }
+        json.push('}');
+        json
+    };
+
+    // Test different document sizes
+    let test_cases = vec![
+        ("small_50_keys_10_items", create_large_json(50, 10)),
+        ("medium_100_keys_50_items", create_large_json(100, 50)),
+        ("large_200_keys_100_items", create_large_json(200, 100)),
+        ("xlarge_500_keys_200_items", create_large_json(500, 200)),
+    ];
+
+    for (name, json_content) in &test_cases {
+        // Benchmark WITHOUT nested parallelism (threshold = usize::MAX)
+        group.bench_with_input(
+            BenchmarkId::new("sequential", name),
+            json_content,
+            |b, json| {
+                b.iter(|| {
+                    let result = JSONTools::new()
+                        .flatten()
+                        .nested_parallel_threshold(usize::MAX) // Disable nested parallelism
+                        .execute(black_box(json))
+                        .expect("Flatten failed");
+                    black_box(result);
+                });
+            },
+        );
+
+        // Benchmark WITH nested parallelism (threshold = 50)
+        group.bench_with_input(
+            BenchmarkId::new("nested_parallel_50", name),
+            json_content,
+            |b, json| {
+                b.iter(|| {
+                    let result = JSONTools::new()
+                        .flatten()
+                        .nested_parallel_threshold(50) // Enable nested parallelism for objects/arrays > 50
+                        .execute(black_box(json))
+                        .expect("Flatten failed");
+                    black_box(result);
+                });
+            },
+        );
+
+        // Benchmark WITH nested parallelism (threshold = 100)
+        group.bench_with_input(
+            BenchmarkId::new("nested_parallel_100", name),
+            json_content,
+            |b, json| {
+                b.iter(|| {
+                    let result = JSONTools::new()
+                        .flatten()
+                        .nested_parallel_threshold(100) // Enable nested parallelism for objects/arrays > 100
+                        .execute(black_box(json))
+                        .expect("Flatten failed");
+                    black_box(result);
+                });
+            },
+        );
+    }
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_flatten_basic,
@@ -361,7 +501,9 @@ criterion_group!(
     bench_roundtrip_basic,
     bench_roundtrip_comprehensive,
     bench_batch_processing,
-    bench_type_conversion
+    bench_parallel_processing,
+    bench_type_conversion,
+    bench_nested_parallelism
 );
 
 criterion_main!(benches);

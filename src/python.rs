@@ -381,6 +381,100 @@ impl PyJSONTools {
         slf
     }
 
+    /// Set the minimum batch size for parallel processing
+    ///
+    /// When processing multiple JSON documents, this threshold determines when to use
+    /// parallel processing. Batches smaller than this threshold will be processed sequentially
+    /// to avoid the overhead of thread spawning.
+    ///
+    /// Default: 10 items (can be overridden with JSON_TOOLS_PARALLEL_THRESHOLD environment variable)
+    ///
+    /// # Arguments
+    /// * `threshold` - Minimum number of items in a batch to trigger parallel processing
+    ///
+    /// # Returns
+    /// Self for method chaining
+    ///
+    /// # Example
+    /// ```python
+    /// import json_tools_rs as jt
+    /// # Only use parallelism for batches of 50+ items
+    /// tools = jt.JSONTools().flatten().parallel_threshold(50)
+    /// results = tools.execute([...])  # Large batch will use parallel processing
+    /// ```
+    ///
+    /// Performance: Uses interior mutability to avoid cloning the entire JSONTools struct
+    #[inline]
+    pub fn parallel_threshold(slf: PyRef<'_, Self>, threshold: usize) -> PyRef<'_, Self> {
+        let mut guard = slf.inner.lock().unwrap();
+        let tools = mem::replace(&mut *guard, JSONTools::new());
+        *guard = tools.parallel_threshold(threshold);
+        drop(guard);
+        slf
+    }
+
+    /// Configure the number of threads for parallel processing
+    ///
+    /// By default, Rayon uses the number of logical CPUs. This method allows you to override
+    /// that behavior for specific workloads or resource constraints.
+    ///
+    /// # Arguments
+    /// * `num_threads` - Number of threads to use (None = use Rayon default)
+    ///
+    /// # Returns
+    /// Self for method chaining
+    ///
+    /// # Example
+    /// ```python
+    /// import json_tools_rs as jt
+    /// # Limit to 4 threads for resource-constrained environments
+    /// tools = jt.JSONTools().flatten().num_threads(4)
+    /// # Or use None to let Rayon decide (default)
+    /// tools = jt.JSONTools().flatten().num_threads(None)
+    /// ```
+    ///
+    /// Performance: Uses interior mutability to avoid cloning the entire JSONTools struct
+    #[inline]
+    pub fn num_threads(slf: PyRef<'_, Self>, num_threads: Option<usize>) -> PyRef<'_, Self> {
+        let mut guard = slf.inner.lock().unwrap();
+        let tools = mem::replace(&mut *guard, JSONTools::new());
+        *guard = tools.num_threads(num_threads);
+        drop(guard);
+        slf
+    }
+
+    /// Configure the threshold for nested parallel processing within individual JSON documents
+    ///
+    /// When flattening or unflattening a single large JSON document, this threshold determines
+    /// when to parallelize the processing of objects and arrays. Only objects/arrays with more
+    /// than this many keys/items will be processed in parallel.
+    ///
+    /// Default: 100 (can be overridden with JSON_TOOLS_NESTED_PARALLEL_THRESHOLD environment variable)
+    ///
+    /// # Arguments
+    /// * `threshold` - Minimum number of keys/items to trigger nested parallelism
+    ///
+    /// # Returns
+    /// Self for method chaining
+    ///
+    /// # Example
+    /// ```python
+    /// import json_tools_rs as jt
+    /// # Only parallelize objects/arrays with 200+ items
+    /// tools = jt.JSONTools().flatten().nested_parallel_threshold(200)
+    /// result = tools.execute(large_json)  # Large nested structures will use parallel processing
+    /// ```
+    ///
+    /// Performance: Uses interior mutability to avoid cloning the entire JSONTools struct
+    #[inline]
+    pub fn nested_parallel_threshold(slf: PyRef<'_, Self>, threshold: usize) -> PyRef<'_, Self> {
+        let mut guard = slf.inner.lock().unwrap();
+        let tools = mem::replace(&mut *guard, JSONTools::new());
+        *guard = tools.nested_parallel_threshold(threshold);
+        drop(guard);
+        slf
+    }
+
     /// Execute the configured JSON operation
     ///
     /// This method executes the configured operation (flatten or unflatten) with all

@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - 2025-10-17
+
+### Added
+- **Parallel Processing Configuration**
+  - `.parallel_threshold(usize)` - Configure minimum batch size for parallel processing (default: 10)
+  - `.num_threads(Option<usize>)` - Configure number of threads for parallel processing (default: Rayon default)
+  - `.nested_parallel_threshold(usize)` - Configure threshold for nested parallel processing within individual JSON documents (default: 100)
+  - Environment variable support: `JSON_TOOLS_PARALLEL_THRESHOLD` and `JSON_TOOLS_NESTED_PARALLEL_THRESHOLD`
+- **Enhanced Testing**
+  - Added 671 new lines of comprehensive tests
+  - Improved test coverage for parallel processing scenarios
+  - Additional edge case testing for type conversion and filtering
+
+### Performance Improvements
+- **Optimized HashMap Initialization**
+  - Pre-allocated FxHashMap with known capacity for better performance
+  - Reduced memory allocations during regex caching
+  - Improved thread-local regex cache initialization
+  - Enhanced key deduplication cache performance
+
+### Changed
+- Improved parallel processing defaults for better out-of-the-box performance
+- Enhanced documentation for parallel processing configuration
+- Updated benchmarks to include parallel processing scenarios
+
 ## [0.6.0] - 2025-10-13
 
 ### Added
@@ -145,6 +170,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 | Version | Release Date | Key Features | Performance |
 |---------|--------------|--------------|-------------|
+| **0.7.0** | 2025-10-17 | Parallel processing config, optimizations | HashMap improvements |
 | **0.6.0** | 2025-10-13 | Python GIL release, inline hints | +5-13% Python |
 | **0.5.0** | 2025-10-12 | Rust inline optimizations | +2-5% Rust |
 | **0.4.0** | 2025-10-11 | FxHashMap, SIMD, allocations | +30-55% Rust |
@@ -155,6 +181,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ---
 
 ## Migration Guide
+
+### Upgrading from 0.6.0 to 0.7.0
+
+**No breaking changes!** This is a feature enhancement and performance improvement release.
+
+**What's New**:
+- New parallel processing configuration methods
+- Better control over thread usage and parallelism thresholds
+- Optimized HashMap initialization for better performance
+- Enhanced test coverage
+
+**Action Required**: None - just update your dependency version. Optionally, you can configure parallel processing settings for your specific workload.
 
 ### Upgrading from 0.5.0 to 0.6.0
 

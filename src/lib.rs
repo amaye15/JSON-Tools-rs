@@ -442,7 +442,8 @@ use std::sync::{Arc, LazyLock, OnceLock};
 /// Using Arc<Regex> to make cloning O(1) instead of copying the entire regex state
 /// Using std::sync::LazyLock (Rust 1.80+) instead of lazy_static for better performance
 static COMMON_REGEX_PATTERNS: LazyLock<FxHashMap<&'static str, Arc<Regex>>> = LazyLock::new(|| {
-    let mut patterns = FxHashMap::default();
+    // Pre-allocate with known capacity for better performance
+    let mut patterns = FxHashMap::with_capacity_and_hasher(20, Default::default());
 
     // Common patterns for key/value replacements
     let common_patterns = [
@@ -493,7 +494,7 @@ struct LruRegexCache {
 impl LruRegexCache {
     fn new(max_size: usize) -> Self {
         Self {
-            cache: FxHashMap::default(),
+            cache: FxHashMap::with_capacity_and_hasher(max_size, Default::default()),
             access_counter: 0,
             max_size,
         }
@@ -539,7 +540,7 @@ static REGEX_CACHE: OnceLock<std::sync::RwLock<LruRegexCache>> = OnceLock::new()
 // Using Arc<Regex> for O(1) cloning
 thread_local! {
     static THREAD_LOCAL_REGEX_CACHE: std::cell::RefCell<FxHashMap<String, Arc<Regex>>> =
-        std::cell::RefCell::new(FxHashMap::default());
+        std::cell::RefCell::new(FxHashMap::with_capacity_and_hasher(32, Default::default()));
 }
 
 /// Get a cached regex, using Arc<Regex> for O(1) cloning
@@ -626,7 +627,7 @@ struct KeyDeduplicator {
 impl KeyDeduplicator {
     fn new() -> Self {
         Self {
-            key_cache: FxHashMap::default(),
+            key_cache: FxHashMap::with_capacity_and_hasher(128, Default::default()),
             cache_hits: 0,
             cache_misses: 0,
         }
@@ -1121,6 +1122,14 @@ pub struct ProcessingConfig {
     pub replacements: ReplacementConfig,
     /// Automatically convert string values to numbers and booleans
     pub auto_convert_types: bool,
+    /// Minimum batch size for parallel processing
+    pub parallel_threshold: usize,
+    /// Number of threads for parallel processing (None = use Rayon default)
+    pub num_threads: Option<usize>,
+    /// Minimum object/array size for nested parallel processing within a single JSON document
+    /// Only objects/arrays with more than this many keys/items will be processed in parallel
+    /// Default: 100 (can be overridden with JSON_TOOLS_NESTED_PARALLEL_THRESHOLD environment variable)
+    pub nested_parallel_threshold: usize,
 }
 
 impl Default for ProcessingConfig {
@@ -1132,6 +1141,12 @@ impl Default for ProcessingConfig {
             collision: CollisionConfig::default(),
             replacements: ReplacementConfig::default(),
             auto_convert_types: false,
+            parallel_threshold: 10,
+            num_threads: None, // Use Rayon default (number of logical CPUs)
+            nested_parallel_threshold: std::env::var("JSON_TOOLS_NESTED_PARALLEL_THRESHOLD")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(100),
         }
     }
 }
@@ -1191,6 +1206,9 @@ impl ProcessingConfig {
                 value_replacements: tools.value_replacements.clone(),
             },
             auto_convert_types: tools.auto_convert_types,
+            parallel_threshold: tools.parallel_threshold,
+            num_threads: tools.num_threads,
+            nested_parallel_threshold: tools.nested_parallel_threshold,
         }
     }
 }
@@ -1217,6 +1235,14 @@ pub struct JSONTools {
     value_replacements: Vec<(String, String)>,
     /// Separator for nested keys (default: ".")
     separator: String,
+
+    // Medium fields (8 bytes on 64-bit systems)
+    /// Minimum batch size to use parallel processing (default: 10)
+    parallel_threshold: usize,
+    /// Number of threads for parallel processing (None = use Rayon default)
+    num_threads: Option<usize>,
+    /// Minimum object/array size for nested parallel processing within a single JSON document
+    nested_parallel_threshold: usize,
 
     // Medium fields (2 bytes)
     /// Current operation mode (flatten or unflatten)
@@ -1247,6 +1273,17 @@ impl Default for JSONTools {
             value_replacements: Vec::with_capacity(4),
             separator: ".".to_string(),
             // Medium fields
+            parallel_threshold: std::env::var("JSON_TOOLS_PARALLEL_THRESHOLD")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(10),
+            num_threads: std::env::var("JSON_TOOLS_NUM_THREADS")
+                .ok()
+                .and_then(|v| v.parse().ok()),
+            nested_parallel_threshold: std::env::var("JSON_TOOLS_NESTED_PARALLEL_THRESHOLD")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(100),
             mode: None,
             // Small fields
             remove_empty_string_values: false,
@@ -1479,6 +1516,81 @@ impl JSONTools {
         self
     }
 
+    /// Set the minimum batch size for parallel processing (only available with 'parallel' feature)
+    ///
+    /// When processing multiple JSON documents, this threshold determines when to use
+    /// parallel processing. Batches smaller than this threshold will be processed sequentially
+    /// to avoid the overhead of thread spawning.
+    ///
+    /// Default: 10 items (can be overridden with JSON_TOOLS_PARALLEL_THRESHOLD environment variable)
+    ///
+    /// # Arguments
+    ///
+    /// * `threshold` - Minimum number of items in a batch to trigger parallel processing
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use json_tools_rs::JSONTools;
+    ///
+    /// let tools = JSONTools::new()
+    ///     .flatten()
+    ///     .parallel_threshold(50); // Only use parallelism for batches of 50+ items
+    /// ```
+    pub fn parallel_threshold(mut self, threshold: usize) -> Self {
+        self.parallel_threshold = threshold;
+        self
+    }
+
+    /// Configure the number of threads for parallel processing
+    ///
+    /// By default, Rayon uses the number of logical CPUs. This method allows you to override
+    /// that behavior for specific workloads or resource constraints.
+    ///
+    /// # Arguments
+    ///
+    /// * `num_threads` - Number of threads to use (None = use Rayon default)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use json_tools_rs::JSONTools;
+    ///
+    /// let tools = JSONTools::new()
+    ///     .flatten()
+    ///     .num_threads(Some(4)); // Use exactly 4 threads
+    /// ```
+    pub fn num_threads(mut self, num_threads: Option<usize>) -> Self {
+        self.num_threads = num_threads;
+        self
+    }
+
+    /// Configure the threshold for nested parallel processing within individual JSON documents
+    ///
+    /// When flattening or unflattening a single large JSON document, this threshold determines
+    /// when to parallelize the processing of objects and arrays. Only objects/arrays with more
+    /// than this many keys/items will be processed in parallel.
+    ///
+    /// Default: 100 (can be overridden with JSON_TOOLS_NESTED_PARALLEL_THRESHOLD environment variable)
+    ///
+    /// # Arguments
+    ///
+    /// * `threshold` - Minimum number of keys/items to trigger nested parallelism
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use json_tools_rs::JSONTools;
+    ///
+    /// let tools = JSONTools::new()
+    ///     .flatten()
+    ///     .nested_parallel_threshold(200); // Only parallelize objects/arrays with 200+ items
+    /// ```
+    pub fn nested_parallel_threshold(mut self, threshold: usize) -> Self {
+        self.nested_parallel_threshold = threshold;
+        self
+    }
+
     /// Execute the configured operation on the provided JSON input
     ///
     /// This method performs the selected operation based on the mode set by calling
@@ -1521,7 +1633,7 @@ impl JSONTools {
         processor: F,
     ) -> Result<JsonOutput, JsonToolsError>
     where
-        F: Fn(&Cow<str>, &ProcessingConfig) -> Result<String, JsonToolsError>,
+        F: Fn(&Cow<str>, &ProcessingConfig) -> Result<String, JsonToolsError> + Sync,
     {
         match input {
             JsonInput::Single(json_cow) => {
@@ -1529,6 +1641,53 @@ impl JSONTools {
                 Ok(JsonOutput::Single(result))
             }
             JsonInput::Multiple(json_list) => {
+                // Use parallel processing if batch size meets threshold
+                if json_list.len() >= config.parallel_threshold {
+                    use rayon::prelude::*;
+
+                    // For very large batches (>1000), use chunked processing for better cache locality
+                    if json_list.len() > 1000 {
+                            // Calculate optimal chunk size: aim for ~100-200 items per chunk
+                            // This balances parallelism with cache locality
+                            let num_cpus = rayon::current_num_threads();
+                            let chunk_size = (json_list.len() / num_cpus).max(100).min(200);
+
+                            // Process chunks in parallel, then flatten results
+                            let chunk_results: Result<Vec<Vec<String>>, _> = json_list
+                                .par_chunks(chunk_size)
+                                .enumerate()
+                                .map(|(chunk_idx, chunk)| {
+                                    let base_index = chunk_idx * chunk_size;
+                                    chunk.iter().enumerate()
+                                        .map(|(item_idx, json)| {
+                                            let json_cow = Cow::Borrowed(*json);
+                                            processor(&json_cow, config)
+                                                .map_err(|e| JsonToolsError::batch_processing_error(base_index + item_idx, e))
+                                        })
+                                        .collect()
+                                })
+                                .collect();
+
+                            // Flatten the results
+                            let results: Vec<String> = chunk_results?.into_iter().flatten().collect();
+                            return Ok(JsonOutput::Multiple(results));
+                        } else {
+                            // For smaller batches, use simple par_iter for maximum parallelism
+                            let results: Result<Vec<_>, _> = json_list
+                                .par_iter()
+                                .enumerate()
+                                .map(|(index, json)| {
+                                    let json_cow = Cow::Borrowed(*json);
+                                    processor(&json_cow, config)
+                                        .map_err(|e| JsonToolsError::batch_processing_error(index, e))
+                                })
+                                .collect();
+
+                            return Ok(JsonOutput::Multiple(results?));
+                        }
+                    }
+
+                // Sequential processing (default or below threshold)
                 let mut results = Vec::with_capacity(json_list.len());
                 for (index, json) in json_list.iter().enumerate() {
                     let json_cow = Cow::Borrowed(*json);
@@ -1540,6 +1699,50 @@ impl JSONTools {
                 Ok(JsonOutput::Multiple(results))
             }
             JsonInput::MultipleOwned(vecs) => {
+                // Use parallel processing if batch size meets threshold
+                if vecs.len() >= config.parallel_threshold {
+                    use rayon::prelude::*;
+
+                    // For very large batches (>1000), use chunked processing for better cache locality
+                    if vecs.len() > 1000 {
+                            // Calculate optimal chunk size: aim for ~100-200 items per chunk
+                            let num_cpus = rayon::current_num_threads();
+                            let chunk_size = (vecs.len() / num_cpus).max(100).min(200);
+
+                            // Process chunks in parallel, then flatten results
+                            let chunk_results: Result<Vec<Vec<String>>, _> = vecs
+                                .par_chunks(chunk_size)
+                                .enumerate()
+                                .map(|(chunk_idx, chunk)| {
+                                    let base_index = chunk_idx * chunk_size;
+                                    chunk.iter().enumerate()
+                                        .map(|(item_idx, json_cow)| {
+                                            processor(json_cow, config)
+                                                .map_err(|e| JsonToolsError::batch_processing_error(base_index + item_idx, e))
+                                        })
+                                        .collect()
+                                })
+                                .collect();
+
+                            // Flatten the results
+                            let results: Vec<String> = chunk_results?.into_iter().flatten().collect();
+                            return Ok(JsonOutput::Multiple(results));
+                        } else {
+                            // For smaller batches, use simple par_iter for maximum parallelism
+                            let results: Result<Vec<_>, _> = vecs
+                                .par_iter()
+                                .enumerate()
+                                .map(|(index, json_cow)| {
+                                    processor(json_cow, config)
+                                        .map_err(|e| JsonToolsError::batch_processing_error(index, e))
+                                })
+                                .collect();
+
+                            return Ok(JsonOutput::Multiple(results?));
+                        }
+                    }
+
+                // Sequential processing (default or below threshold)
                 let mut results = Vec::with_capacity(vecs.len());
                 for (index, json_cow) in vecs.iter().enumerate() {
                     match processor(json_cow, config) {
@@ -1790,7 +1993,7 @@ fn initialize_flattened_map(value: &Value) -> FxHashMap<String, Value> {
 
 /// Perform the core flattening operation
 #[inline]
-fn perform_flattening(value: &Value, separator: &str) -> FxHashMap<String, Value> {
+fn perform_flattening(value: &Value, separator: &str, nested_threshold: usize) -> FxHashMap<String, Value> {
     let mut flattened = initialize_flattened_map(value);
 
     // Ultra-aggressive string builder capacity for SIMD performance
@@ -1798,7 +2001,7 @@ fn perform_flattening(value: &Value, separator: &str) -> FxHashMap<String, Value
     // Use massive extra capacity to ensure zero reallocations for SIMD efficiency
     let builder_capacity = std::cmp::max(max_key_length * 4, 512);
     let mut builder = FastStringBuilder::with_capacity_and_separator(builder_capacity, separator);
-    flatten_value(value, &mut builder, &mut flattened);
+    flatten_value_with_threshold(value, &mut builder, &mut flattened, nested_threshold);
 
     flattened
 }
@@ -1994,7 +2197,8 @@ where
     K: Clone + std::hash::Hash + Eq,
     V: Clone,
 {
-    let mut key_groups: FxHashMap<K, Vec<V>> = FxHashMap::default();
+    // Pre-allocate with estimated capacity for better performance
+    let mut key_groups: FxHashMap<K, Vec<V>> = FxHashMap::with_capacity_and_hasher(64, Default::default());
     for (key, value) in items {
         key_groups.entry(key).or_default().push(value);
     }
@@ -2054,7 +2258,7 @@ fn process_single_json(
     }
 
     // Perform the core flattening operation
-    let mut flattened = perform_flattening(&value, &config.separator);
+    let mut flattened = perform_flattening(&value, &config.separator, config.nested_parallel_threshold);
 
     // Apply key transformations (replacements and lowercase conversion)
     flattened = apply_key_transformations_flatten(flattened, &config)?;
@@ -2697,23 +2901,66 @@ impl FastStringBuilder {
 // MODULE: Core Algorithms - Flattening Implementation
 // ================================================================================================
 
-/// Flattening using FastStringBuilder and aggressive inlining with optimized key allocation
+/// Flattening with nested parallelism support
+/// When objects/arrays exceed the threshold, they are processed in parallel
+/// Pass usize::MAX as nested_threshold to disable nested parallelism
 #[inline]
-fn flatten_value(
+fn flatten_value_with_threshold(
     value: &Value,
     builder: &mut FastStringBuilder,
     result: &mut FxHashMap<String, Value>,
+    nested_threshold: usize,
 ) {
     match value {
         Value::Object(obj) => {
             if obj.is_empty() {
                 result.insert(builder.as_str().to_string(), Value::Object(Map::new()));
+            } else if obj.len() > nested_threshold {
+                // PARALLEL PATH: Large object - process keys in parallel
+                use rayon::prelude::*;
+
+                let prefix = builder.as_str().to_string();
+                let separator = builder.separator_cache.separator.clone();
+                let needs_dot = !builder.is_empty();
+
+                // Convert to Vec for parallel iteration (serde_json::Map doesn't implement ParallelIterator)
+                let entries: Vec<_> = obj.iter().collect();
+
+                // Process each key-value pair in parallel and collect results
+                let partial_results: Vec<FxHashMap<String, Value>> = entries
+                    .par_iter()
+                    .map(|(key, val)| {
+                        // Create a new builder for this branch
+                        let mut branch_builder = FastStringBuilder::with_capacity_and_separator(
+                            prefix.len() + key.len() + 10,
+                            &separator,
+                        );
+
+                        // Build the prefix for this branch
+                        if !prefix.is_empty() {
+                            branch_builder.buffer.push_str(&prefix);
+                        }
+                        branch_builder.push_level();
+                        branch_builder.append_key(key, needs_dot);
+
+                        // Recursively flatten this branch
+                        let mut branch_result = FxHashMap::with_capacity_and_hasher(16, Default::default());
+                        flatten_value_with_threshold(val, &mut branch_builder, &mut branch_result, nested_threshold);
+                        branch_result
+                    })
+                    .collect();
+
+                // Merge all partial results into the main result
+                for partial in partial_results {
+                    result.extend(partial);
+                }
             } else {
+                // SEQUENTIAL PATH: Small object
                 let needs_dot = !builder.is_empty();
                 for (key, val) in obj {
                     builder.push_level();
                     builder.append_key(key, needs_dot);
-                    flatten_value(val, builder, result);
+                    flatten_value_with_threshold(val, builder, result, nested_threshold);
                     builder.pop_level();
                 }
             }
@@ -2721,12 +2968,50 @@ fn flatten_value(
         Value::Array(arr) => {
             if arr.is_empty() {
                 result.insert(builder.as_str().to_string(), Value::Array(vec![]));
+            } else if arr.len() > nested_threshold {
+                // PARALLEL PATH: Large array - process indices in parallel
+                use rayon::prelude::*;
+
+                let prefix = builder.as_str().to_string();
+                let separator = builder.separator_cache.separator.clone();
+                let needs_dot = !builder.is_empty();
+
+                // Process each array element in parallel and collect results
+                let partial_results: Vec<FxHashMap<String, Value>> = arr
+                    .par_iter()
+                    .enumerate()
+                    .map(|(index, val)| {
+                        // Create a new builder for this branch
+                        let mut branch_builder = FastStringBuilder::with_capacity_and_separator(
+                            prefix.len() + 10,
+                            &separator,
+                        );
+
+                        // Build the prefix for this branch
+                        if !prefix.is_empty() {
+                            branch_builder.buffer.push_str(&prefix);
+                        }
+                        branch_builder.push_level();
+                        branch_builder.append_index(index, needs_dot);
+
+                        // Recursively flatten this branch
+                        let mut branch_result = FxHashMap::with_capacity_and_hasher(16, Default::default());
+                        flatten_value_with_threshold(val, &mut branch_builder, &mut branch_result, nested_threshold);
+                        branch_result
+                    })
+                    .collect();
+
+                // Merge all partial results into the main result
+                for partial in partial_results {
+                    result.extend(partial);
+                }
             } else {
+                // SEQUENTIAL PATH: Small array
                 let needs_dot = !builder.is_empty();
                 for (index, val) in arr.iter().enumerate() {
                     builder.push_level();
                     builder.append_index(index, needs_dot);
-                    flatten_value(val, builder, result);
+                    flatten_value_with_threshold(val, builder, result, nested_threshold);
                     builder.pop_level();
                 }
             }
@@ -3614,8 +3899,9 @@ fn apply_key_replacements_with_collision_handling(
     }
 
     // Collision handling path: apply replacements and track what each original key maps to
-    let mut key_mapping: FxHashMap<String, String> = FxHashMap::default();
-    let mut original_values: FxHashMap<String, Value> = FxHashMap::default();
+    let flattened_len = flattened.len();
+    let mut key_mapping: FxHashMap<String, String> = FxHashMap::with_capacity_and_hasher(flattened_len, Default::default());
+    let mut original_values: FxHashMap<String, Value> = FxHashMap::with_capacity_and_hasher(flattened_len, Default::default());
 
     for (original_key, value) in flattened {
         let mut new_key = Cow::Borrowed(original_key.as_str());
@@ -3643,7 +3929,7 @@ fn apply_key_replacements_with_collision_handling(
     }
 
     // Second pass: group by target key to detect collisions
-    let mut target_groups: FxHashMap<String, Vec<String>> = FxHashMap::default();
+    let mut target_groups: FxHashMap<String, Vec<String>> = FxHashMap::with_capacity_and_hasher(key_mapping.len(), Default::default());
     for (original_key, target_key) in &key_mapping {
         target_groups.entry(target_key.clone()).or_insert_with(Vec::new).push(original_key.clone());
     }
@@ -3701,8 +3987,9 @@ fn apply_key_replacements_unflatten_with_collisions(
     }
 
     // First pass: apply replacements and track what each original key maps to
-    let mut key_mapping: FxHashMap<String, String> = FxHashMap::default();
-    let mut original_values: FxHashMap<String, Value> = FxHashMap::default();
+    let flattened_len = flattened_obj.len();
+    let mut key_mapping: FxHashMap<String, String> = FxHashMap::with_capacity_and_hasher(flattened_len, Default::default());
+    let mut original_values: FxHashMap<String, Value> = FxHashMap::with_capacity_and_hasher(flattened_len, Default::default());
 
     for (original_key, value) in flattened_obj {
         let mut new_key = original_key.clone();
@@ -3728,13 +4015,13 @@ fn apply_key_replacements_unflatten_with_collisions(
     }
 
     // Second pass: group by target key to detect collisions
-    let mut target_groups: FxHashMap<String, Vec<String>> = FxHashMap::default();
+    let mut target_groups: FxHashMap<String, Vec<String>> = FxHashMap::with_capacity_and_hasher(key_mapping.len(), Default::default());
     for (original_key, target_key) in &key_mapping {
         target_groups.entry(target_key.clone()).or_insert_with(Vec::new).push(original_key.clone());
     }
 
     // Third pass: build result with collision handling
-    let mut result = Map::new();
+    let mut result = Map::with_capacity(target_groups.len());
 
     for (target_key, original_keys) in target_groups {
         if original_keys.len() == 1 {

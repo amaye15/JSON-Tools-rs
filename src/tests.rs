@@ -943,3 +943,674 @@ mod tests {
         assert_eq!(parsed["user"]["enabled"], true);
     }
 }
+
+// ===== MEMORY PROFILING TESTS =====
+
+#[cfg(test)]
+mod memory_profiling_tests {
+    use crate::JSONTools;
+
+    #[test]
+    fn test_parallel_memory_overhead() {
+        // Create a batch of 100 JSON documents
+        let json_docs: Vec<String> = (0..100)
+            .map(|i| {
+                format!(
+                    r#"{{"id": {}, "name": "User {}", "email": "user{}@example.com", "age": {}, "active": true}}"#,
+                    i, i, i, 20 + (i % 50)
+                )
+            })
+            .collect();
+
+        let json_refs: Vec<&str> = json_docs.iter().map(|s| s.as_str()).collect();
+
+        // Test sequential processing
+        let result_seq = JSONTools::new()
+            .flatten()
+            .parallel_threshold(usize::MAX) // Force sequential
+            .execute(json_refs.clone())
+            .expect("Sequential processing failed");
+
+        // Test parallel processing
+        let result_par = JSONTools::new()
+            .flatten()
+            .parallel_threshold(1) // Force parallel
+            .execute(json_refs)
+            .expect("Parallel processing failed");
+
+        // Both should produce identical results - compare the actual strings
+        let (seq_results, par_results) = match (result_seq, result_par) {
+            (crate::JsonOutput::Multiple(seq), crate::JsonOutput::Multiple(par)) => (seq, par),
+            _ => panic!("Expected Multiple output"),
+        };
+
+        assert_eq!(seq_results.len(), par_results.len(), "Result counts should match");
+        for (i, (seq, par)) in seq_results.iter().zip(par_results.iter()).enumerate() {
+            assert_eq!(seq, par, "Result {} should be identical", i);
+        }
+
+        // Validate: results should be reasonable size
+        let total_size: usize = seq_results.iter().map(|s| s.len()).sum();
+        let avg_size = total_size / seq_results.len();
+
+        println!("Average result size: {} bytes", avg_size);
+        println!("Total results size: {} bytes ({:.2} KB)", total_size, total_size as f64 / 1024.0);
+
+        // Each flattened JSON should be reasonable (< 1KB for this test data)
+        assert!(avg_size < 1000, "Average result size is unexpectedly large");
+    }
+
+    #[test]
+    fn test_large_batch_memory_scaling() {
+        // Test that memory scales linearly with batch size, not exponentially
+        let batch_sizes = vec![10, 50, 100, 500];
+        let mut bytes_per_item = Vec::new();
+
+        for &size in &batch_sizes {
+            let json_docs: Vec<String> = (0..size)
+                .map(|i| {
+                    format!(
+                        r#"{{"id": {}, "data": "Item {}", "value": {}}}"#,
+                        i, i, i * 100
+                    )
+                })
+                .collect();
+
+            let json_refs: Vec<&str> = json_docs.iter().map(|s| s.as_str()).collect();
+
+            let result = JSONTools::new()
+                .flatten()
+                .parallel_threshold(10)
+                .execute(json_refs)
+                .expect("Processing failed");
+
+            // Measure output size as proxy for memory usage
+            if let crate::JsonOutput::Multiple(results) = result {
+                let total_bytes: usize = results.iter().map(|s| s.len() + std::mem::size_of::<String>()).sum();
+                let per_item = total_bytes / size;
+                bytes_per_item.push(per_item);
+
+                println!("Batch size {}: {} bytes total, {} bytes per item", size, total_bytes, per_item);
+            }
+        }
+
+        // Validate: per-item memory should be relatively constant (within 2x)
+        let min_per_item = *bytes_per_item.iter().min().unwrap();
+        let max_per_item = *bytes_per_item.iter().max().unwrap();
+        let ratio = max_per_item as f64 / min_per_item as f64;
+
+        println!("Memory per item ratio (max/min): {:.2}x", ratio);
+
+        // Linear scaling means ratio should be close to 1.0
+        // Allow up to 2x variation due to Vec overhead and small batch effects
+        assert!(
+            ratio < 2.0,
+            "Memory per item varies too much ({:.2}x), suggesting non-linear scaling",
+            ratio
+        );
+    }
+
+    #[test]
+    fn test_chunked_processing_memory() {
+        // Test that chunked processing (>1000 items) doesn't increase memory per item
+        let size = 1500; // Triggers chunked processing
+
+        let json_docs: Vec<String> = (0..size)
+            .map(|i| {
+                format!(r#"{{"id": {}, "value": {}}}"#, i, i * 10)
+            })
+            .collect();
+
+        let json_refs: Vec<&str> = json_docs.iter().map(|s| s.as_str()).collect();
+
+        let result = JSONTools::new()
+            .flatten()
+            .parallel_threshold(10)
+            .execute(json_refs)
+            .expect("Chunked processing failed");
+
+        // Measure output size
+        if let crate::JsonOutput::Multiple(results) = result {
+            assert_eq!(results.len(), size, "Should process all items");
+
+            let total_bytes: usize = results.iter().map(|s| s.len() + std::mem::size_of::<String>()).sum();
+            let per_item = total_bytes / size;
+
+            println!("Chunked processing (1500 items): {} bytes total, {} bytes per item", total_bytes, per_item);
+
+            // Validate: per-item memory should be reasonable (< 1KB per item for this simple JSON)
+            assert!(
+                per_item < 1000,
+                "Per-item memory ({} bytes) is too high for chunked processing",
+                per_item
+            );
+        }
+    }
+
+    #[test]
+    fn test_memory_cleanup_after_processing() {
+        // Test that results can be properly dropped and don't hold excessive memory
+        let json_docs: Vec<String> = (0..100)
+            .map(|i| format!(r#"{{"id": {}, "data": "test"}}"#, i))
+            .collect();
+
+        let json_refs: Vec<&str> = json_docs.iter().map(|s| s.as_str()).collect();
+
+        let result = JSONTools::new()
+            .flatten()
+            .parallel_threshold(10)
+            .execute(json_refs)
+            .expect("Processing failed");
+
+        // Validate result structure
+        if let crate::JsonOutput::Multiple(results) = result {
+            assert_eq!(results.len(), 100, "Should have 100 results");
+
+            // Each result should be a valid JSON string
+            for (i, result_str) in results.iter().enumerate() {
+                assert!(result_str.contains("id"), "Result {} should contain 'id' field", i);
+                assert!(result_str.contains("data"), "Result {} should contain 'data' field", i);
+            }
+
+            println!("Successfully processed and validated 100 items");
+            println!("Results can be dropped without issues");
+        }
+    }
+
+    #[test]
+    fn test_parallel_vs_sequential_same_output_size() {
+        // Verify that parallel and sequential produce identical output sizes
+        let json_docs: Vec<String> = (0..200)
+            .map(|i| {
+                format!(
+                    r#"{{"id": {}, "nested": {{"value": {}, "name": "Item {}"}}}}"#,
+                    i, i * 10, i
+                )
+            })
+            .collect();
+
+        let json_refs: Vec<&str> = json_docs.iter().map(|s| s.as_str()).collect();
+
+        // Sequential
+        let result_seq = JSONTools::new()
+            .flatten()
+            .parallel_threshold(usize::MAX)
+            .execute(json_refs.clone())
+            .expect("Sequential failed");
+
+        // Parallel
+        let result_par = JSONTools::new()
+            .flatten()
+            .parallel_threshold(1)
+            .execute(json_refs)
+            .expect("Parallel failed");
+
+        // Extract results
+        let (seq, par) = match (result_seq, result_par) {
+            (crate::JsonOutput::Multiple(seq), crate::JsonOutput::Multiple(par)) => (seq, par),
+            _ => panic!("Expected Multiple output"),
+        };
+
+        // Both should produce identical results
+        assert_eq!(seq.len(), par.len(), "Result counts should match");
+        for (i, (s, p)) in seq.iter().zip(par.iter()).enumerate() {
+            assert_eq!(s, p, "Result {} should be identical", i);
+        }
+
+        // Measure sizes
+        let seq_size: usize = seq.iter().map(|s| s.len()).sum();
+        let par_size: usize = par.iter().map(|s| s.len()).sum();
+
+        println!("Sequential total size: {} bytes", seq_size);
+        println!("Parallel total size: {} bytes", par_size);
+
+        assert_eq!(seq_size, par_size, "Output sizes should be identical");
+    }
+}
+
+// ===== NESTED PARALLELISM TESTS =====
+
+#[cfg(test)]
+mod nested_parallelism_tests {
+    use crate::{JSONTools, JsonOutput};
+
+    /// Test that nested parallelism produces the same results as sequential processing
+    #[test]
+    fn test_nested_parallel_consistency() {
+        // Create a large nested JSON document
+        let json = r#"{
+            "users": [
+                {"id": 1, "name": "Alice", "tags": ["admin", "user"]},
+                {"id": 2, "name": "Bob", "tags": ["user"]},
+                {"id": 3, "name": "Charlie", "tags": ["moderator", "user"]},
+                {"id": 4, "name": "David", "tags": ["user"]},
+                {"id": 5, "name": "Eve", "tags": ["admin", "moderator"]}
+            ],
+            "settings": {
+                "theme": "dark",
+                "notifications": {
+                    "email": true,
+                    "push": false,
+                    "sms": true
+                },
+                "privacy": {
+                    "profile_visible": true,
+                    "show_email": false
+                }
+            },
+            "metadata": {
+                "version": "1.0",
+                "created": "2024-01-01",
+                "updated": "2024-01-15"
+            }
+        }"#;
+
+        // Flatten with sequential processing (nested_threshold = usize::MAX)
+        let sequential_result = JSONTools::new()
+            .flatten()
+            .nested_parallel_threshold(usize::MAX)
+            .execute(json)
+            .expect("Sequential flatten failed");
+
+        // Flatten with nested parallelism (nested_threshold = 2)
+        let parallel_result = JSONTools::new()
+            .flatten()
+            .nested_parallel_threshold(2)
+            .execute(json)
+            .expect("Parallel flatten failed");
+
+        // Extract the JSON strings for comparison
+        let sequential_json = match sequential_result {
+            JsonOutput::Single(s) => s,
+            _ => panic!("Expected single output"),
+        };
+
+        let parallel_json = match parallel_result {
+            JsonOutput::Single(s) => s,
+            _ => panic!("Expected single output"),
+        };
+
+        // Parse both results to compare as JSON objects (order-independent)
+        let sequential_value: serde_json::Value = serde_json::from_str(&sequential_json)
+            .expect("Failed to parse sequential result");
+        let parallel_value: serde_json::Value = serde_json::from_str(&parallel_json)
+            .expect("Failed to parse parallel result");
+
+        assert_eq!(
+            sequential_value, parallel_value,
+            "Nested parallel processing should produce identical results to sequential processing"
+        );
+    }
+
+    /// Test nested parallelism with large objects
+    #[test]
+    fn test_large_object_nested_parallelism() {
+        // Create a JSON object with 150 keys (exceeds default threshold of 100)
+        let mut json = String::from("{");
+        for i in 0..150 {
+            if i > 0 {
+                json.push(',');
+            }
+            json.push_str(&format!(r#""key_{}": {{"nested": "value_{}", "id": {}}}"#, i, i, i));
+        }
+        json.push('}');
+
+        // Flatten with sequential processing
+        let sequential_result = JSONTools::new()
+            .flatten()
+            .nested_parallel_threshold(usize::MAX)
+            .execute(&json)
+            .expect("Sequential flatten failed");
+
+        // Flatten with nested parallelism (threshold = 100)
+        let parallel_result = JSONTools::new()
+            .flatten()
+            .nested_parallel_threshold(100)
+            .execute(&json)
+            .expect("Parallel flatten failed");
+
+        // Extract and compare
+        let sequential_json = match sequential_result {
+            JsonOutput::Single(s) => s,
+            _ => panic!("Expected single output"),
+        };
+
+        let parallel_json = match parallel_result {
+            JsonOutput::Single(s) => s,
+            _ => panic!("Expected single output"),
+        };
+
+        let sequential_value: serde_json::Value = serde_json::from_str(&sequential_json).unwrap();
+        let parallel_value: serde_json::Value = serde_json::from_str(&parallel_json).unwrap();
+
+        assert_eq!(sequential_value, parallel_value);
+    }
+
+    /// Test nested parallelism with large arrays
+    #[test]
+    fn test_large_array_nested_parallelism() {
+        // Create a JSON array with 150 items (exceeds default threshold of 100)
+        let mut json = String::from("[");
+        for i in 0..150 {
+            if i > 0 {
+                json.push(',');
+            }
+            json.push_str(&format!(r#"{{"id": {}, "value": "item_{}", "nested": {{"data": "test_{}"}} }}"#, i, i, i));
+        }
+        json.push(']');
+
+        // Flatten with sequential processing
+        let sequential_result = JSONTools::new()
+            .flatten()
+            .nested_parallel_threshold(usize::MAX)
+            .execute(&json)
+            .expect("Sequential flatten failed");
+
+        // Flatten with nested parallelism (threshold = 100)
+        let parallel_result = JSONTools::new()
+            .flatten()
+            .nested_parallel_threshold(100)
+            .execute(&json)
+            .expect("Parallel flatten failed");
+
+        // Extract and compare
+        let sequential_json = match sequential_result {
+            JsonOutput::Single(s) => s,
+            _ => panic!("Expected single output"),
+        };
+
+        let parallel_json = match parallel_result {
+            JsonOutput::Single(s) => s,
+            _ => panic!("Expected single output"),
+        };
+
+        let sequential_value: serde_json::Value = serde_json::from_str(&sequential_json).unwrap();
+        let parallel_value: serde_json::Value = serde_json::from_str(&parallel_json).unwrap();
+
+        assert_eq!(sequential_value, parallel_value);
+    }
+
+    /// Test that small objects/arrays stay sequential
+    #[test]
+    fn test_small_structures_stay_sequential() {
+        let json = r#"{
+            "small_object": {"a": 1, "b": 2, "c": 3},
+            "small_array": [1, 2, 3, 4, 5]
+        }"#;
+
+        // This should work fine even with a very low threshold
+        // because the structures are small
+        let result = JSONTools::new()
+            .flatten()
+            .nested_parallel_threshold(10)
+            .execute(json)
+            .expect("Flatten failed");
+
+        match result {
+            JsonOutput::Single(s) => {
+                let value: serde_json::Value = serde_json::from_str(&s).unwrap();
+                assert!(value.is_object());
+            }
+            _ => panic!("Expected single output"),
+        }
+    }
+
+    /// Test environment variable configuration
+    #[test]
+    fn test_environment_variable_nested_threshold() {
+        std::env::set_var("JSON_TOOLS_NESTED_PARALLEL_THRESHOLD", "50");
+
+        let tools = JSONTools::new();
+
+        // The default should now be 50 from the environment variable
+        // We can't directly access the field, but we can test that it works
+        let json = r#"{"test": "value"}"#;
+        let result = tools.flatten().execute(json);
+
+        assert!(result.is_ok());
+
+        std::env::remove_var("JSON_TOOLS_NESTED_PARALLEL_THRESHOLD");
+    }
+
+    /// Test deeply nested structures with parallelism
+    #[test]
+    fn test_deeply_nested_parallelism() {
+        // Create a deeply nested structure with wide branches
+        let json = r#"{
+            "level1": {
+                "items": [
+                    {"id": 1, "data": {"values": [1, 2, 3, 4, 5]}},
+                    {"id": 2, "data": {"values": [6, 7, 8, 9, 10]}},
+                    {"id": 3, "data": {"values": [11, 12, 13, 14, 15]}}
+                ],
+                "metadata": {
+                    "created": "2024-01-01",
+                    "tags": ["a", "b", "c", "d", "e"]
+                }
+            }
+        }"#;
+
+        let sequential_result = JSONTools::new()
+            .flatten()
+            .nested_parallel_threshold(usize::MAX)
+            .execute(json)
+            .expect("Sequential flatten failed");
+
+        let parallel_result = JSONTools::new()
+            .flatten()
+            .nested_parallel_threshold(2)
+            .execute(json)
+            .expect("Parallel flatten failed");
+
+        let sequential_json = match sequential_result {
+            JsonOutput::Single(s) => s,
+            _ => panic!("Expected single output"),
+        };
+
+        let parallel_json = match parallel_result {
+            JsonOutput::Single(s) => s,
+            _ => panic!("Expected single output"),
+        };
+
+        let sequential_value: serde_json::Value = serde_json::from_str(&sequential_json).unwrap();
+        let parallel_value: serde_json::Value = serde_json::from_str(&parallel_json).unwrap();
+
+        assert_eq!(sequential_value, parallel_value);
+    }
+}
+
+// ===== PARALLEL REGEX CACHE TESTS =====
+
+#[cfg(test)]
+mod parallel_regex_cache_tests {
+    use crate::{JSONTools, JsonOutput};
+
+    /// Test that parallel processing with regex replacements works correctly
+    #[test]
+    fn test_parallel_processing_with_regex_replacements() {
+        // Create a batch of JSON documents with patterns to replace
+        let json_docs: Vec<String> = (0..100)
+            .map(|i| {
+                format!(
+                    r#"{{"user_id": {}, "admin_name": "Admin{}", "guest_email": "guest{}@example.com"}}"#,
+                    i, i, i
+                )
+            })
+            .collect();
+
+        let json_refs: Vec<&str> = json_docs.iter().map(|s| s.as_str()).collect();
+
+        // Process with parallel threshold = 10 (should use parallel processing)
+        let result = JSONTools::new()
+            .flatten()
+            .key_replacement("(user|admin|guest)_", "")
+            .value_replacement("@example\\.com", "@company.org")
+            .parallel_threshold(10)
+            .execute(json_refs)
+            .expect("Parallel processing failed");
+
+        // Verify results
+        if let JsonOutput::Multiple(results) = result {
+            assert_eq!(results.len(), 100);
+
+            for (i, result_str) in results.iter().enumerate() {
+                let value: serde_json::Value = serde_json::from_str(result_str)
+                    .expect("Failed to parse result");
+
+                // Check that key replacements worked
+                assert!(value.as_object().unwrap().contains_key("id"), "Should have 'id' key");
+                assert!(value.as_object().unwrap().contains_key("name"), "Should have 'name' key");
+                assert!(value.as_object().unwrap().contains_key("email"), "Should have 'email' key");
+
+                // Check that value replacements worked
+                let email = value["email"].as_str().unwrap();
+                assert!(
+                    email.contains("@company.org"),
+                    "Email should be replaced: {} (item {})",
+                    email, i
+                );
+            }
+        } else {
+            panic!("Expected Multiple output");
+        }
+    }
+
+    /// Test that parallel and sequential produce identical results with regex
+    #[test]
+    fn test_parallel_vs_sequential_consistency() {
+        let json_docs: Vec<String> = (0..50)
+            .map(|i| {
+                format!(
+                    r#"{{"temp_data": "value{}", "old_field": "test{}", "user_name": "User{}"}}"#,
+                    i, i, i
+                )
+            })
+            .collect();
+
+        let json_refs: Vec<&str> = json_docs.iter().map(|s| s.as_str()).collect();
+
+        // Sequential processing
+        let sequential_result = JSONTools::new()
+            .flatten()
+            .key_replacement("^(temp|old|user)_", "new_")
+            .value_replacement("^test", "updated")
+            .parallel_threshold(usize::MAX) // Force sequential
+            .execute(json_refs.clone())
+            .expect("Sequential processing failed");
+
+        // Parallel processing
+        let parallel_result = JSONTools::new()
+            .flatten()
+            .key_replacement("^(temp|old|user)_", "new_")
+            .value_replacement("^test", "updated")
+            .parallel_threshold(1) // Force parallel
+            .execute(json_refs)
+            .expect("Parallel processing failed");
+
+        // Compare results
+        let (seq_results, par_results) = match (sequential_result, parallel_result) {
+            (JsonOutput::Multiple(seq), JsonOutput::Multiple(par)) => (seq, par),
+            _ => panic!("Expected Multiple output"),
+        };
+
+        assert_eq!(seq_results.len(), par_results.len());
+
+        for (i, (seq, par)) in seq_results.iter().zip(par_results.iter()).enumerate() {
+            assert_eq!(seq, par, "Result {} should be identical", i);
+        }
+    }
+
+    /// Test thread-local cache isolation
+    #[test]
+    fn test_thread_local_cache_isolation() {
+        // This test verifies that thread-local regex caches don't interfere with each other
+        let json_docs: Vec<String> = (0..200)
+            .map(|i| {
+                format!(r#"{{"field_{}_name": "value{}", "data_{}_id": {}}}"#, i % 10, i, i % 5, i)
+            })
+            .collect();
+
+        let json_refs: Vec<&str> = json_docs.iter().map(|s| s.as_str()).collect();
+
+        // Process with multiple regex patterns
+        let result = JSONTools::new()
+            .flatten()
+            .key_replacement("field_[0-9]+_", "f_")
+            .key_replacement("data_[0-9]+_", "d_")
+            .value_replacement("value([0-9]+)", "val_$1")
+            .parallel_threshold(10)
+            .execute(json_refs)
+            .expect("Processing failed");
+
+        // Verify all results are correct
+        if let JsonOutput::Multiple(results) = result {
+            assert_eq!(results.len(), 200);
+
+            for result_str in results.iter() {
+                let value: serde_json::Value = serde_json::from_str(result_str).unwrap();
+                let obj = value.as_object().unwrap();
+
+                // Check that replacements were applied
+                assert!(
+                    obj.keys().any(|k| k.starts_with("f_") || k.starts_with("d_")),
+                    "Keys should have replacements applied"
+                );
+            }
+        }
+    }
+
+    /// Test adaptive threshold behavior with regex
+    #[test]
+    fn test_adaptive_threshold_behavior() {
+        // Small batch (< threshold) - should use sequential
+        let small_batch: Vec<String> = (0..5)
+            .map(|i| format!(r#"{{"user_id": {}}}"#, i))
+            .collect();
+        let small_refs: Vec<&str> = small_batch.iter().map(|s| s.as_str()).collect();
+
+        let small_result = JSONTools::new()
+            .flatten()
+            .key_replacement("user_", "")
+            .parallel_threshold(10)
+            .execute(small_refs)
+            .expect("Small batch failed");
+
+        // Large batch (> threshold) - should use parallel
+        let large_batch: Vec<String> = (0..50)
+            .map(|i| format!(r#"{{"user_id": {}}}"#, i))
+            .collect();
+        let large_refs: Vec<&str> = large_batch.iter().map(|s| s.as_str()).collect();
+
+        let large_result = JSONTools::new()
+            .flatten()
+            .key_replacement("user_", "")
+            .parallel_threshold(10)
+            .execute(large_refs)
+            .expect("Large batch failed");
+
+        // Both should succeed
+        assert!(matches!(small_result, JsonOutput::Multiple(_)));
+        assert!(matches!(large_result, JsonOutput::Multiple(_)));
+    }
+
+    /// Test environment variable for parallel threshold
+    #[test]
+    fn test_environment_variable_threshold() {
+        std::env::set_var("JSON_TOOLS_PARALLEL_THRESHOLD", "5");
+
+        let json_docs: Vec<String> = (0..10)
+            .map(|i| format!(r#"{{"id": {}}}"#, i))
+            .collect();
+        let json_refs: Vec<&str> = json_docs.iter().map(|s| s.as_str()).collect();
+
+        // Should use parallel processing because batch size (10) > threshold (5)
+        let result = JSONTools::new()
+            .flatten()
+            .execute(json_refs)
+            .expect("Processing failed");
+
+        assert!(matches!(result, JsonOutput::Multiple(_)));
+
+        std::env::remove_var("JSON_TOOLS_PARALLEL_THRESHOLD");
+    }
+}

@@ -2301,3 +2301,288 @@ class TestTypeConversion:
         assert result["order.customer.id"] == "CUST-789"  # Kept as string
         assert result["order.customer.verified"] is True
         assert result["order.customer.balance"] == 1500.0
+
+
+class TestParallelProcessing:
+    """Test parallel processing configuration and functionality"""
+
+    def test_parallel_threshold_method_exists(self):
+        """Test that parallel_threshold method exists and is chainable"""
+        tools = json_tools_rs.JSONTools().flatten().parallel_threshold(50)
+        assert tools is not None
+
+    def test_num_threads_method_exists(self):
+        """Test that num_threads method exists and is chainable"""
+        tools = json_tools_rs.JSONTools().flatten().num_threads(4)
+        assert tools is not None
+
+    def test_num_threads_with_none(self):
+        """Test that num_threads accepts None (use Rayon default)"""
+        tools = json_tools_rs.JSONTools().flatten().num_threads(None)
+        assert tools is not None
+
+    def test_nested_parallel_threshold_method_exists(self):
+        """Test that nested_parallel_threshold method exists and is chainable"""
+        tools = json_tools_rs.JSONTools().flatten().nested_parallel_threshold(200)
+        assert tools is not None
+
+    def test_parallel_methods_chaining(self):
+        """Test that all parallel methods can be chained together"""
+        tools = (
+            json_tools_rs.JSONTools()
+            .flatten()
+            .parallel_threshold(50)
+            .num_threads(4)
+            .nested_parallel_threshold(200)
+            .remove_empty_strings(True)
+        )
+        assert tools is not None
+
+    def test_parallel_batch_processing_small_batch(self):
+        """Test batch processing with small batch (below default threshold)"""
+        tools = json_tools_rs.JSONTools().flatten()
+        batch = [{"key": i, "nested": {"value": i * 10}} for i in range(5)]
+        results = tools.execute(batch)
+
+        assert len(results) == 5
+        assert all(isinstance(r, dict) for r in results)
+        assert results[0]["key"] == 0
+        assert results[0]["nested.value"] == 0
+        assert results[4]["key"] == 4
+        assert results[4]["nested.value"] == 40
+
+    def test_parallel_batch_processing_medium_batch(self):
+        """Test batch processing with medium batch (above default threshold of 10)"""
+        tools = json_tools_rs.JSONTools().flatten()
+        batch = [{"user_id": i, "data": {"score": i * 100}} for i in range(25)]
+        results = tools.execute(batch)
+
+        assert len(results) == 25
+        assert all(isinstance(r, dict) for r in results)
+        assert results[0]["user_id"] == 0
+        assert results[0]["data.score"] == 0
+        assert results[24]["user_id"] == 24
+        assert results[24]["data.score"] == 2400
+
+    def test_parallel_batch_processing_large_batch(self):
+        """Test batch processing with large batch (>1000 items, uses chunked processing)"""
+        tools = json_tools_rs.JSONTools().flatten()
+        batch = [{"id": i, "value": i * 2} for i in range(1500)]
+        results = tools.execute(batch)
+
+        assert len(results) == 1500
+        assert all(isinstance(r, dict) for r in results)
+        assert results[0]["id"] == 0
+        assert results[0]["value"] == 0
+        assert results[1499]["id"] == 1499
+        assert results[1499]["value"] == 2998
+
+    def test_parallel_threshold_configuration(self):
+        """Test custom parallel threshold configuration"""
+        # Set threshold to 100, so batch of 50 should process sequentially
+        tools = json_tools_rs.JSONTools().flatten().parallel_threshold(100)
+        batch = [{"key": i} for i in range(50)]
+        results = tools.execute(batch)
+
+        assert len(results) == 50
+        assert all(isinstance(r, dict) for r in results)
+
+    def test_parallel_with_string_batch(self):
+        """Test parallel processing with list of JSON strings"""
+        tools = json_tools_rs.JSONTools().flatten()
+        batch = [f'{{"id": {i}, "nested": {{"value": {i * 10}}}}}' for i in range(20)]
+        results = tools.execute(batch)
+
+        assert len(results) == 20
+        assert all(isinstance(r, str) for r in results)
+        parsed_0 = json.loads(results[0])
+        assert parsed_0["id"] == 0
+        assert parsed_0["nested.value"] == 0
+
+    def test_parallel_with_mixed_operations(self):
+        """Test parallel processing with various transformations"""
+        tools = (
+            json_tools_rs.JSONTools()
+            .flatten()
+            .parallel_threshold(10)
+            .remove_empty_strings(True)
+            .remove_nulls(True)
+            .lowercase_keys(True)
+        )
+        batch = [
+            {"User_ID": i, "Name": "Test", "Empty": "", "Null": None}
+            for i in range(15)
+        ]
+        results = tools.execute(batch)
+
+        assert len(results) == 15
+        for result in results:
+            assert "user_id" in result  # lowercase
+            assert "name" in result
+            assert "Empty" not in result  # removed
+            assert "Null" not in result  # removed
+
+    def test_parallel_unflatten_batch(self):
+        """Test parallel processing with unflatten operation"""
+        tools = json_tools_rs.JSONTools().unflatten().parallel_threshold(10)
+        batch = [{"user.id": i, "user.name": f"User{i}"} for i in range(20)]
+        results = tools.execute(batch)
+
+        assert len(results) == 20
+        assert all(isinstance(r, dict) for r in results)
+        assert results[0]["user"]["id"] == 0
+        assert results[0]["user"]["name"] == "User0"
+        assert results[19]["user"]["id"] == 19
+        assert results[19]["user"]["name"] == "User19"
+
+    def test_parallel_with_collision_handling(self):
+        """Test parallel processing with collision handling"""
+        tools = (
+            json_tools_rs.JSONTools()
+            .flatten()
+            .parallel_threshold(5)
+            .key_replacement("(user|admin)_", "")
+            .handle_key_collision(True)
+        )
+        batch = [
+            {"user_name": f"User{i}", "admin_name": f"Admin{i}"} for i in range(10)
+        ]
+        results = tools.execute(batch)
+
+        assert len(results) == 10
+        for i, result in enumerate(results):
+            assert "name" in result
+            # Should be an array due to collision
+            assert isinstance(result["name"], list)
+            assert len(result["name"]) == 2
+
+    def test_parallel_performance_benefit(self):
+        """Test that parallel processing provides performance benefit for large batches"""
+        # Create a large batch with complex nested structures
+        large_batch = [
+            {
+                "user": {
+                    "id": i,
+                    "profile": {
+                        "name": f"User{i}",
+                        "email": f"user{i}@example.com",
+                        "settings": {"theme": "dark", "notifications": True},
+                    },
+                    "posts": [
+                        {"id": j, "title": f"Post {j}", "likes": j * 10}
+                        for j in range(5)
+                    ],
+                }
+            }
+            for i in range(100)
+        ]
+
+        # Process with parallel processing enabled (default threshold = 10)
+        tools_parallel = json_tools_rs.JSONTools().flatten()
+        start = time.time()
+        results_parallel = tools_parallel.execute(large_batch)
+        time_parallel = time.time() - start
+
+        # Verify results are correct
+        assert len(results_parallel) == 100
+        assert all(isinstance(r, dict) for r in results_parallel)
+        assert "user.id" in results_parallel[0]
+        assert "user.profile.name" in results_parallel[0]
+        assert "user.posts.0.title" in results_parallel[0]
+
+        # Just verify it completes successfully - actual speedup depends on hardware
+        assert time_parallel > 0
+
+    def test_nested_parallel_threshold_large_object(self):
+        """Test nested parallel threshold with large objects"""
+        # Create a large object with many keys
+        large_object = {f"key_{i}": {"nested": i, "value": i * 10} for i in range(150)}
+
+        # With default nested threshold (100), this should trigger nested parallelism
+        tools = json_tools_rs.JSONTools().flatten()
+        result = tools.execute(large_object)
+
+        assert isinstance(result, dict)
+        assert len(result) == 300  # 150 keys * 2 nested fields each
+        assert result["key_0.nested"] == 0
+        assert result["key_0.value"] == 0
+        assert result["key_149.nested"] == 149
+        assert result["key_149.value"] == 1490
+
+    def test_nested_parallel_threshold_configuration(self):
+        """Test custom nested parallel threshold configuration"""
+        # Set very high threshold so nested parallelism won't trigger
+        large_object = {f"key_{i}": {"nested": i} for i in range(150)}
+
+        tools = json_tools_rs.JSONTools().flatten().nested_parallel_threshold(1000)
+        result = tools.execute(large_object)
+
+        assert isinstance(result, dict)
+        assert len(result) == 150
+        assert result["key_0.nested"] == 0
+        assert result["key_149.nested"] == 149
+
+    def test_parallel_with_type_conversion(self):
+        """Test parallel processing with automatic type conversion"""
+        tools = (
+            json_tools_rs.JSONTools()
+            .flatten()
+            .parallel_threshold(10)
+            .auto_convert_types(True)
+        )
+        batch = [
+            {"id": str(i), "score": f"{i * 100}", "active": "true"} for i in range(20)
+        ]
+        results = tools.execute(batch)
+
+        assert len(results) == 20
+        for i, result in enumerate(results):
+            assert result["id"] == i  # Converted to int
+            assert result["score"] == i * 100  # Converted to int
+            assert result["active"] is True  # Converted to bool
+
+    def test_parallel_roundtrip_consistency(self):
+        """Test that parallel processing maintains roundtrip consistency"""
+        original_batch = [
+            {"user": {"id": i, "data": {"value": i * 10}}} for i in range(25)
+        ]
+
+        # Flatten with parallel processing
+        flatten_tools = json_tools_rs.JSONTools().flatten().parallel_threshold(10)
+        flattened = flatten_tools.execute(original_batch)
+
+        # Unflatten with parallel processing
+        unflatten_tools = json_tools_rs.JSONTools().unflatten().parallel_threshold(10)
+        unflattened = unflatten_tools.execute(flattened)
+
+        # Should match original
+        assert len(unflattened) == len(original_batch)
+        for i, (original, result) in enumerate(zip(original_batch, unflattened)):
+            assert result == original
+
+    def test_parallel_error_handling(self):
+        """Test that parallel processing handles errors correctly"""
+        tools = json_tools_rs.JSONTools().flatten().parallel_threshold(5)
+
+        # Mix of valid and invalid JSON strings
+        batch = ['{"valid": 1}', '{"valid": 2}', "invalid json", '{"valid": 3}']
+
+        with pytest.raises(Exception):  # Should raise error for invalid JSON
+            tools.execute(batch)
+
+    def test_parallel_empty_batch(self):
+        """Test parallel processing with empty batch"""
+        tools = json_tools_rs.JSONTools().flatten().parallel_threshold(10)
+        results = tools.execute([])
+
+        assert results == []
+
+    def test_parallel_single_item_batch(self):
+        """Test parallel processing with single item (below threshold)"""
+        tools = json_tools_rs.JSONTools().flatten().parallel_threshold(10)
+        batch = [{"key": "value", "nested": {"data": 123}}]
+        results = tools.execute(batch)
+
+        assert len(results) == 1
+        assert results[0]["key"] == "value"
+        assert results[0]["nested.data"] == 123

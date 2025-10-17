@@ -87,7 +87,7 @@ def main() -> None:
     replacement_tools = (
         json_tools_rs.JSONTools()
         .flatten()
-        .key_replacement("regex:^(user|admin)_", "")
+        .key_replacement("^(user|admin)_", "")  # Standard Rust regex syntax
         .value_replacement("@example.com", "@company.org")
     )
 
@@ -237,20 +237,46 @@ def main() -> None:
     handle_collision_tools = (
         json_tools_rs.JSONTools()
         .flatten()
-        .key_replacement("regex:(user|admin|guest)_", "")
+        .key_replacement("(user|admin|guest)_", "")  # Standard Rust regex syntax
         .handle_key_collision(True)
     )
 
     collision_result = handle_collision_tools.execute(collision_data)
     print(f"Handle collision (arrays): {collision_result}")
+    print("Note: All colliding values are collected into an array")
 
+    print("\n" + "=" * 60)
+    print("10. Parallel Processing (Automatic)")
+    print("=" * 60)
 
-    print(f"Avoid collision (suffixes): {avoidance_result}")
+    # Parallel processing is automatic for large batches (10+ items by default)
+    large_batch = [{"user_id": i, "data": {"value": i * 10}} for i in range(50)]
+
+    # Default: automatic parallel processing for batches >= 10 items
+    default_tools = json_tools_rs.JSONTools().flatten()
+    results = default_tools.execute(large_batch)
+    print(f"Processed {len(results)} items (automatic parallelization)")
+    print(f"Sample result: {results[0]}")
+
+    # Configure parallel processing thresholds
+    custom_parallel_tools = (
+        json_tools_rs.JSONTools()
+        .flatten()
+        .parallel_threshold(25)  # Only parallelize batches of 25+ items
+        .num_threads(4)  # Limit to 4 threads
+        .nested_parallel_threshold(200)  # Parallelize large nested structures (200+ keys/items)
+    )
+
+    results = custom_parallel_tools.execute(large_batch)
+    print(f"Custom parallel config: processed {len(results)} items")
+    print("Note: Parallel processing provides significant speedup for large batches")
+    print("      and large nested structures without any code changes!")
 
     print("\n" + "=" * 60)
     print("✅ All examples completed successfully!")
     print("🚀 JSONTools provides a complete, unified API for JSON manipulation")
-    print("   with perfect type preservation and advanced collision handling!")
+    print("   with perfect type preservation, advanced collision handling,")
+    print("   and automatic parallel processing for optimal performance!")
 
 
 if __name__ == "__main__":
