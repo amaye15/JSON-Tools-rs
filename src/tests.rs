@@ -832,7 +832,7 @@ mod tests {
 
     #[test]
     fn test_keep_invalid_strings() {
-        let json = r#"{"name": "John", "code": "ABC123", "maybe": "yes", "invalid": "12.34.56"}"#;
+        let json = r#"{"name": "John", "code": "ABC123", "maybe": "yes", "invalid": "12.34.56", "text": "hello123"}"#;
         let result = JSONTools::new()
             .flatten()
             .auto_convert_types(true)
@@ -842,9 +842,10 @@ mod tests {
         let parsed: Value = serde_json::from_str(&flattened).unwrap();
 
         assert_eq!(parsed["name"], "John");
-        assert_eq!(parsed["code"], "ABC123");
-        assert_eq!(parsed["maybe"], "yes"); // Not a valid boolean
-        assert_eq!(parsed["invalid"], "12.34.56"); // Invalid number
+        assert_eq!(parsed["code"], "ABC123"); // Not a valid number (mixed text and digits)
+        assert_eq!(parsed["maybe"], true); // "yes" is now a valid boolean
+        assert_eq!(parsed["invalid"], "12.34.56"); // Invalid number (multiple decimal points)
+        assert_eq!(parsed["text"], "hello123"); // Text with numbers stays as string
     }
 
     #[test]
@@ -1424,6 +1425,8 @@ mod nested_parallelism_tests {
 #[cfg(test)]
 mod parallel_regex_cache_tests {
     use crate::{JSONTools, JsonOutput};
+    use serde_json::Value;
+    use super::extract_single;
 
     /// Test that parallel processing with regex replacements works correctly
     #[test]
@@ -1612,5 +1615,358 @@ mod parallel_regex_cache_tests {
         assert!(matches!(result, JsonOutput::Multiple(_)));
 
         std::env::remove_var("JSON_TOOLS_PARALLEL_THRESHOLD");
+    }
+
+    // ===== ENHANCED TYPE CONVERSION TESTS =====
+
+    #[test]
+    fn test_type_conversion_extended_booleans() {
+        let json = r#"{
+            "yes_variants": {"a": "yes", "b": "YES", "c": "Yes"},
+            "no_variants": {"a": "no", "b": "NO", "c": "No"},
+            "y_n": {"a": "y", "b": "Y", "c": "n", "d": "N"},
+            "on_off": {"a": "on", "b": "ON", "c": "off", "d": "OFF"},
+            "numeric": {"a": "1", "b": "0"}
+        }"#;
+
+        let result = JSONTools::new()
+            .flatten()
+            .auto_convert_types(true)
+            .execute(json)
+            .unwrap();
+        let flattened = extract_single(result);
+        let parsed: Value = serde_json::from_str(&flattened).unwrap();
+
+        // Yes variants should be true
+        assert_eq!(parsed["yes_variants.a"], true);
+        assert_eq!(parsed["yes_variants.b"], true);
+        assert_eq!(parsed["yes_variants.c"], true);
+
+        // No variants should be false
+        assert_eq!(parsed["no_variants.a"], false);
+        assert_eq!(parsed["no_variants.b"], false);
+        assert_eq!(parsed["no_variants.c"], false);
+
+        // Y/N variants
+        assert_eq!(parsed["y_n.a"], true);
+        assert_eq!(parsed["y_n.b"], true);
+        assert_eq!(parsed["y_n.c"], false);
+        assert_eq!(parsed["y_n.d"], false);
+
+        // On/Off variants
+        assert_eq!(parsed["on_off.a"], true);
+        assert_eq!(parsed["on_off.b"], true);
+        assert_eq!(parsed["on_off.c"], false);
+        assert_eq!(parsed["on_off.d"], false);
+
+        // Numeric values (1 and 0 are now treated as numbers, not booleans)
+        assert_eq!(parsed["numeric.a"], 1);
+        assert_eq!(parsed["numeric.b"], 0);
+    }
+
+    #[test]
+    fn test_type_conversion_percentages() {
+        let json = r#"{
+            "percent1": "50%",
+            "percent2": "100%",
+            "percent3": "0.5%",
+            "percent4": "25.75%",
+            "negative": "-10%"
+        }"#;
+
+        let result = JSONTools::new()
+            .flatten()
+            .auto_convert_types(true)
+            .execute(json)
+            .unwrap();
+        let flattened = extract_single(result);
+        let parsed: Value = serde_json::from_str(&flattened).unwrap();
+
+        // Percentages should be converted to numbers (not decimals)
+        assert_eq!(parsed["percent1"], 50.0);
+        assert_eq!(parsed["percent2"], 100.0);
+        assert_eq!(parsed["percent3"], 0.5);
+        assert_eq!(parsed["percent4"], 25.75);
+        assert_eq!(parsed["negative"], -10.0);
+    }
+
+    #[test]
+    fn test_type_conversion_null_strings() {
+        let json = r#"{
+            "null_variants": {"a": "null", "b": "NULL", "c": "Null"},
+            "nil_variants": {"a": "nil", "b": "NIL", "c": "Nil"},
+            "none_variants": {"a": "none", "b": "NONE", "c": "None"},
+            "na_variants": {"a": "N/A", "b": "n/a", "c": "NA", "d": "na"}
+        }"#;
+
+        let result = JSONTools::new()
+            .flatten()
+            .auto_convert_types(true)
+            .execute(json)
+            .unwrap();
+        let flattened = extract_single(result);
+        let parsed: Value = serde_json::from_str(&flattened).unwrap();
+
+        // All null variants should be converted to JSON null
+        assert_eq!(parsed["null_variants.a"], Value::Null);
+        assert_eq!(parsed["null_variants.b"], Value::Null);
+        assert_eq!(parsed["null_variants.c"], Value::Null);
+
+        assert_eq!(parsed["nil_variants.a"], Value::Null);
+        assert_eq!(parsed["nil_variants.b"], Value::Null);
+        assert_eq!(parsed["nil_variants.c"], Value::Null);
+
+        assert_eq!(parsed["none_variants.a"], Value::Null);
+        assert_eq!(parsed["none_variants.b"], Value::Null);
+        assert_eq!(parsed["none_variants.c"], Value::Null);
+
+        assert_eq!(parsed["na_variants.a"], Value::Null);
+        assert_eq!(parsed["na_variants.b"], Value::Null);
+        assert_eq!(parsed["na_variants.c"], Value::Null);
+        assert_eq!(parsed["na_variants.d"], Value::Null);
+    }
+
+    #[test]
+    fn test_type_conversion_mixed_values() {
+        let json = r#"{
+            "number": "123",
+            "percent": "50%",
+            "bool_yes": "yes",
+            "bool_no": "no",
+            "null_str": "null",
+            "regular_string": "hello",
+            "empty": "",
+            "actual_null": null,
+            "currency": "$1,234.56"
+        }"#;
+
+        let result = JSONTools::new()
+            .flatten()
+            .auto_convert_types(true)
+            .execute(json)
+            .unwrap();
+        let flattened = extract_single(result);
+        let parsed: Value = serde_json::from_str(&flattened).unwrap();
+
+        // Verify each conversion
+        assert_eq!(parsed["number"], 123);
+        assert_eq!(parsed["percent"], 50.0);
+        assert_eq!(parsed["bool_yes"], true);
+        assert_eq!(parsed["bool_no"], false);
+        assert_eq!(parsed["null_str"], Value::Null);
+        assert_eq!(parsed["regular_string"], "hello");
+        assert_eq!(parsed["empty"], "");  // Empty strings stay as strings
+        assert_eq!(parsed["actual_null"], Value::Null);
+        assert_eq!(parsed["currency"], 1234.56);
+    }
+
+    #[test]
+    fn test_type_conversion_priority() {
+        // Test that conversions happen in the right order
+        // Priority: null strings > booleans > numbers
+        let json = r#"{
+            "null_variant": "N/A",
+            "bool_variant": "yes",
+            "number_variant": "123",
+            "one_digit": "1",
+            "zero_digit": "0"
+        }"#;
+
+        let result = JSONTools::new()
+            .flatten()
+            .auto_convert_types(true)
+            .execute(json)
+            .unwrap();
+        let flattened = extract_single(result);
+        let parsed: Value = serde_json::from_str(&flattened).unwrap();
+
+        // Verify conversion priority
+        assert_eq!(parsed["null_variant"], Value::Null);  // Null string takes priority
+        assert_eq!(parsed["bool_variant"], true);         // Boolean conversion
+        assert_eq!(parsed["number_variant"], 123);        // Number conversion
+
+        // "1" and "0" are now treated as numbers, not booleans
+        assert_eq!(parsed["one_digit"], 1);
+        assert_eq!(parsed["zero_digit"], 0);
+    }
+
+    #[test]
+    fn test_type_conversion_no_false_positives() {
+        // Strings that look similar but shouldn't convert
+        let json = r#"{
+            "not_null": "nullify",
+            "not_yes": "yesterday",
+            "not_no": "normal",
+            "not_percent": "percentage",
+            "not_number": "1 apple",
+            "word_on": "onboard",
+            "word_off": "offhand"
+        }"#;
+
+        let result = JSONTools::new()
+            .flatten()
+            .auto_convert_types(true)
+            .execute(json)
+            .unwrap();
+        let flattened = extract_single(result);
+        let parsed: Value = serde_json::from_str(&flattened).unwrap();
+
+        // All should remain as strings
+        assert_eq!(parsed["not_null"], "nullify");
+        assert_eq!(parsed["not_yes"], "yesterday");
+        assert_eq!(parsed["not_no"], "normal");
+        assert_eq!(parsed["not_percent"], "percentage");
+        assert_eq!(parsed["not_number"], "1 apple");
+        assert_eq!(parsed["word_on"], "onboard");
+        assert_eq!(parsed["word_off"], "offhand");
+    }
+
+    #[test]
+    fn test_type_conversion_with_unflatten() {
+        // Test that type conversion also works with unflatten
+        let flattened = r#"{
+            "user.id": "123",
+            "user.active": "true",
+            "user.score": "95.5%",
+            "user.status": "null"
+        }"#;
+
+        let result = JSONTools::new()
+            .unflatten()
+            .auto_convert_types(true)
+            .execute(flattened)
+            .unwrap();
+        let unflattened = extract_single(result);
+        let parsed: Value = serde_json::from_str(&unflattened).unwrap();
+
+        assert_eq!(parsed["user"]["id"], 123);
+        assert_eq!(parsed["user"]["active"], true);
+        assert_eq!(parsed["user"]["score"], 95.5);
+        assert_eq!(parsed["user"]["status"], Value::Null);
+    }
+
+    #[test]
+    fn test_enhanced_number_formats() {
+        // Test various currency formats, negative numbers, and separators
+        let json = r#"{
+            "usd": "$1,234.56",
+            "eur": "EUR 999.99",
+            "gbp": "£50.00",
+            "brl": "R$123.45",
+            "aud": "A$75.50",
+            "neg_standard": "-123.45",
+            "neg_accounting": "(456.78)",
+            "neg_trailing": "789.12-",
+            "neg_bracket": "[321.09]",
+            "underscore": "1_000_000",
+            "space_sep": "2 500 000",
+            "plus": "+42.5"
+        }"#;
+
+        let result = JSONTools::new()
+            .flatten()
+            .auto_convert_types(true)
+            .execute(json)
+            .unwrap();
+
+        let flattened = extract_single(result);
+        let parsed: Value = serde_json::from_str(&flattened).unwrap();
+
+        // Currency conversions
+        assert_eq!(parsed["usd"], 1234.56);
+        assert_eq!(parsed["eur"], 999.99);
+        assert_eq!(parsed["gbp"], 50.0);
+        assert_eq!(parsed["brl"], 123.45);
+        assert_eq!(parsed["aud"], 75.5);
+
+        // Negative formats
+        assert_eq!(parsed["neg_standard"], -123.45);
+        assert_eq!(parsed["neg_accounting"], -456.78);
+        assert_eq!(parsed["neg_trailing"], -789.12);
+        assert_eq!(parsed["neg_bracket"], -321.09);
+
+        // Alternative separators
+        assert_eq!(parsed["underscore"], 1000000);
+        assert_eq!(parsed["space_sep"], 2500000);
+
+        // Plus sign
+        assert_eq!(parsed["plus"], 42.5);
+    }
+
+    #[test]
+    fn test_auto_convert_types_and_remove_nulls_interaction() {
+        // Test how auto_convert_types and remove_nulls work together
+        // Expected behavior:
+        // 1. Type conversion runs first (converts string nulls to JSON null)
+        // 2. Null removal runs second (removes all null keys)
+
+        let json = r#"{
+            "actual_null": null,
+            "string_null": "null",
+            "string_na": "N/A",
+            "string_nil": "nil",
+            "string_none": "none",
+            "regular_string": "hello",
+            "number": "42",
+            "boolean": "true"
+        }"#;
+
+        // Scenario 1: Only auto_convert_types - converts string nulls to JSON null, keeps all nulls
+        let result1 = JSONTools::new()
+            .flatten()
+            .auto_convert_types(true)
+            .execute(json)
+            .unwrap();
+
+        let flattened1 = extract_single(result1);
+        let parsed1: Value = serde_json::from_str(&flattened1).unwrap();
+        assert_eq!(parsed1["actual_null"], Value::Null);
+        assert_eq!(parsed1["string_null"], Value::Null);  // Converted from "null"
+        assert_eq!(parsed1["string_na"], Value::Null);     // Converted from "N/A"
+        assert_eq!(parsed1["string_nil"], Value::Null);    // Converted from "nil"
+        assert_eq!(parsed1["string_none"], Value::Null);   // Converted from "none"
+        assert_eq!(parsed1["regular_string"], "hello");
+        assert_eq!(parsed1["number"], 42);
+        assert_eq!(parsed1["boolean"], true);
+
+        // Scenario 2: Only remove_nulls - removes existing nulls but doesn't convert string nulls
+        let result2 = JSONTools::new()
+            .flatten()
+            .remove_nulls(true)
+            .execute(json)
+            .unwrap();
+
+        let flattened2 = extract_single(result2);
+        let parsed2: Value = serde_json::from_str(&flattened2).unwrap();
+        assert!(parsed2.get("actual_null").is_none());  // Removed
+        assert_eq!(parsed2["string_null"], "null");     // Kept as string (not converted)
+        assert_eq!(parsed2["string_na"], "N/A");        // Kept as string (not converted)
+        assert_eq!(parsed2["string_nil"], "nil");       // Kept as string (not converted)
+        assert_eq!(parsed2["string_none"], "none");     // Kept as string (not converted)
+        assert_eq!(parsed2["regular_string"], "hello");
+        assert_eq!(parsed2["number"], "42");            // Not converted
+        assert_eq!(parsed2["boolean"], "true");         // Not converted
+
+        // Scenario 3: Both together - converts string nulls THEN removes all nulls
+        let result3 = JSONTools::new()
+            .flatten()
+            .auto_convert_types(true)
+            .remove_nulls(true)
+            .execute(json)
+            .unwrap();
+
+        let flattened3 = extract_single(result3);
+        let parsed3: Value = serde_json::from_str(&flattened3).unwrap();
+        assert!(parsed3.get("actual_null").is_none());   // Removed
+        assert!(parsed3.get("string_null").is_none());   // Converted to null, then removed
+        assert!(parsed3.get("string_na").is_none());     // Converted to null, then removed
+        assert!(parsed3.get("string_nil").is_none());    // Converted to null, then removed
+        assert!(parsed3.get("string_none").is_none());   // Converted to null, then removed
+        assert_eq!(parsed3["regular_string"], "hello");  // Kept
+        assert_eq!(parsed3["number"], 42);               // Converted and kept
+        assert_eq!(parsed3["boolean"], true);            // Converted and kept
+
+        // Verify that only non-null values remain when both are enabled
+        assert_eq!(parsed3.as_object().unwrap().len(), 3);  // Only 3 keys remain
     }
 }

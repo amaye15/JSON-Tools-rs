@@ -162,7 +162,7 @@ if let JsonOutput::Single(flattened) = result {
 
 #### Automatic Type Conversion
 
-Convert string values to numbers and booleans automatically for data cleaning and normalization.
+Convert string values to numbers, booleans, and null automatically for data cleaning and normalization. Supports various common formats including percentages, currency symbols, yes/no, and null variants.
 
 ```rust
 use json_tools_rs::{JSONTools, JsonOutput};
@@ -171,8 +171,11 @@ let json = r#"{
     "id": "123",
     "price": "$1,234.56",
     "quantity": "1,000",
-    "active": "true",
-    "verified": "FALSE",
+    "discount": "15%",
+    "active": "yes",
+    "verified": "1",
+    "premium": "FALSE",
+    "status": "N/A",
     "name": "Product"
 }"#;
 
@@ -188,9 +191,12 @@ if let JsonOutput::Single(flattened) = result {
 //   "id": 123,
 //   "price": 1234.56,
 //   "quantity": 1000,
+//   "discount": 15.0,
 //   "active": true,
-//   "verified": false,
-//   "name": "Product"  // Keeps as string (not a valid number or boolean)
+//   "verified": 1,        // "1" treated as number, not boolean
+//   "premium": false,
+//   "status": null,
+//   "name": "Product"  // Keeps as string (not a valid number/boolean/null)
 // }
 ```
 
@@ -315,7 +321,7 @@ print(tools.execute(data))  # {'name': ['John', 'Jane']}
 
 #### Automatic Type Conversion
 
-Convert string values to numbers and booleans automatically for data cleaning and normalization.
+Convert string values to numbers, booleans, and null automatically for data cleaning and normalization. Supports various common formats including percentages, currency symbols, yes/no, and null variants.
 
 ```python
 import json_tools_rs as jt
@@ -325,8 +331,11 @@ data = {
     "id": "123",
     "price": "$1,234.56",
     "quantity": "1,000",
-    "active": "true",
-    "verified": "FALSE",
+    "discount": "15%",
+    "active": "yes",
+    "verified": "1",
+    "premium": "FALSE",
+    "status": "N/A",
     "name": "Product"
 }
 
@@ -340,15 +349,18 @@ print(result)
 #   'id': 123,
 #   'price': 1234.56,
 #   'quantity': 1000,
+#   'discount': 15.0,
 #   'active': True,
-#   'verified': False,
-#   'name': 'Product'  # Keeps as string (not a valid number or boolean)
+#   'verified': 1,       # "1" treated as number, not boolean
+#   'premium': False,
+#   'status': None,
+#   'name': 'Product'  # Keeps as string (not a valid number/boolean/null)
 # }
 
 # Works with JSON strings too
-json_str = '{"id": "456", "enabled": "true", "amount": "€99.99"}'
+json_str = '{"id": "456", "enabled": "yes", "amount": "€99.99", "info": "nil"}'
 result = jt.JSONTools().flatten().auto_convert_types(True).execute(json_str)
-print(result)  # '{"id": 456, "enabled": true, "amount": 99.99}'
+print(result)  # '{"id": 456, "enabled": true, "amount": 99.99, "info": null}'
 ```
 
 #### Batch Processing with Type Preservation
@@ -722,25 +734,49 @@ All filtering methods work for both flatten and unflatten operations:
 
 ##### Type Conversion Methods
 
-- **`.auto_convert_types(enable: bool)`** - Automatically convert string values to numbers and booleans
+- **`.auto_convert_types(enable: bool)`** - Automatically convert string values to numbers, booleans, and null
+  - **Conversion priority**: null strings → booleans → numbers (more specific to less specific)
+  - **Null string conversion**: Converts these string representations to JSON null:
+    - `"null"`, `"NULL"`, `"Null"` → `null`
+    - `"nil"`, `"NIL"`, `"Nil"` → `null`
+    - `"none"`, `"NONE"`, `"None"` → `null`
+    - `"N/A"`, `"n/a"`, `"NA"`, `"na"` → `null`
+  - **Boolean conversion**: Supports multiple common boolean representations:
+    - Standard: `"true"`/`"false"` (case insensitive: `TRUE`, `True`, `FALSE`, `False`)
+    - Yes/No: `"yes"`/`"no"` (case insensitive: `YES`, `Yes`, `NO`, `No`)
+    - Y/N: `"y"`/`"n"` (case insensitive: `Y`, `N`)
+    - On/Off: `"on"`/`"off"` (case insensitive: `ON`, `On`, `OFF`, `Off`)
+    - Note: `"1"` and `"0"` are treated as numbers (not booleans)
   - **Number conversion**: Handles various formats including:
     - Basic numbers: `"123"` → `123`, `"45.67"` → `45.67`, `"-10"` → `-10`
     - Thousands separators: `"1,234.56"` → `1234.56` (US), `"1.234,56"` → `1234.56` (EU)
     - Currency symbols: `"$123.45"` → `123.45`, `"€99.99"` → `99.99`
     - Scientific notation: `"1e5"` → `100000`, `"1.23e-4"` → `0.000123`
-  - **Boolean conversion**: Only these exact variants:
-    - `"true"`, `"TRUE"`, `"True"` → `true`
-    - `"false"`, `"FALSE"`, `"False"` → `false`
+    - Percentages: `"50%"` → `50.0`, `"12.5%"` → `12.5`
   - **Lenient behavior**: If conversion fails, keeps the original string value (no errors thrown)
   - **Works for all modes**: `.flatten()`, `.unflatten()`, and `.normal()`
   - **Example**:
     ```rust
-    let json = r#"{"id": "123", "price": "$1,234.56", "active": "true"}"#;
+    let json = r#"{
+        "id": "123",
+        "price": "$1,234.56",
+        "discount": "15%",
+        "active": "yes",
+        "verified": "1",
+        "status": "N/A"
+    }"#;
     let result = JSONTools::new()
         .flatten()
         .auto_convert_types(true)
         .execute(json)?;
-    // Result: {"id": 123, "price": 1234.56, "active": true}
+    // Result: {
+    //   "id": 123,
+    //   "price": 1234.56,
+    //   "discount": 15.0,
+    //   "active": true,
+    //   "verified": true,
+    //   "status": null
+    // }
     ```
 
 #### Input/Output Types
