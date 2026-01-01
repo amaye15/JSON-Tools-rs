@@ -30,6 +30,9 @@ ahash = "0.8.11"
 fast-float = "0.2"
 rayon = "1.10"
 memchr = "2.7"  # SIMD-optimized byte searching
+smallvec = "1.13"  # Stack-allocated vectors for small buffers
+lru = "0.12"  # O(1) LRU cache for regex patterns
+phf = { version = "0.11", features = ["macros"] }  # Perfect hash for boolean parsing
 
 [features]
 default = []  # Add python to default features
