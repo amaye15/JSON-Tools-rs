@@ -16,9 +16,9 @@ mod stress_data {
         }
         json.push_str("\"value\": 42");
         for _ in 0..depth {
-            json.push_str("}");
+            json.push('}');
         }
-        json.push_str("}");
+        json.push('}');
         json
     }
 

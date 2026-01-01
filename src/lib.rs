@@ -427,6 +427,7 @@
 // MODULE: External Dependencies and Imports
 // ================================================================================================
 
+use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
 use lru::LruCache;
 use memchr::{memchr, memchr2, memchr3, memmem, memrchr};
 use phf::phf_map;
@@ -853,7 +854,7 @@ impl<'a> From<Vec<&'a str>> for JsonInput<'a> {
 
 impl<'a> From<Vec<String>> for JsonInput<'a> {
     fn from(json_list: Vec<String>) -> Self {
-        JsonInput::MultipleOwned(json_list.into_iter().map(|s| Cow::Owned(s)).collect())
+        JsonInput::MultipleOwned(json_list.into_iter().map(Cow::Owned).collect())
     }
 }
 
@@ -1758,11 +1759,11 @@ impl JSONTools {
         processor: F,
     ) -> Result<JsonOutput, JsonToolsError>
     where
-        F: Fn(&Cow<str>, &ProcessingConfig) -> Result<String, JsonToolsError> + Sync,
+        F: Fn(&str, &ProcessingConfig) -> Result<String, JsonToolsError> + Sync,
     {
         match input {
             JsonInput::Single(json_cow) => {
-                let result = processor(&json_cow, config)?;
+                let result = processor(json_cow.as_ref(), config)?;
                 Ok(JsonOutput::Single(result))
             }
             JsonInput::Multiple(json_list) => {
@@ -1777,7 +1778,7 @@ impl JSONTools {
                             // OPTIMIZATION #15: Calculate optimal chunk size based on CPU count and total work
                             // Aim for good cache locality while maintaining parallelism
                             let num_cpus = rayon::current_num_threads();
-                            let optimal_chunks = (json_list.len() / num_cpus).max(50).min(500);
+                            let optimal_chunks = (json_list.len() / num_cpus).clamp(50, 500);
                             let chunk_size = (json_list.len() / optimal_chunks).max(1);
 
                             // Process chunks in parallel, then flatten results
@@ -1788,8 +1789,7 @@ impl JSONTools {
                                     let base_index = chunk_idx * chunk_size;
                                     chunk.iter().enumerate()
                                         .map(|(item_idx, json)| {
-                                            let json_cow = Cow::Borrowed(*json);
-                                            processor(&json_cow, config)
+                                            processor(json, config)
                                                 .map_err(|e| JsonToolsError::batch_processing_error(base_index + item_idx, e))
                                         })
                                         .collect()
@@ -1805,8 +1805,7 @@ impl JSONTools {
                                 .par_iter()
                                 .enumerate()
                                 .map(|(index, json)| {
-                                    let json_cow = Cow::Borrowed(*json);
-                                    processor(&json_cow, config)
+                                    processor(json, config)
                                         .map_err(|e| JsonToolsError::batch_processing_error(index, e))
                                 })
                                 .collect();
@@ -1818,8 +1817,7 @@ impl JSONTools {
                 // Sequential processing (default or below threshold)
                 let mut results = Vec::with_capacity(json_list.len());
                 for (index, json) in json_list.iter().enumerate() {
-                    let json_cow = Cow::Borrowed(*json);
-                    match processor(&json_cow, config) {
+                    match processor(json, config) {
                         Ok(result) => results.push(result),
                         Err(e) => return Err(JsonToolsError::batch_processing_error(index, e)),
                     }
@@ -1838,7 +1836,7 @@ impl JSONTools {
                             // OPTIMIZATION #15: Calculate optimal chunk size based on CPU count and total work
                             // Aim for good cache locality while maintaining parallelism
                             let num_cpus = rayon::current_num_threads();
-                            let optimal_chunks = (vecs.len() / num_cpus).max(50).min(500);
+                            let optimal_chunks = (vecs.len() / num_cpus).clamp(50, 500);
                             let chunk_size = (vecs.len() / optimal_chunks).max(1);
 
                             // Process chunks in parallel, then flatten results
@@ -1849,7 +1847,7 @@ impl JSONTools {
                                     let base_index = chunk_idx * chunk_size;
                                     chunk.iter().enumerate()
                                         .map(|(item_idx, json_cow)| {
-                                            processor(json_cow, config)
+                                            processor(json_cow.as_ref(), config)
                                                 .map_err(|e| JsonToolsError::batch_processing_error(base_index + item_idx, e))
                                         })
                                         .collect()
@@ -1865,7 +1863,7 @@ impl JSONTools {
                                 .par_iter()
                                 .enumerate()
                                 .map(|(index, json_cow)| {
-                                    processor(json_cow, config)
+                                    processor(json_cow.as_ref(), config)
                                         .map_err(|e| JsonToolsError::batch_processing_error(index, e))
                                 })
                                 .collect();
@@ -1877,7 +1875,7 @@ impl JSONTools {
                 // Sequential processing (default or below threshold)
                 let mut results = Vec::with_capacity(vecs.len());
                 for (index, json_cow) in vecs.iter().enumerate() {
-                    match processor(json_cow, config) {
+                    match processor(json_cow.as_ref(), config) {
                         Ok(result) => results.push(result),
                         Err(e) => return Err(JsonToolsError::batch_processing_error(index, e)),
                     }
@@ -2033,14 +2031,14 @@ fn perform_unflattening_and_filtering(
 // MODULE: Core Processing Functions - Unflattening Operations
 // ================================================================================================
 
-/// Core unflattening logic for a single JSON string with Cow optimization
+/// Core unflattening logic for a single JSON string
 #[inline]
 fn process_single_json_for_unflatten(
-    json: &Cow<str>,
+    json: &str,
     config: &ProcessingConfig,
 ) -> Result<String, JsonToolsError> {
     // Parse JSON using optimized SIMD parsing
-    let mut flattened = parse_json_optimized(json)?;
+    let mut flattened = parse_json(json)?;
 
     // Apply type conversion FIRST (before other transformations)
     if config.auto_convert_types {
@@ -2112,7 +2110,7 @@ fn handle_root_level_primitives_flatten(
 /// From simdjson docs: "create a parser once and reuse it... keeping buffers hot in the cache"
 /// This provides 20-40% performance improvement over creating new buffers each time
 #[inline]
-fn parse_json_optimized(json: &Cow<str>) -> Result<Value, JsonToolsError> {
+fn parse_json(json: &str) -> Result<Value, JsonToolsError> {
     JSON_PARSER_STATE.with(|state| state.borrow_mut().parse(json))
 }
 
@@ -2383,14 +2381,14 @@ fn apply_collision_handling(
 // MODULE: Core Processing Functions - Flattening Operations
 // ================================================================================================
 
-/// Core flattening logic for a single JSON string with Cow optimization
+/// Core flattening logic for a single JSON string
 #[inline]
 fn process_single_json(
-    json: &Cow<str>,
+    json: &str,
     config: &ProcessingConfig,
 ) -> Result<String, JsonToolsError> {
     // Parse JSON using optimized SIMD parsing
-    let mut value = parse_json_optimized(json)?;
+    let mut value = parse_json(json)?;
 
     // Apply type conversion FIRST (before other transformations)
     if config.auto_convert_types {
@@ -2406,13 +2404,13 @@ fn process_single_json(
     let mut flattened = perform_flattening(&value, &config.separator, config.nested_parallel_threshold);
 
     // Apply key transformations (replacements and lowercase conversion)
-    flattened = apply_key_transformations_flatten(flattened, &config)?;
+    flattened = apply_key_transformations_flatten(flattened, config)?;
 
     // Apply value replacements if provided
-    apply_value_replacements_flatten(&mut flattened, &config)?;
+    apply_value_replacements_flatten(&mut flattened, config)?;
 
     // Apply filtering AFTER replacements to catch newly created empty values
-    apply_filtering_flatten(&mut flattened, &config);
+    apply_filtering_flatten(&mut flattened, config);
 
     // Convert back to JSON string using simd-json serialization
     serialize_flattened(&flattened).map_err(JsonToolsError::serialization_error)
@@ -2442,7 +2440,7 @@ fn apply_lowercase_keys(flattened: FxHashMap<String, Value>) -> FxHashMap<String
 
     for (key, value) in flattened {
         // SIMD-optimized lowercase conversion (zero-copy if already lowercase)
-        let lowercase_key = to_lowercase_simd(&key);
+        let lowercase_key = to_lowercase(&key);
 
         let final_key = match lowercase_key {
             Cow::Borrowed(_) => key, // Key was already lowercase, reuse original
@@ -2521,8 +2519,10 @@ fn calculate_optimal_capacity(estimated_size: usize) -> usize {
     // Round up to next power of 2 for optimal HashMap performance
     let next_power_of_2 = target_capacity.next_power_of_two();
 
-    // Cap the maximum initial capacity to prevent excessive memory usage
-    let max_capacity = 8192;
+    // OPTIMIZATION #18: Removed 8192 cap to avoid multiple rehashes for large datasets
+    // For xlarge benchmarks (~500KB), this allows pre-allocation of the full estimated size
+    // Cap at 1M entries to prevent excessive memory allocation for pathological cases
+    let max_capacity = 1_048_576; // 2^20
     std::cmp::min(next_power_of_2, max_capacity)
 }
 
@@ -2577,11 +2577,11 @@ fn estimate_max_key_length(value: &Value) -> usize {
 /// Applies key/value transformations and filtering recursively without changing structure
 #[inline]
 fn process_single_json_normal(
-    json: &Cow<str>,
+    json: &str,
     config: &ProcessingConfig,
 ) -> Result<String, JsonToolsError> {
     // Parse JSON using optimized SIMD parsing
-    let mut value = parse_json_optimized(json)?;
+    let mut value = parse_json(json)?;
 
     // Apply type conversion FIRST (before other transformations)
     if config.auto_convert_types {
@@ -2668,9 +2668,9 @@ fn apply_key_transformations_normal(value: Value, config: &ProcessingConfig) -> 
             Ok(Value::Object(result_map))
         }
         Value::Array(mut arr) => {
-            for i in 0..arr.len() {
-                let v = std::mem::take(&mut arr[i]);
-                arr[i] = apply_key_transformations_normal(v, config)?;
+            for item in &mut arr {
+                let v = std::mem::take(item);
+                *item = apply_key_transformations_normal(v, config)?;
             }
             Ok(Value::Array(arr))
         }
@@ -2686,7 +2686,7 @@ fn apply_value_replacements(
     flattened: &mut FxHashMap<String, Value>,
     patterns: &[&str],
 ) -> Result<(), JsonToolsError> {
-    if patterns.len() % 2 != 0 {
+    if !patterns.len().is_multiple_of(2) {
         return Err(JsonToolsError::invalid_replacement_pattern(
             "Value replacement patterns must be provided in pairs (pattern, replacement)"
         ));
@@ -2725,7 +2725,7 @@ fn apply_value_replacements(
                         changed = true;
                     }
                 } else if new_value.contains(pattern) {
-                    new_value = Cow::Owned(new_value.replace(pattern, *replacement));
+                    new_value = Cow::Owned(new_value.replace(pattern, replacement));
                     changed = true;
                 }
             }
@@ -3189,7 +3189,7 @@ fn apply_lowercase_keys_for_unflatten(obj: Map<String, Value>) -> Map<String, Va
 
     for (key, value) in obj {
         // SIMD-optimized lowercase conversion (zero-copy if already lowercase)
-        let lowercase_key = to_lowercase_simd(&key);
+        let lowercase_key = to_lowercase(&key);
 
         let final_key = match lowercase_key {
             Cow::Borrowed(_) => key, // Key was already lowercase, reuse original
@@ -3217,8 +3217,10 @@ fn apply_lowercase_keys_for_unflatten(obj: Map<String, Value>) -> Map<String, Va
 /// - Percentages: "50%" → 50.0 (not as decimal)
 ///
 /// Optimized version that accepts already-trimmed string and has fast-path for clean numbers
+/// Supports: basic numbers, scientific notation, percentages, permille, basis points,
+/// suffixed numbers (K/M/B/T), fractions, hex/binary/octal, and various formatting
 #[inline]
-fn try_parse_number_optimized(trimmed: &str) -> Option<f64> {
+fn try_parse_number(trimmed: &str) -> Option<f64> {
     // Early exit for empty strings
     if trimmed.is_empty() {
         return None;
@@ -3237,24 +3239,523 @@ fn try_parse_number_optimized(trimmed: &str) -> Option<f64> {
         }
     }
 
-    // OPTIMIZATION: Check if the string needs expensive cleaning
-    // If it only contains digits, '.', '-', '+', 'e', 'E', '%' but failed to parse,
-    // it might be a malformed format that needs cleaning (like trailing minus)
-    // Only skip cleaning if there are definitely complex formats (currency, commas, etc.)
-    let has_complex_formatting = trimmed.bytes().any(|b| {
-        matches!(b, b',' | b'$' | b' ' | b'\'' | b'_' | b'(' | b')' | b'[' | b']')
-            || b > 127 // Unicode characters (€, £, ¥, etc.)
-    });
+    // Handle permille (‰) - per thousand
+    if let Some(stripped) = trimmed.strip_suffix('‰') {
+        if let Ok(num) = fast_float::parse::<f64, _>(stripped) {
+            return Some(num / 1000.0);
+        }
+    }
 
-    if !has_complex_formatting {
-        // No complex formatting detected, but parse still failed
-        // This might be a malformed number (like "abc" or invalid scientific notation)
-        // Call clean_number_string as a fallback - it handles edge cases like trailing minus
+    // Handle per ten-thousand (‱) - basis points symbol
+    if let Some(stripped) = trimmed.strip_suffix('‱') {
+        if let Ok(num) = fast_float::parse::<f64, _>(stripped) {
+            return Some(num / 10000.0);
+        }
+    }
+
+    // Handle basis points: 25bp, 25bps, 25 bp, 25 bps
+    let bp_result = try_parse_basis_points(trimmed);
+    if bp_result.is_some() {
+        return bp_result;
+    }
+
+    // Handle suffixed numbers: 1K, 2.5M, 3B, 1T (case-insensitive)
+    let suffix_result = try_parse_suffixed_number(trimmed);
+    if suffix_result.is_some() {
+        return suffix_result;
+    }
+
+    // Handle fractions: 1/2, 3/4, 2 1/2 (mixed fractions)
+    let fraction_result = try_parse_fraction(trimmed);
+    if fraction_result.is_some() {
+        return fraction_result;
+    }
+
+    // Handle hex, binary, octal numbers
+    let radix_result = try_parse_radix_number(trimmed);
+    if radix_result.is_some() {
+        return radix_result;
     }
 
     // Slow path: clean common number formats and try again
-    let cleaned = clean_number_string_cow(trimmed);
+    let cleaned = clean_number_string(trimmed);
     fast_float::parse(cleaned.as_ref()).ok()
+}
+
+/// Parse basis points: 25bp, 25bps, 25 bp, 25 bps → 0.0025
+#[inline]
+fn try_parse_basis_points(s: &str) -> Option<f64> {
+    let s = s.trim();
+
+    // Try "25bps" or "25bp" (no space)
+    if let Some(num_str) = s.strip_suffix("bps").or_else(|| s.strip_suffix("bp")) {
+        if let Ok(num) = fast_float::parse::<f64, _>(num_str.trim()) {
+            return Some(num / 10000.0);
+        }
+    }
+
+    // Try "25 bps" or "25 bp" (with space)
+    if let Some(num_str) = s.strip_suffix(" bps").or_else(|| s.strip_suffix(" bp")) {
+        if let Ok(num) = fast_float::parse::<f64, _>(num_str.trim()) {
+            return Some(num / 10000.0);
+        }
+    }
+
+    None
+}
+
+/// Parse suffixed numbers: 1K, 2.5M, 3B, 1T, 1k, 2.5m (case-insensitive)
+/// K = thousand (1,000), M = million (1,000,000), B = billion (1,000,000,000), T = trillion
+#[inline]
+fn try_parse_suffixed_number(s: &str) -> Option<f64> {
+    let s = s.trim();
+    if s.len() < 2 {
+        return None;
+    }
+
+    // Get the last character and check if it's a magnitude suffix
+    let last_char = s.chars().last()?;
+    let multiplier = match last_char {
+        'k' | 'K' => 1_000.0,
+        'm' | 'M' => 1_000_000.0,
+        'b' | 'B' => 1_000_000_000.0,
+        't' | 'T' => 1_000_000_000_000.0,
+        _ => return None,
+    };
+
+    // Parse the number part (everything except the last character)
+    let num_str = &s[..s.len() - 1];
+    if let Ok(num) = fast_float::parse::<f64, _>(num_str.trim()) {
+        return Some(num * multiplier);
+    }
+
+    None
+}
+
+/// Parse simple fractions: 1/2, 3/4, -1/4
+/// Parse mixed fractions: 2 1/2, 3 3/4, -1 1/2
+#[inline]
+fn try_parse_fraction(s: &str) -> Option<f64> {
+    let s = s.trim();
+
+    // Must contain a slash to be a fraction
+    if !s.contains('/') {
+        return None;
+    }
+
+    // Check for mixed fraction (has space before the fraction part)
+    if let Some(space_pos) = s.rfind(' ') {
+        // Mixed fraction: "2 1/2" or "-1 1/2"
+        let whole_part = s[..space_pos].trim();
+        let fraction_part = s[space_pos + 1..].trim();
+
+        if let (Ok(whole), Some(frac_value)) = (
+            fast_float::parse::<f64, _>(whole_part),
+            parse_simple_fraction(fraction_part),
+        ) {
+            // Handle negative mixed fractions: -1 1/2 = -1.5, not -0.5
+            if whole < 0.0 {
+                return Some(whole - frac_value);
+            } else {
+                return Some(whole + frac_value);
+            }
+        }
+    }
+
+    // Simple fraction: "1/2", "3/4", "-1/4"
+    parse_simple_fraction(s)
+}
+
+/// Parse a simple fraction like "1/2" or "3/4"
+#[inline]
+fn parse_simple_fraction(s: &str) -> Option<f64> {
+    let parts: Vec<&str> = s.split('/').collect();
+    if parts.len() != 2 {
+        return None;
+    }
+
+    let numerator: f64 = fast_float::parse(parts[0].trim()).ok()?;
+    let denominator: f64 = fast_float::parse(parts[1].trim()).ok()?;
+
+    // Avoid division by zero
+    if denominator == 0.0 {
+        return None;
+    }
+
+    Some(numerator / denominator)
+}
+
+/// Parse radix numbers: hex (0x...), binary (0b...), octal (0o...)
+#[inline]
+fn try_parse_radix_number(s: &str) -> Option<f64> {
+    let s = s.trim();
+
+    // Handle negative prefix
+    let (is_negative, num_str) = if let Some(rest) = s.strip_prefix('-') {
+        (true, rest.trim())
+    } else {
+        (false, s)
+    };
+
+    let result = if let Some(hex) = num_str.strip_prefix("0x").or_else(|| num_str.strip_prefix("0X")) {
+        // Hexadecimal: 0x1A2B, 0xFF
+        i64::from_str_radix(hex, 16).ok().map(|n| n as f64)
+    } else if let Some(bin) = num_str.strip_prefix("0b").or_else(|| num_str.strip_prefix("0B")) {
+        // Binary: 0b1010, 0B1111
+        i64::from_str_radix(bin, 2).ok().map(|n| n as f64)
+    } else if let Some(oct) = num_str.strip_prefix("0o").or_else(|| num_str.strip_prefix("0O")) {
+        // Octal: 0o777, 0O755
+        i64::from_str_radix(oct, 8).ok().map(|n| n as f64)
+    } else {
+        None
+    };
+
+    result.map(|n| if is_negative { -n } else { n })
+}
+
+/// Attempt to parse and normalize a date/datetime string to UTC
+///
+/// Supported formats (ISO-8601 and common variants):
+///
+/// **ISO-8601 Standard:**
+/// - Date only: YYYY-MM-DD (e.g., "2024-01-15")
+/// - Compact date: YYYYMMDD (e.g., "20240115")
+/// - DateTime with T: YYYY-MM-DDTHH:MM:SS (e.g., "2024-01-15T10:30:00")
+/// - Compact datetime: YYYYMMDDTHHMMSS (e.g., "20240115T103000")
+/// - Fractional seconds: YYYY-MM-DDTHH:MM:SS.sss
+/// - UTC suffix (Z): YYYY-MM-DDTHH:MM:SSZ
+/// - Timezone offset: YYYY-MM-DDTHH:MM:SS+HH:MM or -HH:MM
+/// - Compact offset: YYYY-MM-DDTHH:MM:SS+HHMM (no colon)
+/// - Space separator: YYYY-MM-DD HH:MM:SS
+/// - Ordinal date: YYYY-DDD (e.g., "2024-015" for Jan 15)
+/// - Week date: YYYY-Www-D (e.g., "2024-W03-1" for Monday of week 3)
+///
+/// **Common Variants:**
+/// - Slash separators: YYYY/MM/DD (e.g., "2024/01/15")
+/// - Dot separators: YYYY.MM.DD (e.g., "2024.01.15")
+/// - Time with offset no colon: +0530 or -0800
+/// - Hour-only offset: +05 or -08
+///
+/// Returns Some(normalized_string) if valid date, None otherwise
+/// Normalizes to UTC with Z suffix for datetime, keeps YYYY-MM-DD for date-only
+#[inline]
+fn try_parse_and_normalize_iso8601(s: &str) -> Option<String> {
+    let trimmed = s.trim();
+    let len = trimmed.len();
+
+    // Quick rejection: minimum length is 8 for YYYYMMDD
+    if len < 8 {
+        return None;
+    }
+
+    let bytes = trimmed.as_bytes();
+    let first_byte = bytes[0];
+
+    // Must start with a digit (for year)
+    if !first_byte.is_ascii_digit() {
+        return None;
+    }
+
+    // Try compact date format first: YYYYMMDD (exactly 8 digits)
+    if len == 8 && bytes.iter().all(|b| b.is_ascii_digit()) {
+        return try_parse_compact_date(trimmed);
+    }
+
+    // Try compact datetime format: YYYYMMDDTHHMMSS or YYYYMMDDTHHMMSSZ
+    if len >= 15 && bytes[8] == b'T' {
+        if let Some(result) = try_parse_compact_datetime(trimmed) {
+            return Some(result);
+        }
+    }
+
+    // Ordinal date format: YYYY-DDD (8 chars with dash at position 4)
+    if len == 8 && bytes[4] == b'-' {
+        return try_parse_ordinal_date(trimmed);
+    }
+
+    // Week date format: YYYY-Www or YYYY-Www-D
+    if len >= 8 && bytes[4] == b'-' && bytes[5] == b'W' {
+        return try_parse_week_date(trimmed);
+    }
+
+    // Standard format detection: check for separators at expected positions
+    // YYYY-MM-DD, YYYY/MM/DD, YYYY.MM.DD
+    if len >= 10 {
+        let sep = bytes[4];
+        if (sep == b'-' || sep == b'/' || sep == b'.') && bytes[7] == sep {
+            return try_parse_standard_date(trimmed, sep);
+        }
+    }
+
+    None
+}
+
+/// Parse compact date format: YYYYMMDD
+#[inline]
+fn try_parse_compact_date(s: &str) -> Option<String> {
+    NaiveDate::parse_from_str(s, "%Y%m%d")
+        .ok()
+        .map(|d| d.format("%Y-%m-%d").to_string())
+}
+
+/// Parse compact datetime format: YYYYMMDDTHHMMSS with optional Z or offset
+#[inline]
+fn try_parse_compact_datetime(s: &str) -> Option<String> {
+    let bytes = s.as_bytes();
+    let len = s.len();
+
+    // Basic format: YYYYMMDDTHHMMSS (15 chars)
+    // With Z: YYYYMMDDTHHMMSSZ (16 chars)
+    // With offset: YYYYMMDDTHHMMSS+HHMM (20 chars) or +HH:MM (21 chars)
+
+    // Try with Z suffix
+    if len == 16 && bytes[15] == b'Z' {
+        if let Ok(naive) = NaiveDateTime::parse_from_str(&s[..15], "%Y%m%dT%H%M%S") {
+            let utc = naive.and_utc();
+            return Some(utc.format("%Y-%m-%dT%H:%M:%SZ").to_string());
+        }
+    }
+
+    // Try with offset (+HHMM or -HHMM)
+    if len >= 19 && (bytes[15] == b'+' || bytes[15] == b'-') {
+        // Convert to ISO format and parse
+        let date_part = &s[0..8];
+        let time_part = &s[9..15];
+        let offset_part = &s[15..];
+
+        // Format offset properly
+        let formatted_offset = if offset_part.len() == 5 {
+            // +HHMM -> +HH:MM
+            format!("{}:{}", &offset_part[..3], &offset_part[3..])
+        } else {
+            offset_part.to_string()
+        };
+
+        let iso_str = format!(
+            "{}-{}-{}T{}:{}:{}{}",
+            &date_part[0..4], &date_part[4..6], &date_part[6..8],
+            &time_part[0..2], &time_part[2..4], &time_part[4..6],
+            formatted_offset
+        );
+
+        if let Ok(dt) = DateTime::parse_from_rfc3339(&iso_str) {
+            let utc: DateTime<Utc> = dt.into();
+            return Some(utc.format("%Y-%m-%dT%H:%M:%SZ").to_string());
+        }
+    }
+
+    // Try basic compact format (assume UTC)
+    if len == 15 {
+        if let Ok(naive) = NaiveDateTime::parse_from_str(s, "%Y%m%dT%H%M%S") {
+            let utc = naive.and_utc();
+            return Some(utc.format("%Y-%m-%dT%H:%M:%SZ").to_string());
+        }
+    }
+
+    None
+}
+
+/// Parse ordinal date format: YYYY-DDD
+#[inline]
+fn try_parse_ordinal_date(s: &str) -> Option<String> {
+    NaiveDate::parse_from_str(s, "%Y-%j")
+        .ok()
+        .map(|d| d.format("%Y-%m-%d").to_string())
+}
+
+/// Parse ISO week date format: YYYY-Www or YYYY-Www-D
+#[inline]
+fn try_parse_week_date(s: &str) -> Option<String> {
+    // YYYY-Www (8 chars) - Monday of that week
+    // YYYY-Www-D (10 chars) - specific day
+    let formats = ["%G-W%V-%u", "%G-W%V"];
+
+    for fmt in &formats {
+        if let Ok(d) = NaiveDate::parse_from_str(s, fmt) {
+            return Some(d.format("%Y-%m-%d").to_string());
+        }
+    }
+    None
+}
+
+/// Parse standard date formats with various separators
+#[inline]
+fn try_parse_standard_date(s: &str, sep: u8) -> Option<String> {
+    let bytes = s.as_bytes();
+    let len = s.len();
+
+    // Normalize to dashes for parsing
+    let normalized: Cow<'_, str> = if sep != b'-' {
+        let sep_char = sep as char;
+        Cow::Owned(s.replace(sep_char, "-"))
+    } else {
+        Cow::Borrowed(s)
+    };
+
+    // Validate basic structure: YYYY-MM-DD
+    if len >= 10
+        && (!bytes[0..4].iter().all(|b| b.is_ascii_digit()) ||
+           !bytes[5..7].iter().all(|b| b.is_ascii_digit()) ||
+           !bytes[8..10].iter().all(|b| b.is_ascii_digit())) {
+            return None;
+        }
+
+    // Date-only (exactly 10 chars)
+    if len == 10 {
+        return NaiveDate::parse_from_str(&normalized, "%Y-%m-%d")
+            .ok()
+            .map(|_| normalized.into_owned());
+    }
+
+    // Must have datetime separator at position 10 (T or space)
+    if len < 11 {
+        return None;
+    }
+    let datetime_sep = bytes[10];
+    if datetime_sep != b'T' && datetime_sep != b' ' {
+        return None;
+    }
+
+    // Normalize datetime separator to T
+    let normalized = if datetime_sep == b' ' {
+        let mut s = normalized.into_owned();
+        // Safe because position 10 is single-byte ASCII
+        unsafe { s.as_bytes_mut()[10] = b'T'; }
+        Cow::Owned(s)
+    } else {
+        normalized
+    };
+
+    // Try RFC3339 first (handles timezone)
+    if let Ok(dt) = DateTime::parse_from_rfc3339(&normalized) {
+        let utc: DateTime<Utc> = dt.into();
+        return Some(utc.format("%Y-%m-%dT%H:%M:%SZ").to_string());
+    }
+
+    // Try parsing with various timezone offset formats
+    if let Some(result) = try_parse_with_offset_variants(&normalized) {
+        return Some(result);
+    }
+
+    // Handle Z suffix for formats without full seconds (e.g., "2024-01-15T10:30Z")
+    let time_part = normalized.strip_suffix('Z').unwrap_or(normalized.as_ref());
+
+    // Try naive datetime formats
+    let naive_formats = [
+        "%Y-%m-%dT%H:%M:%S%.f",  // With fractional seconds
+        "%Y-%m-%dT%H:%M:%S",     // Standard
+        "%Y-%m-%dT%H:%M",        // Without seconds
+        "%Y-%m-%dT%H",           // Hour only
+    ];
+
+    for fmt in &naive_formats {
+        if let Ok(naive_dt) = NaiveDateTime::parse_from_str(time_part, fmt) {
+            // Always output as UTC (Z suffix)
+            let utc_dt = naive_dt.and_utc();
+            return Some(utc_dt.format("%Y-%m-%dT%H:%M:%SZ").to_string());
+        }
+    }
+
+    None
+}
+
+/// Try parsing datetime with various timezone offset formats
+#[inline]
+fn try_parse_with_offset_variants(s: &str) -> Option<String> {
+    let len = s.len();
+    if len < 14 {
+        return None;
+    }
+
+    // Look for offset indicator (+/-) after time portion
+    // Minimum position: YYYY-MM-DDTHH:MM+... = position 16
+    // Or: YYYY-MM-DDTHH:MM:SS+... = position 19
+
+    for pos in [16, 19, 22, 23, 26] {
+        if pos >= len {
+            continue;
+        }
+        let byte = s.as_bytes()[pos];
+        if byte == b'+' || byte == b'-' {
+            let offset_part = &s[pos..];
+            let time_part = &s[..pos];
+
+            // Try to normalize offset
+            if let Some(normalized_offset) = normalize_offset(offset_part) {
+                let full = format!("{}{}", time_part, normalized_offset);
+                if let Ok(dt) = DateTime::parse_from_rfc3339(&full) {
+                    let utc: DateTime<Utc> = dt.into();
+                    return Some(utc.format("%Y-%m-%dT%H:%M:%SZ").to_string());
+                }
+            }
+        }
+    }
+
+    None
+}
+
+/// Normalize timezone offset to RFC3339 format (+HH:MM or -HH:MM)
+#[inline]
+fn normalize_offset(offset: &str) -> Option<String> {
+    let bytes = offset.as_bytes();
+    let len = bytes.len();
+
+    if len < 2 {
+        return None;
+    }
+
+    let sign = bytes[0];
+    if sign != b'+' && sign != b'-' {
+        return None;
+    }
+
+    let sign_char = sign as char;
+    let rest = &offset[1..];
+
+    match rest.len() {
+        // +HH -> +HH:00
+        2 if rest.as_bytes().iter().all(|b| b.is_ascii_digit()) => {
+            Some(format!("{}{}:00", sign_char, rest))
+        }
+        // +HHMM -> +HH:MM
+        4 if rest.as_bytes().iter().all(|b| b.is_ascii_digit()) => {
+            Some(format!("{}{}:{}", sign_char, &rest[..2], &rest[2..]))
+        }
+        // +HH:MM -> already correct
+        5 if rest.as_bytes()[2] == b':' => {
+            Some(offset.to_string())
+        }
+        _ => None
+    }
+}
+
+/// Check if a string looks like it could be a date (fast pre-filter)
+/// Used to avoid expensive parsing for obviously non-date strings
+#[inline(always)]
+fn could_be_date(s: &str) -> bool {
+    let len = s.len();
+    // Minimum 8 chars for YYYYMMDD or YYYY-DDD
+    if len < 8 {
+        return false;
+    }
+
+    let bytes = s.as_bytes();
+
+    // First 4 chars must be digits (year)
+    if !bytes[0..4].iter().all(|b| b.is_ascii_digit()) {
+        return false;
+    }
+
+    // Check for various date patterns:
+    // YYYYMMDD (compact), YYYY-MM-DD, YYYY/MM/DD, YYYY.MM.DD, YYYY-DDD, YYYY-Www
+    let fifth = bytes[4];
+    match fifth {
+        // Compact format: next char is also a digit
+        b'0'..=b'9' => len == 8 || (len >= 15 && bytes[8] == b'T'),
+        // Standard separators - len 8 for YYYY-DDD ordinal, >= 10 for YYYY-MM-DD
+        b'-' | b'/' | b'.' => len >= 8,
+        _ => false,
+    }
 }
 
 /// Clean a number string by removing common formatting characters
@@ -3265,7 +3766,7 @@ fn try_parse_number_optimized(trimmed: &str) -> Option<f64> {
 /// Optimized with single-pass filtering and comprehensive format detection
 /// OPTIMIZATION: Returns Cow to avoid allocation when number is already clean
 #[inline(always)]  // Optimization #13: Force inline for hot path
-fn clean_number_string_cow(s: &str) -> Cow<'_, str> {
+fn clean_number_string(s: &str) -> Cow<'_, str> {
     let trimmed = s.trim();
 
     // Early exit for empty strings
@@ -3290,14 +3791,17 @@ fn clean_number_string_cow(s: &str) -> Cow<'_, str> {
 
     // Remove negative indicators temporarily for processing
     let working_str = if is_negative {
-        if trimmed.starts_with('(') && trimmed.ends_with(')') {
-            &trimmed[1..trimmed.len()-1]
-        } else if trimmed.starts_with('[') && trimmed.ends_with(']') {
-            &trimmed[1..trimmed.len()-1]
-        } else if trimmed.ends_with('-') {
-            &trimmed[..trimmed.len()-1]
+        // Handle bracketed negatives: (123) or [123]
+        if let Some(s) = trimmed.strip_prefix('(').and_then(|s| s.strip_suffix(')')) {
+            s
+        } else if let Some(s) = trimmed.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+            s
+        } else if let Some(s) = trimmed.strip_suffix('-') {
+            // Handle trailing minus: 123-
+            s
         } else {
-            &trimmed[1..] // Remove leading minus
+            // Remove leading minus
+            &trimmed[1..]
         }
     } else {
         trimmed
@@ -3369,12 +3873,21 @@ fn clean_number_string_cow(s: &str) -> Cow<'_, str> {
     let comma_count = without_currency.matches(',').count();
     let dot_count = without_currency.matches('.').count();
 
-    // Pre-allocate with capacity to avoid reallocations
-    let mut result = String::with_capacity(without_currency.len() + 1);
+    // OPTIMIZATION #20: Use stack-allocated SmallVec buffer for short numbers
+    // Most numbers are under 32 bytes, so this avoids heap allocation entirely
+    let mut buffer: SmallVec<[u8; 32]> = SmallVec::new();
 
     // Add negative sign if needed
     if is_negative {
-        result.push('-');
+        buffer.push(b'-');
+    }
+
+    // Helper macro to push ASCII character as byte
+    macro_rules! push_byte {
+        ($ch:expr) => {
+            // Valid number characters are ASCII, safe to cast
+            buffer.push($ch as u8)
+        };
     }
 
     match (last_comma_pos, last_dot_pos, comma_count, dot_count) {
@@ -3385,7 +3898,7 @@ fn clean_number_string_cow(s: &str) -> Cow<'_, str> {
                 for ch in without_currency.chars() {
                     match ch {
                         ',' | ' ' | '\'' | '_' => continue,  // Skip thousands separators
-                        _ => result.push(ch),
+                        _ => push_byte!(ch),
                     }
                 }
             } else {
@@ -3393,8 +3906,8 @@ fn clean_number_string_cow(s: &str) -> Cow<'_, str> {
                 for ch in without_currency.chars() {
                     match ch {
                         '.' | ' ' | '\'' | '_' => continue,  // Skip thousands separators
-                        ',' => result.push('.'),              // Convert decimal comma to dot
-                        _ => result.push(ch),
+                        ',' => buffer.push(b'.'),            // Convert decimal comma to dot
+                        _ => push_byte!(ch),
                     }
                 }
             }
@@ -3404,25 +3917,53 @@ fn clean_number_string_cow(s: &str) -> Cow<'_, str> {
             // Single comma - likely decimal separator (European format: 12,34)
             for ch in without_currency.chars() {
                 match ch {
-                    ',' => result.push('.'),            // Convert decimal comma to dot
+                    ',' => buffer.push(b'.'),            // Convert decimal comma to dot
                     ' ' | '\'' | '_' => continue,       // Skip separators
-                    _ => result.push(ch),
+                    _ => push_byte!(ch),
                 }
             }
         }
         (Some(_), None, _, 0) => {
-            // Multiple commas - could be thousands separators (US format: 1,234,567)
-            // Validate the format - commas should be every 3 digits from right
+            // Multiple commas - could be:
+            // 1. US format thousands separators: 1,234,567 (3-digit groups)
+            // 2. Indian numbering system: 1,00,000 (lakhs) or 1,00,00,000 (crores)
             let segments: Vec<&str> = without_currency.split(',').collect();
-            let is_valid_thousands = segments.len() > 1
+
+            // Check US format: all segments after first have exactly 3 digits
+            let is_us_thousands = segments.len() > 1
                 && segments[1..].iter().all(|seg| seg.len() == 3 && seg.chars().all(|c| c.is_ascii_digit()));
 
-            if is_valid_thousands {
+            // Check Indian format: first segment 1-3 digits, then 2-digit groups, last 3 digits
+            // Examples: 1,00,000 (1 lakh) → [1, 00, 000]
+            //           12,34,567 → [12, 34, 567]
+            //           1,23,45,678 → [1, 23, 45, 678]
+            let is_indian_format = segments.len() >= 2 && {
+                let last_seg = segments.last().unwrap();
+                let middle_segs = &segments[1..segments.len() - 1];
+
+                // Last segment must be 3 digits (or 2 for lakhs like 1,00,000)
+                let last_valid = (last_seg.len() == 3 || last_seg.len() == 2)
+                    && last_seg.chars().all(|c| c.is_ascii_digit());
+
+                // Middle segments (if any) must be 2 digits
+                let middle_valid = middle_segs.iter().all(|seg| {
+                    seg.len() == 2 && seg.chars().all(|c| c.is_ascii_digit())
+                });
+
+                // First segment can be 1-3 digits
+                let first_valid = !segments[0].is_empty()
+                    && segments[0].len() <= 3
+                    && segments[0].chars().all(|c| c.is_ascii_digit());
+
+                first_valid && middle_valid && last_valid
+            };
+
+            if is_us_thousands || is_indian_format {
                 // Valid thousands separators - remove commas
                 for ch in without_currency.chars() {
                     match ch {
                         ',' | ' ' | '\'' | '_' => continue,   // Skip thousands separators
-                        _ => result.push(ch),
+                        _ => push_byte!(ch),
                     }
                 }
             } else {
@@ -3444,7 +3985,7 @@ fn clean_number_string_cow(s: &str) -> Cow<'_, str> {
                 for ch in without_currency.chars() {
                     match ch {
                         '.' | ' ' | '\'' | '_' => continue,   // Skip thousands separators
-                        _ => result.push(ch),
+                        _ => push_byte!(ch),
                     }
                 }
             } else {
@@ -3457,13 +3998,15 @@ fn clean_number_string_cow(s: &str) -> Cow<'_, str> {
             for ch in without_currency.chars() {
                 match ch {
                     ' ' | '\'' | '_' => continue,         // Skip separators
-                    _ => result.push(ch),
+                    _ => push_byte!(ch),
                 }
             }
         }
     }
 
-    Cow::Owned(result)
+    // Convert SmallVec buffer to String - this is safe because we only pushed ASCII bytes
+    // SAFETY: buffer only contains ASCII digits, '.', '-', 'e', 'E' which are valid UTF-8
+    Cow::Owned(unsafe { String::from_utf8_unchecked(buffer.into_vec()) })
 }
 
 /// OPTIMIZATION: Perfect hash map for O(1) boolean value lookup (compile-time)
@@ -3503,7 +4046,7 @@ static BOOL_MAP: phf::Map<&'static str, bool> = phf_map! {
 /// Fast version that accepts already-trimmed string (no trim() overhead)
 /// OPTIMIZATION: Uses perfect hash map (phf) for O(1) constant-time lookup
 #[inline(always)]
-fn try_parse_bool_fast(s: &str) -> Option<bool> {
+fn try_parse_bool(s: &str) -> Option<bool> {
     BOOL_MAP.get(s).copied()
 }
 
@@ -3530,7 +4073,7 @@ fn f64_to_json_number(num: f64) -> Option<Value> {
 
 /// Fast version that accepts already-trimmed string (no trim() overhead)
 #[inline(always)]
-fn is_null_string_fast(s: &str) -> bool {
+fn is_null_string(s: &str) -> bool {
     matches!(
         s,
         "null" | "NULL" | "Null" |
@@ -3567,45 +4110,59 @@ fn apply_type_conversion_to_value(value: &mut Value) {
         match first_byte {
             // Null patterns: "null", "NULL", "Null", "none", "None", "nil", "Nil"
             b'n' | b'N' => {
-                if is_null_string_fast(trimmed) {
+                if is_null_string(trimmed) {
                     *value = Value::Null;
                     return;
                 }
                 // 'n' or 'N' could also be "no", "NO", "No" for boolean
-                if let Some(b) = try_parse_bool_fast(trimmed) {
+                if let Some(b) = try_parse_bool(trimmed) {
                     *value = Value::Bool(b);
                 }
             }
             // Boolean patterns: true/false, True/False, TRUE/FALSE
             b't' | b'T' | b'f' | b'F' => {
-                if let Some(b) = try_parse_bool_fast(trimmed) {
+                if let Some(b) = try_parse_bool(trimmed) {
                     *value = Value::Bool(b);
                 }
             }
             // Yes/Y patterns
             b'y' | b'Y' => {
-                if let Some(b) = try_parse_bool_fast(trimmed) {
+                if let Some(b) = try_parse_bool(trimmed) {
                     *value = Value::Bool(b);
                 }
             }
             // On/Off patterns
             b'o' | b'O' => {
-                if let Some(b) = try_parse_bool_fast(trimmed) {
+                if let Some(b) = try_parse_bool(trimmed) {
                     *value = Value::Bool(b);
                 }
             }
             // Number patterns: digits, minus, plus, dot, currency symbols, opening paren/bracket (accounting format)
             // Also include E/G/U for "EUR", "GBP", "USD" currency codes
+            // NOTE: Digits can also be dates (2024-01-15), so check for dates first
             b'0'..=b'9' | b'-' | b'+' | b'.' | b'$' | b'(' | b'[' => {
                 // Try boolean first for "0", "1"
                 if first_byte == b'0' || first_byte == b'1' {
-                    if let Some(b) = try_parse_bool_fast(trimmed) {
+                    if let Some(b) = try_parse_bool(trimmed) {
                         *value = Value::Bool(b);
                         return;
                     }
                 }
+
+                // Try ISO-8601 date detection before number conversion
+                // Dates like "2024-01-15" should not be converted to numbers
+                if could_be_date(trimmed) {
+                    if let Some(normalized_date) = try_parse_and_normalize_iso8601(trimmed) {
+                        // Only update if the date was normalized (different from original)
+                        if normalized_date != trimmed {
+                            *value = Value::String(normalized_date);
+                        }
+                        return; // Don't try number conversion for valid dates
+                    }
+                }
+
                 // Then try number conversion
-                if let Some(num) = try_parse_number_optimized(trimmed) {
+                if let Some(num) = try_parse_number(trimmed) {
                     if let Some(num_value) = f64_to_json_number(num) {
                         *value = num_value;
                     }
@@ -3616,7 +4173,7 @@ fn apply_type_conversion_to_value(value: &mut Value) {
             // Multi-byte UTF-8 currency symbols (€, £, ¥, ₹, etc.) start with bytes >= 0xC0
             b'A'..=b'Z' | b'\xc2'..=b'\xf4' => {
                 // Try number conversion for currency-prefixed values
-                if let Some(num) = try_parse_number_optimized(trimmed) {
+                if let Some(num) = try_parse_number(trimmed) {
                     if let Some(num_value) = f64_to_json_number(num) {
                         *value = num_value;
                     }
@@ -3654,35 +4211,28 @@ fn apply_type_conversion_recursive(value: &mut Value) {
 
 /// Core unflattening algorithm that reconstructs nested JSON from flattened keys
 fn unflatten_object(obj: Map<String, Value>, separator: &str) -> Result<Value, JsonToolsError> {
-    // OPTIMIZATION: Single-pass unflatten algorithm with zero-copy values
-    // Process keys in sorted order so parents are guaranteed to exist before children.
-    // Takes ownership of the map to avoid cloning values during unflatten.
+    // OPTIMIZATION #21: Removed O(N log N) sorting - process entries directly
+    // The set_nested_value_with_types function uses entry().or_insert_with() to create
+    // intermediate nodes on demand, so sorting is not required for correctness.
+    // This reduces complexity from O(N log N) to O(N) for the iteration phase.
 
     let mut result = Map::with_capacity(obj.len() / 2); // Estimate final size
 
     // Pre-analyze path types before consuming the map
     let path_types = analyze_path_types(&obj, separator);
 
-    // Sort keys to ensure parents are processed before children
-    // Convert to owned entries to avoid cloning values later
-    let mut sorted_entries: Vec<_> = obj.into_iter().collect();
-    sorted_entries.sort_by(|(k1, _), (k2, _)| k1.cmp(k2));
-
-    // Process entries in order, taking ownership (no clone needed!)
-    for (key, value) in sorted_entries {
-        set_nested_value_with_types(&mut result, &key, value, separator, &path_types)?;
+    // Process entries directly without sorting - O(N) instead of O(N log N)
+    // The recursive helper creates intermediate structures on demand
+    for (key, value) in obj {
+        set_nested_value(&mut result, &key, value, separator, &path_types)?;
     }
 
     Ok(Value::Object(result))
 }
 
 /// Analyze all flattened keys to determine whether each path should be an array or object
+/// Analyze path types to determine if segments should be arrays or objects
 fn analyze_path_types(obj: &Map<String, Value>, separator: &str) -> FxHashMap<String, bool> {
-    analyze_path_types_optimized(obj, separator)
-}
-
-/// Optimized path analysis using radix tree and efficient data structures
-fn analyze_path_types_optimized(obj: &Map<String, Value>, separator: &str) -> FxHashMap<String, bool> {
     // Use a more efficient approach with pre-allocated capacity and optimized string operations
     let estimated_paths = obj.len() * 2; // Rough estimate of path count
     let mut state: FxHashMap<String, u8> = FxHashMap::with_capacity_and_hasher(estimated_paths, Default::default());
@@ -3692,7 +4242,7 @@ fn analyze_path_types_optimized(obj: &Map<String, Value>, separator: &str) -> Fx
     let sep_len = separator.len();
 
     for key in obj.keys() {
-        analyze_key_path_optimized(key, sep_bytes, sep_len, &mut state);
+        analyze_key_path(key, sep_bytes, sep_len, &mut state);
     }
 
     // Convert bitmask state to final decision with pre-allocated result
@@ -3706,14 +4256,14 @@ fn analyze_path_types_optimized(obj: &Map<String, Value>, separator: &str) -> Fx
 
 /// Optimized key path analysis with efficient string operations
 #[inline]
-fn analyze_key_path_optimized(key: &str, sep_bytes: &[u8], sep_len: usize, state: &mut FxHashMap<String, u8>) {
+fn analyze_key_path(key: &str, sep_bytes: &[u8], sep_len: usize, state: &mut FxHashMap<String, u8>) {
     let key_bytes = key.as_bytes();
     let mut search_start = 0;
 
     // Use Boyer-Moore-like approach for separator finding
     while search_start < key_bytes.len() {
         // Find next separator using optimized byte search
-        let next_sep = find_separator_optimized(key_bytes, sep_bytes, search_start);
+        let next_sep = find_separator(key_bytes, sep_bytes, search_start);
 
         if next_sep == key_bytes.len() {
             break; // No more separators
@@ -3725,7 +4275,7 @@ fn analyze_key_path_optimized(key: &str, sep_bytes: &[u8], sep_len: usize, state
         // Look ahead to classify child
         let child_start = next_sep + sep_len;
         if child_start < key_bytes.len() {
-            let child_end = find_separator_optimized(key_bytes, sep_bytes, child_start)
+            let child_end = find_separator(key_bytes, sep_bytes, child_start)
                 .min(key_bytes.len());
             let child = &key[child_start..child_end];
 
@@ -3753,7 +4303,7 @@ fn analyze_key_path_optimized(key: &str, sep_bytes: &[u8], sep_len: usize, state
 /// Uses hardware-accelerated SIMD instructions (SSE2/AVX2/NEON) for byte searching
 /// Provides 3-10x speedup over naive byte-by-byte search
 #[inline]
-fn find_separator_optimized(haystack: &[u8], needle: &[u8], start: usize) -> usize {
+fn find_separator(haystack: &[u8], needle: &[u8], start: usize) -> usize {
     if needle.len() == 1 {
         // Single byte separator - use memchr's SIMD-optimized byte search
         // This uses SSE2/AVX2 on x86 and NEON on ARM for 3-10x speedup
@@ -3774,7 +4324,7 @@ fn find_separator_optimized(haystack: &[u8], needle: &[u8], start: usize) -> usi
 /// Available for future optimizations (e.g., finding '.', '_' or '-' in keys)
 #[allow(dead_code)]
 #[inline]
-fn find_any_separator2_simd(haystack: &[u8], start: usize, sep1: u8, sep2: u8) -> Option<usize> {
+fn find_separator_dual(haystack: &[u8], start: usize, sep1: u8, sep2: u8) -> Option<usize> {
     memchr2(sep1, sep2, &haystack[start..]).map(|pos| start + pos)
 }
 
@@ -3783,7 +4333,7 @@ fn find_any_separator2_simd(haystack: &[u8], start: usize, sep1: u8, sep2: u8) -
 /// Available for future optimizations
 #[allow(dead_code)]
 #[inline]
-fn find_any_separator3_simd(haystack: &[u8], start: usize, sep1: u8, sep2: u8, sep3: u8) -> Option<usize> {
+fn find_separator_triple(haystack: &[u8], start: usize, sep1: u8, sep2: u8, sep3: u8) -> Option<usize> {
     memchr3(sep1, sep2, sep3, &haystack[start..]).map(|pos| start + pos)
 }
 
@@ -3792,7 +4342,7 @@ fn find_any_separator3_simd(haystack: &[u8], start: usize, sep1: u8, sep2: u8, s
 /// Available for future optimizations (e.g., finding parent paths)
 #[allow(dead_code)]
 #[inline]
-fn find_last_separator_simd(haystack: &[u8], sep: u8) -> Option<usize> {
+fn find_last_separator(haystack: &[u8], sep: u8) -> Option<usize> {
     memrchr(sep, haystack)
 }
 
@@ -3802,12 +4352,12 @@ fn find_last_separator_simd(haystack: &[u8], sep: u8) -> Option<usize> {
 /// If no uppercase found, returns Borrowed (zero-copy)
 /// Otherwise, converts to lowercase and returns Owned
 #[inline]
-fn to_lowercase_simd(s: &str) -> Cow<'_, str> {
+fn to_lowercase(s: &str) -> Cow<'_, str> {
     let bytes = s.as_bytes();
 
     // SIMD-friendly check: scan for uppercase ASCII bytes (A-Z = 0x41-0x5A)
     // This allows compiler to vectorize the loop
-    let has_uppercase = bytes.iter().any(|&b| matches!(b, b'A'..=b'Z'));
+    let has_uppercase = bytes.iter().any(|&b| b.is_ascii_uppercase());
 
     if has_uppercase {
         Cow::Owned(s.to_lowercase())
@@ -3840,7 +4390,7 @@ fn is_valid_array_index(s: &str) -> bool {
 
 
 /// Set a nested value using pre-analyzed path types to handle conflicts
-fn set_nested_value_with_types(
+fn set_nested_value(
     result: &mut Map<String, Value>,
     key_path: &str,
     value: Value,
@@ -3861,13 +4411,13 @@ fn set_nested_value_with_types(
 
     // OPTIMIZATION: Pre-allocate path buffer to avoid repeated allocations
     let mut path_buffer = String::with_capacity(key_path.len());
-    set_nested_value_recursive_with_types_optimized(
+    set_nested_value_recursive(
         result, &parts, 0, value, separator, path_types, &mut path_buffer
     )
 }
 
 /// Optimized recursive helper that reuses a path buffer to avoid allocations
-fn set_nested_value_recursive_with_types_optimized(
+fn set_nested_value_recursive(
     current: &mut Map<String, Value>,
     parts: &[&str],
     index: usize,
@@ -3903,7 +4453,7 @@ fn set_nested_value_recursive_with_types_optimized(
     });
 
     let result = match entry {
-        Value::Object(ref mut obj) => set_nested_value_recursive_with_types_optimized(
+        Value::Object(ref mut obj) => set_nested_value_recursive(
             obj,
             parts,
             index + 1,
@@ -3940,7 +4490,7 @@ fn set_nested_value_recursive_with_types_optimized(
                     }
 
                     match &mut arr[array_index] {
-                        Value::Object(ref mut obj) => set_nested_value_recursive_with_types_optimized(
+                        Value::Object(ref mut obj) => set_nested_value_recursive(
                             obj,
                             parts,
                             index + 2,
@@ -3950,7 +4500,7 @@ fn set_nested_value_recursive_with_types_optimized(
                             path_buffer,
                         ),
                         Value::Array(ref mut nested_arr) => {
-                            set_nested_value_recursive_for_array_with_types_optimized(
+                            set_nested_array_value(
                                 nested_arr,
                                 parts,
                                 index + 2,
@@ -3980,7 +4530,7 @@ fn set_nested_value_recursive_with_types_optimized(
 
                 // Now continue as object
                 if let Value::Object(ref mut obj) = entry {
-                    set_nested_value_recursive_with_types_optimized(
+                    set_nested_value_recursive(
                         obj,
                         parts,
                         index + 1,
@@ -4006,7 +4556,7 @@ fn set_nested_value_recursive_with_types_optimized(
 }
 
 /// Optimized recursive helper for setting nested values in arrays with type awareness
-fn set_nested_value_recursive_for_array_with_types_optimized(
+fn set_nested_array_value(
     arr: &mut Vec<Value>,
     parts: &[&str],
     index: usize,
@@ -4050,7 +4600,7 @@ fn set_nested_value_recursive_for_array_with_types_optimized(
             }
 
             let result = match &mut arr[array_index] {
-                Value::Object(ref mut obj) => set_nested_value_recursive_with_types_optimized(
+                Value::Object(ref mut obj) => set_nested_value_recursive(
                     obj,
                     parts,
                     index + 1,
@@ -4060,7 +4610,7 @@ fn set_nested_value_recursive_for_array_with_types_optimized(
                     path_buffer,
                 ),
                 Value::Array(ref mut nested_arr) => {
-                    set_nested_value_recursive_for_array_with_types_optimized(
+                    set_nested_array_value(
                         nested_arr,
                         parts,
                         index + 1,
@@ -4337,7 +4887,7 @@ fn apply_key_replacements_with_collision_handling(
         return Ok(flattened);
     }
 
-    if patterns.len() % 2 != 0 {
+    if !patterns.len().is_multiple_of(2) {
         return Err(JsonToolsError::invalid_replacement_pattern(
             "Patterns must be provided in pairs (find, replace)"
         ));
@@ -4400,7 +4950,7 @@ fn apply_key_replacements_with_collision_handling(
                         );
                     }
                 } else if new_key.contains(pattern) {
-                    new_key = Cow::Owned(new_key.replace(pattern, *replacement));
+                    new_key = Cow::Owned(new_key.replace(pattern, replacement));
                 }
             }
 
@@ -4410,10 +4960,11 @@ fn apply_key_replacements_with_collision_handling(
         return Ok(new_flattened);
     }
 
-    // Collision handling path: apply replacements and track what each original key maps to
+    // OPTIMIZATION #19: Single-pass collision handling using HashMap::entry API
+    // Instead of 3 separate passes (key_mapping, target_groups, result), we build
+    // the result directly in one iteration using the entry API to handle collisions
     let flattened_len = flattened.len();
-    let mut key_mapping: FxHashMap<String, String> = FxHashMap::with_capacity_and_hasher(flattened_len, Default::default());
-    let mut original_values: FxHashMap<String, Value> = FxHashMap::with_capacity_and_hasher(flattened_len, Default::default());
+    let mut result: FxHashMap<String, Value> = FxHashMap::with_capacity_and_hasher(flattened_len, Default::default());
 
     for (original_key, value) in flattened {
         let mut new_key = Cow::Borrowed(original_key.as_str());
@@ -4432,59 +4983,45 @@ fn apply_key_replacements_with_collision_handling(
                     );
                 }
             } else if new_key.contains(pattern) {
-                new_key = Cow::Owned(new_key.replace(pattern, *replacement));
+                new_key = Cow::Owned(new_key.replace(pattern, replacement));
             }
         }
 
+        // Apply filtering before inserting
+        let should_include = should_include_value(
+            &value,
+            config.filtering.remove_empty_strings,
+            config.filtering.remove_nulls,
+            config.filtering.remove_empty_objects,
+            config.filtering.remove_empty_arrays,
+        );
+
+        if !should_include {
+            continue;
+        }
+
+        // Use entry API for single-pass collision handling
         let new_key_string = new_key.into_owned();
-        // OPTIMIZATION: Insert original_values first with owned original_key,
-        // then clone for key_mapping (avoids cloning new_key_string)
-        let original_key_clone = original_key.clone();
-        original_values.insert(original_key, value);
-        key_mapping.insert(original_key_clone, new_key_string);
-    }
-
-    // Second pass: group by target key to detect collisions
-    // OPTIMIZATION: Consume key_mapping to avoid cloning
-    let mut target_groups: FxHashMap<String, Vec<String>> = FxHashMap::with_capacity_and_hasher(key_mapping.len(), Default::default());
-    for (original_key, target_key) in key_mapping {
-        target_groups.entry(target_key).or_default().push(original_key);
-    }
-
-    // Third pass: build result with collision handling
-    let mut result = FxHashMap::with_capacity_and_hasher(target_groups.len(), Default::default());
-
-    for (target_key, original_keys) in target_groups {
-        if original_keys.len() == 1 {
-            // No collision
-            let original_key = &original_keys[0];
-            let value = original_values.remove(original_key).unwrap();
-            result.insert(target_key, value);
-        } else {
-            // Collision detected: Only supported strategy is collecting into arrays
-            let mut values = Vec::with_capacity(original_keys.len());
-            for original_key in &original_keys {
-                let value = original_values.remove(original_key).unwrap();
-
-                // Apply filtering to values before adding to collision array
-                let should_include = should_include_value(
-                    &value,
-                    config.filtering.remove_empty_strings,
-                    config.filtering.remove_nulls,
-                    config.filtering.remove_empty_objects,
-                    config.filtering.remove_empty_arrays,
-                );
-
-                if should_include {
-                    values.push(value);
+        match result.entry(new_key_string) {
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                // No collision - insert value directly
+                entry.insert(value);
+            }
+            std::collections::hash_map::Entry::Occupied(mut entry) => {
+                // Collision detected - convert to array or append
+                let existing = entry.get_mut();
+                match existing {
+                    Value::Array(arr) => {
+                        // Already an array from previous collision - append
+                        arr.push(value);
+                    }
+                    _ => {
+                        // First collision - convert existing value to array with both values
+                        let old_value = std::mem::replace(existing, Value::Null);
+                        *existing = Value::Array(vec![old_value, value]);
+                    }
                 }
             }
-
-            // Only create the array if we have values after filtering
-            if !values.is_empty() {
-                result.insert(target_key, Value::Array(values));
-            }
-            // If all values were filtered out, don't insert anything
         }
     }
 

@@ -20,7 +20,7 @@ pub fn extract_multiple(output: JsonOutput) -> Vec<String> {
 }
 
 #[cfg(test)]
-mod tests {
+mod unit_tests {
     use super::*;
 
     // ===== BASIC FUNCTIONALITY TESTS =====
@@ -1968,5 +1968,446 @@ mod parallel_regex_cache_tests {
 
         // Verify that only non-null values remain when both are enabled
         assert_eq!(parsed3.as_object().unwrap().len(), 3);  // Only 3 keys remain
+    }
+
+    #[test]
+    fn test_suffixed_numbers() {
+        // Test K/M/B/T suffixes for large numbers
+        let json = r#"{
+            "thousand": "5K",
+            "thousand_lower": "2.5k",
+            "million": "3M",
+            "million_decimal": "1.5m",
+            "billion": "2B",
+            "trillion": "1T"
+        }"#;
+
+        let result = JSONTools::new()
+            .flatten()
+            .auto_convert_types(true)
+            .execute(json)
+            .unwrap();
+
+        let flattened = extract_single(result);
+        let parsed: Value = serde_json::from_str(&flattened).unwrap();
+
+        assert_eq!(parsed["thousand"], 5000.0);
+        assert_eq!(parsed["thousand_lower"], 2500.0);
+        assert_eq!(parsed["million"], 3000000.0);
+        assert_eq!(parsed["million_decimal"], 1500000.0);
+        assert_eq!(parsed["billion"], 2000000000.0);
+        assert_eq!(parsed["trillion"], 1000000000000.0);
+    }
+
+    #[test]
+    fn test_fractions() {
+        // Test fraction parsing
+        let json = r#"{
+            "half": "1/2",
+            "quarter": "1/4",
+            "three_quarters": "3/4",
+            "mixed_positive": "2 1/2",
+            "mixed_negative": "-1 1/2",
+            "negative_fraction": "-3/4"
+        }"#;
+
+        let result = JSONTools::new()
+            .flatten()
+            .auto_convert_types(true)
+            .execute(json)
+            .unwrap();
+
+        let flattened = extract_single(result);
+        let parsed: Value = serde_json::from_str(&flattened).unwrap();
+
+        assert_eq!(parsed["half"], 0.5);
+        assert_eq!(parsed["quarter"], 0.25);
+        assert_eq!(parsed["three_quarters"], 0.75);
+        assert_eq!(parsed["mixed_positive"], 2.5);
+        assert_eq!(parsed["mixed_negative"], -1.5);
+        assert_eq!(parsed["negative_fraction"], -0.75);
+    }
+
+    #[test]
+    fn test_radix_numbers() {
+        // Test hex, binary, octal parsing
+        let json = r#"{
+            "hex_lower": "0xff",
+            "hex_upper": "0xFF",
+            "hex_large": "0x1A2B",
+            "binary": "0b1010",
+            "binary_upper": "0B1111",
+            "octal": "0o777",
+            "octal_upper": "0O755",
+            "negative_hex": "-0x10"
+        }"#;
+
+        let result = JSONTools::new()
+            .flatten()
+            .auto_convert_types(true)
+            .execute(json)
+            .unwrap();
+
+        let flattened = extract_single(result);
+        let parsed: Value = serde_json::from_str(&flattened).unwrap();
+
+        assert_eq!(parsed["hex_lower"], 255.0);
+        assert_eq!(parsed["hex_upper"], 255.0);
+        assert_eq!(parsed["hex_large"], 6699.0);  // 0x1A2B = 6699
+        assert_eq!(parsed["binary"], 10.0);       // 0b1010 = 10
+        assert_eq!(parsed["binary_upper"], 15.0); // 0B1111 = 15
+        assert_eq!(parsed["octal"], 511.0);       // 0o777 = 511
+        assert_eq!(parsed["octal_upper"], 493.0); // 0O755 = 493
+        assert_eq!(parsed["negative_hex"], -16.0); // -0x10 = -16
+    }
+
+    #[test]
+    fn test_basis_points() {
+        // Test basis points parsing
+        let json = r#"{
+            "bp_suffix": "25bp",
+            "bps_suffix": "50bps",
+            "bp_space": "100 bp",
+            "bps_space": "75 bps"
+        }"#;
+
+        let result = JSONTools::new()
+            .flatten()
+            .auto_convert_types(true)
+            .execute(json)
+            .unwrap();
+
+        let flattened = extract_single(result);
+        let parsed: Value = serde_json::from_str(&flattened).unwrap();
+
+        // Basis points: 1bp = 0.0001 (1/100th of a percent)
+        assert_eq!(parsed["bp_suffix"], 0.0025);   // 25bp = 0.0025
+        assert_eq!(parsed["bps_suffix"], 0.005);   // 50bps = 0.005
+        assert_eq!(parsed["bp_space"], 0.01);      // 100bp = 0.01
+        assert_eq!(parsed["bps_space"], 0.0075);   // 75bps = 0.0075
+    }
+
+    #[test]
+    fn test_permille() {
+        // Test permille (‰) parsing
+        let json = r#"{
+            "permille": "5‰",
+            "per_ten_thousand": "25‱"
+        }"#;
+
+        let result = JSONTools::new()
+            .flatten()
+            .auto_convert_types(true)
+            .execute(json)
+            .unwrap();
+
+        let flattened = extract_single(result);
+        let parsed: Value = serde_json::from_str(&flattened).unwrap();
+
+        // Permille: 1‰ = 0.001 (per thousand)
+        assert_eq!(parsed["permille"], 0.005);  // 5‰ = 0.005
+        // Per ten-thousand: 1‱ = 0.0001
+        assert_eq!(parsed["per_ten_thousand"], 0.0025);  // 25‱ = 0.0025
+    }
+
+    #[test]
+    fn test_indian_numbering() {
+        // Test Indian numbering system (lakhs and crores)
+        let json = r#"{
+            "one_lakh": "1,00,000",
+            "ten_lakh": "10,00,000",
+            "one_crore": "1,00,00,000",
+            "mixed": "12,34,567"
+        }"#;
+
+        let result = JSONTools::new()
+            .flatten()
+            .auto_convert_types(true)
+            .execute(json)
+            .unwrap();
+
+        let flattened = extract_single(result);
+        let parsed: Value = serde_json::from_str(&flattened).unwrap();
+
+        assert_eq!(parsed["one_lakh"], 100000.0);     // 1,00,000 = 100,000
+        assert_eq!(parsed["ten_lakh"], 1000000.0);    // 10,00,000 = 1,000,000
+        assert_eq!(parsed["one_crore"], 10000000.0);  // 1,00,00,000 = 10,000,000
+        assert_eq!(parsed["mixed"], 1234567.0);       // 12,34,567 = 1,234,567
+    }
+
+    #[test]
+    fn test_iso8601_date_detection() {
+        // Test ISO-8601 date detection - dates should stay as strings (no JSON date type)
+        // but get normalized to UTC
+        let json = r#"{
+            "date_only": "2024-01-15",
+            "datetime_utc": "2024-01-15T10:30:00Z",
+            "datetime_no_tz": "2024-01-15T10:30:00",
+            "datetime_with_offset": "2024-01-15T10:30:00+05:00",
+            "datetime_negative_offset": "2024-01-15T10:30:00-08:00",
+            "not_a_date": "2024-13-45",
+            "regular_number": "12345"
+        }"#;
+
+        let result = JSONTools::new()
+            .flatten()
+            .auto_convert_types(true)
+            .execute(json)
+            .unwrap();
+
+        let flattened = extract_single(result);
+        let parsed: Value = serde_json::from_str(&flattened).unwrap();
+
+        // Date-only stays as-is
+        assert_eq!(parsed["date_only"], "2024-01-15");
+
+        // UTC datetime stays as-is (already normalized)
+        assert_eq!(parsed["datetime_utc"], "2024-01-15T10:30:00Z");
+
+        // Naive datetime assumed UTC, normalized with Z suffix
+        assert_eq!(parsed["datetime_no_tz"], "2024-01-15T10:30:00Z");
+
+        // +05:00 offset → UTC is 5 hours earlier
+        assert_eq!(parsed["datetime_with_offset"], "2024-01-15T05:30:00Z");
+
+        // -08:00 offset → UTC is 8 hours later
+        assert_eq!(parsed["datetime_negative_offset"], "2024-01-15T18:30:00Z");
+
+        // Invalid date stays as string (not converted)
+        assert_eq!(parsed["not_a_date"], "2024-13-45");
+
+        // Regular numbers still convert to numbers
+        assert_eq!(parsed["regular_number"], 12345);
+    }
+
+    #[test]
+    fn test_iso8601_datetime_with_fractional_seconds() {
+        // Test datetime with fractional seconds
+        let json = r#"{
+            "with_millis": "2024-06-15T14:30:45.123Z",
+            "with_micros": "2024-06-15T14:30:45.123456Z",
+            "no_tz_with_millis": "2024-06-15T14:30:45.500"
+        }"#;
+
+        let result = JSONTools::new()
+            .flatten()
+            .auto_convert_types(true)
+            .execute(json)
+            .unwrap();
+
+        let flattened = extract_single(result);
+        let parsed: Value = serde_json::from_str(&flattened).unwrap();
+
+        // Normalized to UTC without fractional seconds
+        assert_eq!(parsed["with_millis"], "2024-06-15T14:30:45Z");
+        assert_eq!(parsed["with_micros"], "2024-06-15T14:30:45Z");
+        assert_eq!(parsed["no_tz_with_millis"], "2024-06-15T14:30:45Z");
+    }
+
+    #[test]
+    fn test_iso8601_space_separator() {
+        // Test datetime with space separator instead of T
+        let json = r#"{
+            "space_datetime": "2024-01-15 10:30:00",
+            "space_with_tz": "2024-01-15 10:30:00+02:00"
+        }"#;
+
+        let result = JSONTools::new()
+            .flatten()
+            .auto_convert_types(true)
+            .execute(json)
+            .unwrap();
+
+        let flattened = extract_single(result);
+        let parsed: Value = serde_json::from_str(&flattened).unwrap();
+
+        // Space separator normalized to T with Z suffix
+        assert_eq!(parsed["space_datetime"], "2024-01-15T10:30:00Z");
+
+        // Space with timezone normalized to UTC
+        assert_eq!(parsed["space_with_tz"], "2024-01-15T08:30:00Z");
+    }
+
+    #[test]
+    fn test_date_not_confused_with_numbers() {
+        // Ensure dates are not accidentally converted to numbers
+        let json = r#"{
+            "date": "2024-01-15",
+            "looks_like_math": "2024-01-15",
+            "timestamp": "2024-12-25T00:00:00Z"
+        }"#;
+
+        let result = JSONTools::new()
+            .flatten()
+            .auto_convert_types(true)
+            .execute(json)
+            .unwrap();
+
+        let flattened = extract_single(result);
+        let parsed: Value = serde_json::from_str(&flattened).unwrap();
+
+        // Dates should remain as strings, not converted to numbers
+        assert!(parsed["date"].is_string());
+        assert!(parsed["looks_like_math"].is_string());
+        assert!(parsed["timestamp"].is_string());
+
+        // Verify they are valid date strings
+        assert_eq!(parsed["date"], "2024-01-15");
+        assert_eq!(parsed["timestamp"], "2024-12-25T00:00:00Z");
+    }
+
+    #[test]
+    fn test_compact_date_format() {
+        // Test compact ISO-8601 date: YYYYMMDD
+        let json = r#"{
+            "compact_date": "20240115",
+            "compact_datetime": "20240115T103000",
+            "compact_datetime_z": "20240115T103000Z",
+            "compact_with_offset": "20240115T103000+0530"
+        }"#;
+
+        let result = JSONTools::new()
+            .flatten()
+            .auto_convert_types(true)
+            .execute(json)
+            .unwrap();
+
+        let flattened = extract_single(result);
+        let parsed: Value = serde_json::from_str(&flattened).unwrap();
+
+        // Compact date normalized to YYYY-MM-DD
+        assert_eq!(parsed["compact_date"], "2024-01-15");
+
+        // Compact datetime normalized to ISO format with Z
+        assert_eq!(parsed["compact_datetime"], "2024-01-15T10:30:00Z");
+        assert_eq!(parsed["compact_datetime_z"], "2024-01-15T10:30:00Z");
+
+        // Compact with offset normalized to UTC
+        // 10:30:00+05:30 = 05:00:00Z
+        assert_eq!(parsed["compact_with_offset"], "2024-01-15T05:00:00Z");
+    }
+
+    #[test]
+    fn test_ordinal_date_format() {
+        // Test ordinal date: YYYY-DDD (day of year)
+        let json = r#"{
+            "jan_15": "2024-015",
+            "dec_31": "2024-366",
+            "leap_year": "2024-060"
+        }"#;
+
+        let result = JSONTools::new()
+            .flatten()
+            .auto_convert_types(true)
+            .execute(json)
+            .unwrap();
+
+        let flattened = extract_single(result);
+        let parsed: Value = serde_json::from_str(&flattened).unwrap();
+
+        // Ordinal dates normalized to YYYY-MM-DD
+        assert_eq!(parsed["jan_15"], "2024-01-15");
+        assert_eq!(parsed["dec_31"], "2024-12-31");  // 2024 is leap year
+        assert_eq!(parsed["leap_year"], "2024-02-29"); // Day 60 in leap year
+    }
+
+    #[test]
+    fn test_week_date_format() {
+        // Test ISO week date: YYYY-Www-D
+        let json = r#"{
+            "week_with_day": "2024-W03-1",
+            "week_friday": "2024-W03-5"
+        }"#;
+
+        let result = JSONTools::new()
+            .flatten()
+            .auto_convert_types(true)
+            .execute(json)
+            .unwrap();
+
+        let flattened = extract_single(result);
+        let parsed: Value = serde_json::from_str(&flattened).unwrap();
+
+        // Week dates normalized to YYYY-MM-DD
+        // Week 3 of 2024: Jan 15-21
+        assert_eq!(parsed["week_with_day"], "2024-01-15"); // Monday
+        assert_eq!(parsed["week_friday"], "2024-01-19");   // Friday
+    }
+
+    #[test]
+    fn test_alternate_separators() {
+        // Test dates with slash and dot separators
+        let json = r#"{
+            "slash_date": "2024/01/15",
+            "dot_date": "2024.01.15",
+            "slash_datetime": "2024/01/15T10:30:00Z",
+            "dot_datetime": "2024.01.15T10:30:00+02:00"
+        }"#;
+
+        let result = JSONTools::new()
+            .flatten()
+            .auto_convert_types(true)
+            .execute(json)
+            .unwrap();
+
+        let flattened = extract_single(result);
+        let parsed: Value = serde_json::from_str(&flattened).unwrap();
+
+        // Normalized to standard format
+        assert_eq!(parsed["slash_date"], "2024-01-15");
+        assert_eq!(parsed["dot_date"], "2024-01-15");
+        assert_eq!(parsed["slash_datetime"], "2024-01-15T10:30:00Z");
+        // +02:00 offset -> 2 hours earlier in UTC
+        assert_eq!(parsed["dot_datetime"], "2024-01-15T08:30:00Z");
+    }
+
+    #[test]
+    fn test_timezone_offset_variants() {
+        // Test various timezone offset formats
+        let json = r#"{
+            "colon_offset": "2024-01-15T10:30:00+05:30",
+            "no_colon_offset": "2024-01-15T10:30:00+0530",
+            "hour_only_offset": "2024-01-15T10:30:00+05",
+            "negative_offset": "2024-01-15T10:30:00-0800",
+            "zulu": "2024-01-15T10:30:00Z"
+        }"#;
+
+        let result = JSONTools::new()
+            .flatten()
+            .auto_convert_types(true)
+            .execute(json)
+            .unwrap();
+
+        let flattened = extract_single(result);
+        let parsed: Value = serde_json::from_str(&flattened).unwrap();
+
+        // All should normalize to UTC
+        assert_eq!(parsed["colon_offset"], "2024-01-15T05:00:00Z");  // +05:30
+        assert_eq!(parsed["no_colon_offset"], "2024-01-15T05:00:00Z");  // +0530
+        assert_eq!(parsed["hour_only_offset"], "2024-01-15T05:30:00Z");  // +05:00
+        assert_eq!(parsed["negative_offset"], "2024-01-15T18:30:00Z");  // -08:00
+        assert_eq!(parsed["zulu"], "2024-01-15T10:30:00Z");
+    }
+
+    #[test]
+    fn test_datetime_without_seconds() {
+        // Test datetime formats without seconds
+        let json = r#"{
+            "no_seconds": "2024-01-15T10:30",
+            "no_seconds_z": "2024-01-15T10:30Z"
+        }"#;
+
+        let result = JSONTools::new()
+            .flatten()
+            .auto_convert_types(true)
+            .execute(json)
+            .unwrap();
+
+        let flattened = extract_single(result);
+        let parsed: Value = serde_json::from_str(&flattened).unwrap();
+
+        // Normalized with :00 seconds added
+        assert_eq!(parsed["no_seconds"], "2024-01-15T10:30:00Z");
+        assert_eq!(parsed["no_seconds_z"], "2024-01-15T10:30:00Z");
     }
 }

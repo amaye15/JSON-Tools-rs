@@ -2123,14 +2123,14 @@ class TestTypeConversion:
         input_data = {
             "name": "John",
             "code": "ABC123",
-            "maybe": "yes",  # Not a valid boolean
+            "maybe": "perhaps",  # Not a valid boolean
             "invalid": "12.34.56"  # Invalid number
         }
         result = tools.execute(input_data)
 
         assert result["name"] == "John"
         assert result["code"] == "ABC123"
-        assert result["maybe"] == "yes"
+        assert result["maybe"] == "perhaps"
         assert result["invalid"] == "12.34.56"
 
     def test_mixed_conversion(self):

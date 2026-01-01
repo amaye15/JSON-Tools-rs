@@ -51,9 +51,16 @@ Batch Processing:
     >>> dict_results = tools.execute([{"a": {"b": 1}}, {"c": {"d": 2}}])
     >>> print(dict_results)  # [{'a.b': 1}, {'c.d': 2}] (list of dicts)
 
+Automatic Type Conversion:
+    >>> # Convert strings to numbers and booleans automatically
+    >>> tools = json_tools_rs.JSONTools().flatten().auto_convert_types(True)
+    >>> data = {"id": "123", "price": "$1,234.56", "active": "true"}
+    >>> result = tools.execute(data)
+    >>> print(result)  # {'id': 123, 'price': 1234.56, 'active': True}
+
 Parallel Processing (Automatic):
-    >>> # Automatic parallel processing for large batches (10+ items by default)
-    >>> large_batch = [{"data": i} for i in range(100)]
+    >>> # Automatic parallel processing for large batches (1000+ items by default)
+    >>> large_batch = [{"data": i} for i in range(2000)]
     >>> tools = json_tools_rs.JSONTools().flatten()
     >>> results = tools.execute(large_batch)  # Automatically uses parallel processing
     >>>
@@ -67,7 +74,7 @@ Parallel Processing (Automatic):
 
 from .json_tools_rs import JSONTools, JsonToolsError, JsonOutput
 
-__version__ = "0.6.0"
+__version__ = "0.8.0"
 __author__ = "JSON Tools RS Contributors"
 
 __all__ = [

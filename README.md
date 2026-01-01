@@ -423,6 +423,10 @@ assert original == restored  # Perfect roundtrip with dicts!
 | `.key_replacement(find, replace)` | Replace key patterns (regex or literal) | `.key_replacement("user_", "")` |
 | `.value_replacement(find, replace)` | Replace value patterns (regex or literal) | `.value_replacement("@old.com", "@new.com")` |
 | `.handle_key_collision(bool)` | Collect colliding keys into arrays | `.handle_key_collision(true)` |
+| `.auto_convert_types(bool)` | Convert strings to numbers/booleans/null | `.auto_convert_types(true)` |
+| `.parallel_threshold(n)` | Min batch size for parallelism (default: 1000) | `.parallel_threshold(500)` |
+| `.num_threads(n)` | Number of threads (default: CPU count) | `.num_threads(Some(4))` |
+| `.nested_parallel_threshold(n)` | Threshold for nested parallelism (default: 100) | `.nested_parallel_threshold(50)` |
 | `.execute(input)` | Execute the configured operation | `.execute(json_string)` |
 
 ### Common Patterns
@@ -471,7 +475,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-json-tools-rs = "0.7.0"
+json-tools-rs = "0.8.0"
 ```
 
 Or install via cargo:
@@ -543,8 +547,8 @@ JSON Tools RS delivers exceptional performance through multiple carefully implem
    - Improves cache locality
 
 5. **Parallel Batch Processing** (built-in, always enabled) - Rayon-based parallelism for batch operations
-   - **3-5x speedup** for batches of 10+ items on multi-core CPUs
-   - Adaptive threshold prevents overhead for small batches
+   - **3-5x speedup** for batches of 1000+ items on multi-core CPUs
+   - Configurable threshold prevents overhead for small batches (default: 1000)
    - Zero per-item memory overhead
    - Thread-safe regex cache with Arc<Regex> for O(1) cloning
 
@@ -570,8 +574,8 @@ Process multiple JSON documents in parallel automatically.
 ```rust
 use json_tools_rs::JSONTools;
 
-// Default threshold (10 items) - optimal for most use cases
-// Parallelism activates automatically for batches ≥ 10 items
+// Default threshold (1000 items) - optimal for most use cases
+// Parallelism activates automatically for batches ≥ 1000 items
 let result = JSONTools::new()
     .flatten()
     .execute(batch)?;
@@ -579,7 +583,7 @@ let result = JSONTools::new()
 // Custom threshold for fine-tuning
 let result = JSONTools::new()
     .flatten()
-    .parallel_threshold(50)  // Only parallelize batches ≥ 50 items
+    .parallel_threshold(500)  // Only parallelize batches ≥ 500 items
     .execute(batch)?;
 
 // Custom thread count
@@ -594,9 +598,8 @@ let result = JSONTools::new()
 ```
 
 **How it works:**
-- Batches below threshold (default: 10): Sequential processing (no overhead)
-- Batches 10-1000: Rayon work-stealing parallelism
-- Batches > 1000: Chunked processing for optimal cache locality
+- Batches below threshold (default: 1000): Sequential processing (no overhead)
+- Batches ≥ 1000: Rayon work-stealing parallelism with chunked processing for optimal cache locality
 - Each worker thread gets its own regex cache
 - Zero per-item memory increase (only 8-16MB one-time thread pool)
 - Thread count defaults to number of logical CPUs (configurable via `num_threads()` or `JSON_TOOLS_NUM_THREADS`)
@@ -1234,31 +1237,45 @@ at your option.
 
 ## Changelog
 
-### v0.4.0 (Current)
-- Comprehensive README documentation update
-- Enhanced API reference with detailed method descriptions
-- Improved error handling documentation with examples
-- Updated installation instructions
-- Added contribution guidelines
-- Performance optimization details and benchmarking guide
+### v0.8.0 (Current)
+- Full Python bindings feature parity - all Rust features now available in Python
+- `.auto_convert_types()` now available in Python for type conversion
+- Parallel processing configuration in Python (`.parallel_threshold()`, `.num_threads()`, `.nested_parallel_threshold()`)
+- Enhanced test coverage (128 Python tests, 109 Rust tests)
+
+### v0.7.0
+- Parallel processing configuration methods
+- `.parallel_threshold(usize)` - Configure minimum batch size for parallel processing
+- `.num_threads(Option<usize>)` - Configure number of threads
+- `.nested_parallel_threshold(usize)` - Configure threshold for nested parallelism
+- Optimized HashMap initialization for better performance
+
+### v0.6.0
+- Python GIL release during compute-intensive operations
+- 5-13% performance improvement in Python bindings
+- `#[inline]` attributes on all builder methods
+
+### v0.5.0
+- Rust inline optimizations with `#[inline(always)]` on hot paths
+- 2-5% additional performance improvement
+
+### v0.4.0
+- FxHashMap for 15-30% faster string operations
+- SIMD parsing optimizations
+- Reduced memory allocations (~50% fewer string clones)
 
 ### v0.3.0
-- Performance optimizations (FxHashMap, SIMD parsing, reduced allocations)
-- Enhanced error messages with actionable suggestions
-- Improved Python bindings stability
-- Bug fixes and code quality improvements
+- Automatic type conversion with `.auto_convert_types()`
+- Python bindings with full feature parity
 
 ### v0.2.0
-- Updated README with comprehensive documentation
-- Improved API documentation and examples
-- Enhanced Python bindings documentation
-- Performance optimization details
-- Complete error handling documentation
+- Collision handling with `.handle_key_collision()`
+- Comprehensive filtering (empty strings, nulls, empty objects/arrays)
+- Advanced regex-based key/value replacements
 
 ### v0.1.0
 - Initial release with unified JSONTools API
 - Complete flattening and unflattening support
-- Advanced filtering and transformation capabilities
-- Key collision handling with `.handle_key_collision()`
-- Python bindings with perfect type matching
-- Comprehensive error handling with detailed suggestions
+- SIMD-accelerated JSON parsing
+
+See [CHANGELOG.md](CHANGELOG.md) for full details.

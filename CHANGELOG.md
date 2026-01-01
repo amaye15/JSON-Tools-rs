@@ -5,11 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - 2026-01-01
+
+### Added
+- **Full Python Bindings Feature Parity**
+  - All Rust features now available in Python bindings
+  - `.auto_convert_types(bool)` - Convert strings to numbers/booleans
+  - `.parallel_threshold(n)` - Configure batch parallelism threshold
+  - `.num_threads(n)` - Configure thread count
+  - `.nested_parallel_threshold(n)` - Configure nested parallelism
+  - 128 comprehensive Python tests covering all features
+- **Enhanced Testing**
+  - 89 Rust unit tests + 20 doc tests
+  - 128 Python binding tests
+  - Improved test coverage for all features
+
+### Changed
+- Updated Python `__init__.py` with auto_convert_types documentation
+- Bumped version to 0.8.0
+
 ## [0.7.0] - 2025-10-17
 
 ### Added
 - **Parallel Processing Configuration**
-  - `.parallel_threshold(usize)` - Configure minimum batch size for parallel processing (default: 10)
+  - `.parallel_threshold(usize)` - Configure minimum batch size for parallel processing (default: 1000)
   - `.num_threads(Option<usize>)` - Configure number of threads for parallel processing (default: Rayon default)
   - `.nested_parallel_threshold(usize)` - Configure threshold for nested parallel processing within individual JSON documents (default: 100)
   - Environment variable support: `JSON_TOOLS_PARALLEL_THRESHOLD` and `JSON_TOOLS_NESTED_PARALLEL_THRESHOLD`
@@ -170,6 +189,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 | Version | Release Date | Key Features | Performance |
 |---------|--------------|--------------|-------------|
+| **0.8.0** | 2026-01-01 | Full Python bindings feature parity | Feature release |
 | **0.7.0** | 2025-10-17 | Parallel processing config, optimizations | HashMap improvements |
 | **0.6.0** | 2025-10-13 | Python GIL release, inline hints | +5-13% Python |
 | **0.5.0** | 2025-10-12 | Rust inline optimizations | +2-5% Rust |
@@ -182,6 +202,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Migration Guide
 
+### Upgrading from 0.7.0 to 0.8.0
+
+**No breaking changes!** This is a feature enhancement release.
+
+**What's New**:
+- Full Python bindings feature parity - all Rust features now available in Python
+- `.auto_convert_types()` now available in Python for type conversion
+- `.parallel_threshold()`, `.num_threads()`, `.nested_parallel_threshold()` in Python
+- Enhanced test coverage (128 Python tests, 109 Rust tests)
+
+**Action Required**: None - just update your dependency version.
+
 ### Upgrading from 0.6.0 to 0.7.0
 
 **No breaking changes!** This is a feature enhancement and performance improvement release.
@@ -190,7 +222,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - New parallel processing configuration methods
 - Better control over thread usage and parallelism thresholds
 - Optimized HashMap initialization for better performance
-- Enhanced test coverage
 
 **Action Required**: None - just update your dependency version. Optionally, you can configure parallel processing settings for your specific workload.
 
