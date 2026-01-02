@@ -439,6 +439,10 @@ use std::borrow::Cow;
 use std::cell::RefCell;
 use std::sync::{Arc, LazyLock};
 
+// OPTIMIZATION: Use Arc<str> for HashMap keys to enable zero-copy sharing of repeated keys
+// This significantly reduces memory allocations for large datasets with repeated field names
+type FlatMap = FxHashMap<Arc<str>, Value>;
+
 // ================================================================================================
 // MODULE: SIMD-JSON Thread-Local Parser Optimization
 // ================================================================================================
@@ -720,20 +724,22 @@ impl KeyDeduplicator {
     }
 
     /// Get a deduplicated key, creating it if it doesn't exist
-    /// OPTIMIZATION: Check cache before allocating string for entry lookup
-    fn deduplicate_key(&mut self, key: &str) -> String {
-        // Fast path: check if key exists without allocating
-        if let Some(cached) = self.key_cache.get(key) {
-            self.cache_hits += 1;
-            return (*cached).to_string();
+    /// OPTIMIZATION: Returns Arc<str> for zero-copy sharing of repeated keys
+    fn deduplicate_key(&mut self, key: &str) -> std::sync::Arc<str> {
+        // Use entry API for single hash lookup
+        use std::collections::hash_map::Entry;
+        match self.key_cache.entry(key.to_string()) {
+            Entry::Occupied(entry) => {
+                self.cache_hits += 1;
+                entry.get().clone() // Arc::clone is O(1) pointer copy
+            }
+            Entry::Vacant(entry) => {
+                self.cache_misses += 1;
+                let arc_key: std::sync::Arc<str> = key.into();
+                entry.insert(arc_key.clone());
+                arc_key
+            }
         }
-
-        // Slow path: key not in cache, create and insert
-        self.cache_misses += 1;
-        let owned_key = key.to_string();
-        let arc_key: std::sync::Arc<str> = owned_key.as_str().into();
-        self.key_cache.insert(owned_key.clone(), arc_key);
-        owned_key
     }
 
 
@@ -829,13 +835,13 @@ fn key_contains_separator(key: &str, separator_cache: &SeparatorCache) -> bool {
     separator_cache.contains(key)
 }
 
-fn deduplicate_key(key: &str) -> String {
+fn deduplicate_key(key: &str) -> std::sync::Arc<str> {
     // For short, simple keys that are likely to be repeated, use deduplication
     if is_simple_key(key) {
         KEY_DEDUPLICATOR.with(|dedup| dedup.borrow_mut().deduplicate_key(key))
     } else {
-        // For complex or long keys, just create a regular string
-        key.to_string()
+        // For complex or long keys, just create Arc directly
+        key.into()
     }
 }
 
@@ -1494,7 +1500,7 @@ impl Default for JSONTools {
             parallel_threshold: std::env::var("JSON_TOOLS_PARALLEL_THRESHOLD")
                 .ok()
                 .and_then(|v| v.parse().ok())
-                .unwrap_or(1000),
+                .unwrap_or(100),
             num_threads: std::env::var("JSON_TOOLS_NUM_THREADS")
                 .ok()
                 .and_then(|v| v.parse().ok()),
@@ -1859,19 +1865,17 @@ impl JSONTools {
                 Ok(JsonOutput::Single(result))
             }
             JsonInput::Multiple(json_list) => {
-                // OPTIMIZATION #14: Use 2x hysteresis to reduce parallel overhead for batches near threshold
-                // Only parallelize if batch is at least 2x the threshold to avoid thread spawn overhead
-                // Use saturating_mul to prevent overflow with very large thresholds
-                if json_list.len() >= config.parallel_threshold.saturating_mul(2) {
+                // Use parallel processing if batch size meets threshold
+                // Removed 2x hysteresis as it prevented parallelization of medium-sized batches
+                if json_list.len() >= config.parallel_threshold {
                     use rayon::prelude::*;
 
                     // For very large batches (>1000), use chunked processing for better cache locality
                     if json_list.len() > 1000 {
-                            // OPTIMIZATION #15: Calculate optimal chunk size based on CPU count and total work
-                            // Aim for good cache locality while maintaining parallelism
+                            // Calculate optimal chunk size: balance parallelism with cache locality
+                            // Aim for ~100-200 items per chunk for good cache performance
                             let num_cpus = rayon::current_num_threads();
-                            let optimal_chunks = (json_list.len() / num_cpus).clamp(50, 500);
-                            let chunk_size = (json_list.len() / optimal_chunks).max(1);
+                            let chunk_size = (json_list.len() / num_cpus).max(100).min(200);
 
                             // Process chunks in parallel, then flatten results
                             let chunk_results: Result<Vec<Vec<String>>, _> = json_list
@@ -1917,19 +1921,17 @@ impl JSONTools {
                 Ok(JsonOutput::Multiple(results))
             }
             JsonInput::MultipleOwned(vecs) => {
-                // OPTIMIZATION #14: Use 2x hysteresis to reduce parallel overhead for batches near threshold
-                // Only parallelize if batch is at least 2x the threshold to avoid thread spawn overhead
-                // Use saturating_mul to prevent overflow with very large thresholds
-                if vecs.len() >= config.parallel_threshold.saturating_mul(2) {
+                // Use parallel processing if batch size meets threshold
+                // Removed 2x hysteresis as it prevented parallelization of medium-sized batches
+                if vecs.len() >= config.parallel_threshold {
                     use rayon::prelude::*;
 
                     // For very large batches (>1000), use chunked processing for better cache locality
                     if vecs.len() > 1000 {
-                            // OPTIMIZATION #15: Calculate optimal chunk size based on CPU count and total work
-                            // Aim for good cache locality while maintaining parallelism
+                            // Calculate optimal chunk size: balance parallelism with cache locality
+                            // Aim for ~100-200 items per chunk for good cache performance
                             let num_cpus = rayon::current_num_threads();
-                            let optimal_chunks = (vecs.len() / num_cpus).clamp(50, 500);
-                            let chunk_size = (vecs.len() / optimal_chunks).max(1);
+                            let chunk_size = (vecs.len() / num_cpus).max(100).min(200);
 
                             // Process chunks in parallel, then flatten results
                             let chunk_results: Result<Vec<Vec<String>>, _> = vecs
@@ -2209,7 +2211,7 @@ fn parse_json(json: &str) -> Result<Value, JsonToolsError> {
 
 /// Initialize flattened HashMap with optimized capacity
 #[inline]
-fn initialize_flattened_map(value: &Value) -> FxHashMap<String, Value> {
+fn initialize_flattened_map(value: &Value) -> FlatMap {
     let estimated_size = estimate_flattened_size(value);
     let optimal_capacity = calculate_optimal_capacity(estimated_size);
 
@@ -2220,7 +2222,7 @@ fn initialize_flattened_map(value: &Value) -> FxHashMap<String, Value> {
 /// Perform the core flattening operation
 /// OPTIMIZATION: Uses thread-local StringBuilder cache to avoid allocations
 #[inline]
-fn perform_flattening(value: &Value, separator: &str, nested_threshold: usize) -> FxHashMap<String, Value> {
+fn perform_flattening(value: &Value, separator: &str, nested_threshold: usize) -> FlatMap {
     let mut flattened = initialize_flattened_map(value);
 
     // Use thread-local builder cache for common separators (10-20% faster)
@@ -2246,9 +2248,9 @@ fn perform_flattening(value: &Value, separator: &str, nested_threshold: usize) -
 /// Apply key transformations including replacements and lowercase conversion for flattening
 #[inline]
 fn apply_key_transformations_flatten(
-    mut flattened: FxHashMap<String, Value>,
+    mut flattened: FlatMap,
     config: &ProcessingConfig,
-) -> Result<FxHashMap<String, Value>, JsonToolsError> {
+) -> Result<FlatMap, JsonToolsError> {
     // Apply key replacements with collision detection if provided
     if config.replacements.has_key_replacements() {
         // Convert tuple format to the internal vector format
@@ -2289,7 +2291,7 @@ fn apply_key_transformations_flatten(
 /// Apply value replacements to flattened data
 #[inline]
 fn apply_value_replacements_flatten(
-    flattened: &mut FxHashMap<String, Value>,
+    flattened: &mut FlatMap,
     config: &ProcessingConfig,
 ) -> Result<(), JsonToolsError> {
     if config.replacements.has_value_replacements() {
@@ -2303,7 +2305,7 @@ fn apply_value_replacements_flatten(
 /// Apply filtering to flattened data after replacements
 #[inline]
 fn apply_filtering_flatten(
-    flattened: &mut FxHashMap<String, Value>,
+    flattened: &mut FlatMap,
     config: &ProcessingConfig,
 ) {
     if !config.filtering.has_any_filter() {
@@ -2444,11 +2446,11 @@ where
 
 /// Apply collision handling strategy by collecting values into arrays
 #[inline]
-fn apply_collision_handling(
-    key: String,
+fn apply_collision_handling<K>(
+    key: K,
     values: Vec<Value>,
     filter_config: Option<&FilteringConfig>,
-) -> Option<(String, Value)> {
+) -> Option<(K, Value)> {
     let filtered_values: Vec<Value> = if let Some(config) = filter_config {
         values.into_iter().filter(|value| {
             should_include_value(
@@ -2527,7 +2529,7 @@ fn convert_tuples_to_patterns(tuples: &[(String, String)]) -> Vec<&str> {
 /// Optimized with Cow to avoid unnecessary allocations when keys are already lowercase
 /// Uses Entry API for potential collision handling
 #[inline]
-fn apply_lowercase_keys(flattened: FxHashMap<String, Value>) -> FxHashMap<String, Value> {
+fn apply_lowercase_keys(flattened: FlatMap) -> FlatMap {
     let optimal_capacity = calculate_optimal_capacity(flattened.len());
     let mut result = FxHashMap::with_capacity_and_hasher(optimal_capacity, Default::default());
 
@@ -2535,9 +2537,9 @@ fn apply_lowercase_keys(flattened: FxHashMap<String, Value>) -> FxHashMap<String
         // SIMD-optimized lowercase conversion (zero-copy if already lowercase)
         let lowercase_key = to_lowercase(&key);
 
-        let final_key = match lowercase_key {
-            Cow::Borrowed(_) => key, // Key was already lowercase, reuse original
-            Cow::Owned(lower) => lower, // Key was converted to lowercase
+        let final_key: Arc<str> = match lowercase_key {
+            Cow::Borrowed(_) => key, // Key was already lowercase, reuse original Arc
+            Cow::Owned(lower) => lower.into(), // Convert lowercase String to Arc<str>
         };
 
         // Use Entry API to handle potential collisions more efficiently
@@ -2697,10 +2699,12 @@ fn calculate_optimal_capacity(estimated_size: usize) -> usize {
     // Round up to next power of 2 for optimal HashMap performance
     let next_power_of_2 = target_capacity.next_power_of_two();
 
-    // OPTIMIZATION #18: Removed 8192 cap to avoid multiple rehashes for large datasets
-    // For xlarge benchmarks (~500KB), this allows pre-allocation of the full estimated size
-    // Cap at 1M entries to prevent excessive memory allocation for pathological cases
-    let max_capacity = 1_048_576; // 2^20
+    // OPTIMIZATION #18: Balance between avoiding rehashes and excessive pre-allocation
+    // Cap at 64K entries (2^16) as a middle ground:
+    // - Prevents excessive memory allocation for typical use cases
+    // - Still allows pre-allocation for moderately large datasets
+    // - Very large datasets will rehash once or twice, which is acceptable
+    let max_capacity = 65536; // 2^16
     std::cmp::min(next_power_of_2, max_capacity)
 }
 
@@ -2861,7 +2865,7 @@ fn apply_key_transformations_normal(value: Value, config: &ProcessingConfig) -> 
 /// Patterns are treated as regex patterns. If a pattern fails to compile as regex,
 /// it falls back to literal string replacement.
 fn apply_value_replacements(
-    flattened: &mut FxHashMap<String, Value>,
+    flattened: &mut FlatMap,
     patterns: &[&str],
 ) -> Result<(), JsonToolsError> {
     if !patterns.len().is_multiple_of(2) {
@@ -2923,15 +2927,22 @@ fn apply_value_replacements(
 /// This provides 15-25% improvement over intermediate Value creation
 #[inline]
 fn serialize_flattened(
-    flattened: &FxHashMap<String, Value>,
+    flattened: &FlatMap,
 ) -> Result<String, simd_json::Error> {
     // Estimate capacity based on map contents
     let estimated_size = estimate_serialized_size(flattened);
     let mut buffer = Vec::with_capacity(estimated_size);
 
+    // OPTIMIZATION: Convert Arc<str> keys to &str references for serialization
+    // This avoids String allocation while maintaining zero-copy semantics
+    // The HashMap with &str keys can be serialized directly by serde
+    let str_map: FxHashMap<&str, &Value> = flattened
+        .iter()
+        .map(|(k, v)| (k.as_ref(), v))
+        .collect();
+
     // Write directly to buffer, avoiding intermediate String allocation
-    // This is faster than building a String char-by-char
-    simd_json::serde::to_writer(&mut buffer, &flattened)?;
+    simd_json::serde::to_writer(&mut buffer, &str_map)?;
 
     // SAFETY: simd_json guarantees valid UTF-8 output
     Ok(unsafe { String::from_utf8_unchecked(buffer) })
@@ -2940,7 +2951,7 @@ fn serialize_flattened(
 /// Estimate the serialized JSON size for optimal buffer pre-allocation
 /// OPTIMIZATION: Sample-based estimation for more accurate capacity prediction
 #[inline]
-fn estimate_serialized_size(map: &FxHashMap<String, Value>) -> usize {
+fn estimate_serialized_size(map: &FlatMap) -> usize {
     if map.is_empty() {
         return 100; // Empty object: "{}"
     }
@@ -3251,13 +3262,14 @@ fn optimize_value_clone(value: &Value) -> Value {
 fn flatten_value_with_threshold(
     value: &Value,
     builder: &mut FastStringBuilder,
-    result: &mut FxHashMap<String, Value>,
+    result: &mut FlatMap,
     nested_threshold: usize,
 ) {
     match value {
         Value::Object(obj) => {
             if obj.is_empty() {
-                result.insert(builder.as_str().to_string(), Value::Object(Map::new()));
+                let key: Arc<str> = builder.as_str().into();
+                result.insert(key, Value::Object(Map::new()));
             } else if obj.len() > nested_threshold {
                 // PARALLEL PATH: Large object - process keys in parallel
                 use rayon::prelude::*;
@@ -3315,7 +3327,8 @@ fn flatten_value_with_threshold(
         }
         Value::Array(arr) => {
             if arr.is_empty() {
-                result.insert(builder.as_str().to_string(), Value::Array(vec![]));
+                let key: Arc<str> = builder.as_str().into();
+                result.insert(key, Value::Array(vec![]));
             } else if arr.len() > nested_threshold {
                 // PARALLEL PATH: Large array - process indices in parallel
                 use rayon::prelude::*;
@@ -4973,9 +4986,9 @@ fn filter_nested_value(
 ///
 /// Only supported strategy: `handle_key_collision` to collect values into arrays for duplicate keys
 fn handle_key_collisions(
-    mut flattened: FxHashMap<String, Value>,
+    mut flattened: FlatMap,
     handle_key_collision: bool,
-) -> FxHashMap<String, Value> {
+) -> FlatMap {
     // If option is disabled, return as-is
     if !handle_key_collision {
         return flattened;
@@ -5121,10 +5134,10 @@ fn should_include_value(
 /// including regex pre-compilation, early exit checks, and efficient string handling.
 /// It properly handles cases where multiple keys would map to the same result after replacement.
 fn apply_key_replacements_with_collision_handling(
-    flattened: FxHashMap<String, Value>,
+    flattened: FlatMap,
     patterns: &[&str],
     config: &ProcessingConfig,
-) -> Result<FxHashMap<String, Value>, JsonToolsError> {
+) -> Result<FlatMap, JsonToolsError> {
     if patterns.is_empty() {
         return Ok(flattened);
     }
@@ -5176,7 +5189,7 @@ fn apply_key_replacements_with_collision_handling(
         let mut new_flattened = FxHashMap::with_capacity_and_hasher(flattened.len(), Default::default());
 
         for (old_key, value) in flattened {
-            let mut new_key = Cow::Borrowed(old_key.as_str());
+            let mut new_key = Cow::Borrowed(old_key.as_ref());
 
             // Apply each compiled pattern
             for (i, chunk) in patterns.chunks(2).enumerate() {
@@ -5196,7 +5209,8 @@ fn apply_key_replacements_with_collision_handling(
                 }
             }
 
-            new_flattened.insert(new_key.into_owned(), value);
+            let key_arc: Arc<str> = new_key.into_owned().into();
+            new_flattened.insert(key_arc, value);
         }
 
         return Ok(new_flattened);
@@ -5206,10 +5220,10 @@ fn apply_key_replacements_with_collision_handling(
     // Instead of 3 separate passes (key_mapping, target_groups, result), we build
     // the result directly in one iteration using the entry API to handle collisions
     let flattened_len = flattened.len();
-    let mut result: FxHashMap<String, Value> = FxHashMap::with_capacity_and_hasher(flattened_len, Default::default());
+    let mut result: FlatMap = FxHashMap::with_capacity_and_hasher(flattened_len, Default::default());
 
     for (original_key, value) in flattened {
-        let mut new_key = Cow::Borrowed(original_key.as_str());
+        let mut new_key = Cow::Borrowed(original_key.as_ref());
 
         // Apply all key replacement patterns using pre-compiled patterns
         for (i, chunk) in patterns.chunks(2).enumerate() {
@@ -5243,8 +5257,8 @@ fn apply_key_replacements_with_collision_handling(
         }
 
         // Use entry API for single-pass collision handling
-        let new_key_string = new_key.into_owned();
-        match result.entry(new_key_string) {
+        let new_key_arc: Arc<str> = new_key.into_owned().into();
+        match result.entry(new_key_arc) {
             std::collections::hash_map::Entry::Vacant(entry) => {
                 // No collision - insert value directly
                 entry.insert(value);
@@ -5289,7 +5303,7 @@ fn apply_key_replacements_unflatten_with_collisions(
 
     for (original_key, value) in flattened_obj {
         // Apply all key replacement patterns using Cow to avoid allocation if no replacement
-        let mut new_key = Cow::Borrowed(original_key.as_str());
+        let mut new_key = Cow::Borrowed(original_key.as_ref());
 
         // Apply all key replacement patterns
         // Patterns are treated as regex. If compilation fails, fall back to literal matching.
