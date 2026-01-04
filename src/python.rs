@@ -114,7 +114,7 @@ impl PyJsonOutput {
     }
 
     /// Get the result as a Python object (string for single, list for multiple)
-    fn to_python(&self, py: Python) -> PyResult<PyObject> {
+    fn to_python(&self, py: Python) -> PyResult<Py<PyAny>> {
         match &self.inner {
             JsonOutput::Single(result) => Ok(result.into_pyobject(py)?.into_any().unbind()),
             JsonOutput::Multiple(results) => Ok(results.into_pyobject(py)?.into_any().unbind()),
@@ -356,21 +356,21 @@ fn dataframe_to_records(
             let records = df.call_method("to_dict", (), Some(&kwargs))?;
 
             // Convert Python list of dicts to Vec<serde_json::Value>
-            let list = records.downcast::<pyo3::types::PyList>()?;
+            let list = records.cast::<pyo3::types::PyList>()?;
             convert_pylist_to_json_values(list)
         }
 
         DataFrameType::Polars => {
             // Call df.to_dicts()
             let records = df.call_method0("to_dicts")?;
-            let list = records.downcast::<pyo3::types::PyList>()?;
+            let list = records.cast::<pyo3::types::PyList>()?;
             convert_pylist_to_json_values(list)
         }
 
         DataFrameType::PyArrow => {
             // Call table.to_pylist()
             let records = df.call_method0("to_pylist")?;
-            let list = records.downcast::<pyo3::types::PyList>()?;
+            let list = records.cast::<pyo3::types::PyList>()?;
             convert_pylist_to_json_values(list)
         }
 
@@ -381,7 +381,7 @@ fn dataframe_to_records(
             kwargs.set_item("orient", "records")?;
             let records = pandas_df.call_method("to_dict", (), Some(&kwargs))?;
 
-            let list = records.downcast::<pyo3::types::PyList>()?;
+            let list = records.cast::<pyo3::types::PyList>()?;
             convert_pylist_to_json_values(list)
         }
 
@@ -391,7 +391,7 @@ fn dataframe_to_records(
                 let kwargs = pyo3::types::PyDict::new(py);
                 kwargs.set_item("orient", "records")?;
                 let records = df.call_method("to_dict", (), Some(&kwargs))?;
-                let list = records.downcast::<pyo3::types::PyList>()?;
+                let list = records.cast::<pyo3::types::PyList>()?;
                 convert_pylist_to_json_values(list)
             } else {
                 return Err(JsonToolsError::new_err(
@@ -433,40 +433,40 @@ fn series_to_list<'py>(
             // Try to_list() first, fallback to tolist()
             if series.hasattr("to_list")? {
                 let list = series.call_method0("to_list")?;
-                Ok(list.downcast::<pyo3::types::PyList>()?.clone())
+                Ok(list.cast::<pyo3::types::PyList>()?.clone())
             } else {
                 let list = series.call_method0("tolist")?;
-                Ok(list.downcast::<pyo3::types::PyList>()?.clone())
+                Ok(list.cast::<pyo3::types::PyList>()?.clone())
             }
         }
 
         SeriesType::Polars => {
             // Polars uses to_list()
             let list = series.call_method0("to_list")?;
-            Ok(list.downcast::<pyo3::types::PyList>()?.clone())
+            Ok(list.cast::<pyo3::types::PyList>()?.clone())
         }
 
         SeriesType::PyArrow => {
             // PyArrow Arrays use to_pylist()
             let list = series.call_method0("to_pylist")?;
-            Ok(list.downcast::<pyo3::types::PyList>()?.clone())
+            Ok(list.cast::<pyo3::types::PyList>()?.clone())
         }
 
         SeriesType::PySpark => {
             // PySpark doesn't have Series, but if it exists, convert via pandas
             let pandas_series = series.call_method0("toPandas")?;
             let list = pandas_series.call_method0("tolist")?;
-            Ok(list.downcast::<pyo3::types::PyList>()?.clone())
+            Ok(list.cast::<pyo3::types::PyList>()?.clone())
         }
 
         SeriesType::Generic => {
             // Try to_list() first, fallback to tolist()
             if series.hasattr("to_list")? {
                 let list = series.call_method0("to_list")?;
-                Ok(list.downcast::<pyo3::types::PyList>()?.clone())
+                Ok(list.cast::<pyo3::types::PyList>()?.clone())
             } else if series.hasattr("tolist")? {
                 let list = series.call_method0("tolist")?;
-                Ok(list.downcast::<pyo3::types::PyList>()?.clone())
+                Ok(list.cast::<pyo3::types::PyList>()?.clone())
             } else {
                 Err(JsonToolsError::new_err(
                     "Generic Series must have to_list() or tolist() method",
@@ -796,7 +796,7 @@ impl PyJSONTools {
     ///
     /// # Performance
     /// Uses interior mutability to avoid cloning JSONTools - only clones for execute() call
-    pub fn execute(&self, json_input: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+    pub fn execute(&self, json_input: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
         let py = json_input.py();
 
         // NEW: Check for DataFrame or Series first (before other type checks)
@@ -816,7 +816,7 @@ impl PyJSONTools {
         if let Ok(json_str) = json_input.extract::<String>() {
             // TIER 6→3 OPTIMIZATION: Take ownership instead of cloning
             // Saves 1K-10K cycles by avoiding deep clone of entire JSONTools config
-            let result = py.allow_threads(|| {
+            let result = py.detach(|| {
                 let mut guard = self.inner.lock().unwrap();
                 let tools = mem::take(&mut *guard);
                 let result = tools.execute(json_str.as_str());
@@ -845,7 +845,7 @@ impl PyJSONTools {
                 .map_err(|e| JsonToolsError::new_err(format!("Failed to serialize: {}", e)))?;
 
             // Process with Rust tools (release GIL)
-            let result = py.allow_threads(|| {
+            let result = py.detach(|| {
                 let mut guard = self.inner.lock().unwrap();
                 let tools = mem::take(&mut *guard);
                 let result = tools.execute(json_str.as_str());
@@ -871,7 +871,7 @@ impl PyJSONTools {
             }
         } else if json_input.is_instance_of::<pyo3::types::PyList>() {
             // Handle list input - batch processing of JSON strings and/or dicts
-            let list = json_input.downcast::<pyo3::types::PyList>()?;
+            let list = json_input.cast::<pyo3::types::PyList>()?;
 
             if list.is_empty() {
                 return Ok(Vec::<String>::new().into_pyobject(py)?.into_any().unbind());
@@ -908,7 +908,7 @@ impl PyJSONTools {
             }
 
             // TIER 6→3 OPTIMIZATION: Take ownership instead of cloning
-            let result = py.allow_threads(|| {
+            let result = py.detach(|| {
                 let mut guard = self.inner.lock().unwrap();
                 let tools = mem::take(&mut *guard);
                 let result = tools.execute(json_strings);
@@ -930,7 +930,7 @@ impl PyJSONTools {
                         Ok(processed_list.into_pyobject(py)?.into_any().unbind())
                     } else if all_dicts {
                         // TIER 6→3: Direct conversion using pythonize (no Python json.loads!)
-                        let mut dict_results: Vec<PyObject> = Vec::with_capacity(processed_list.len());
+                        let mut dict_results: Vec<Py<PyAny>> = Vec::with_capacity(processed_list.len());
                         for processed_json in processed_list {
                             let result_value: serde_json::Value = json_parser::from_str(&processed_json)
                                 .map_err(|e| JsonToolsError::new_err(format!("Failed to parse JSON: {}", e)))?;
@@ -941,7 +941,7 @@ impl PyJSONTools {
                         Ok(dict_results.into_pyobject(py)?.into_any().unbind())
                     } else {
                         // TIER 6→3: Mixed results - use pythonize for dicts
-                        let mut mixed_results: Vec<PyObject> = Vec::with_capacity(processed_list.len());
+                        let mut mixed_results: Vec<Py<PyAny>> = Vec::with_capacity(processed_list.len());
                         for (processed_json, is_str) in processed_list.into_iter().zip(is_str_flags.into_iter()) {
                             if is_str {
                                 mixed_results.push(processed_json.into_pyobject(py)?.into_any().unbind());
@@ -991,7 +991,7 @@ impl PyJSONTools {
         // Single JSON string
         if let Ok(json_str) = json_input.extract::<String>() {
             // TIER 6→3: Take ownership instead of cloning (10K-50K cycles saved)
-            let result = py.allow_threads(|| {
+            let result = py.detach(|| {
                 let mut guard = self.inner.lock().unwrap();
                 let tools = mem::take(&mut *guard);
                 let result = tools.execute(json_str.as_str());
@@ -1012,7 +1012,7 @@ impl PyJSONTools {
                 .map_err(|e| JsonToolsError::new_err(format!("Failed to serialize: {}", e)))?;
 
             // TIER 6→3 OPTIMIZATION: Take ownership instead of cloning
-            let result = py.allow_threads(|| {
+            let result = py.detach(|| {
                 let mut guard = self.inner.lock().unwrap();
                 let tools = mem::take(&mut *guard);
                 let result = tools.execute(json_str.as_str());
@@ -1025,7 +1025,7 @@ impl PyJSONTools {
 
         // List input - batch processing or single JSON array
         if json_input.is_instance_of::<pyo3::types::PyList>() {
-            let list = json_input.downcast::<pyo3::types::PyList>()?;
+            let list = json_input.cast::<pyo3::types::PyList>()?;
 
             if list.is_empty() {
                 return Ok(PyJsonOutput::from_rust_output(JsonOutput::Multiple(vec![])));
@@ -1053,7 +1053,7 @@ impl PyJSONTools {
 
             // Process the list of JSON strings directly
             // TIER 6→3: Take ownership instead of cloning (10K-50K cycles saved)
-            let result = py.allow_threads(|| {
+            let result = py.detach(|| {
                 let mut guard = self.inner.lock().unwrap();
                 let tools = mem::take(&mut *guard);
                 let result = tools.execute(json_strings);
@@ -1079,8 +1079,8 @@ impl PyJSONTools {
 fn reconstruct_dataframe(
     py: Python,
     df_type: DataFrameType,
-    processed_dicts: Vec<PyObject>,
-) -> PyResult<PyObject> {
+    processed_dicts: Vec<Py<PyAny>>,
+) -> PyResult<Py<PyAny>> {
     match df_type {
         DataFrameType::Pandas => reconstruct_pandas_df(py, processed_dicts),
         DataFrameType::Polars => reconstruct_polars_df(py, processed_dicts),
@@ -1098,12 +1098,12 @@ fn reconstruct_dataframe(
 
 /// Reconstruct pandas DataFrame
 #[cfg(feature = "python")]
-fn reconstruct_pandas_df(py: Python, records: Vec<PyObject>) -> PyResult<PyObject> {
+fn reconstruct_pandas_df(py: Python, records: Vec<Py<PyAny>>) -> PyResult<Py<PyAny>> {
     // Try to import pandas dynamically (no dependency)
     match py.import("pandas") {
         Ok(pandas) => {
             // Clone records using clone_ref to allow fallback
-            let records_copy: Vec<PyObject> = records.iter().map(|item| item.clone_ref(py)).collect();
+            let records_copy: Vec<Py<PyAny>> = records.iter().map(|item| item.clone_ref(py)).collect();
             // Call pd.DataFrame(records)
             match pandas.call_method1("DataFrame", (records_copy,)) {
                 Ok(df) => Ok(df.unbind()),
@@ -1122,12 +1122,12 @@ fn reconstruct_pandas_df(py: Python, records: Vec<PyObject>) -> PyResult<PyObjec
 
 /// Reconstruct polars DataFrame
 #[cfg(feature = "python")]
-fn reconstruct_polars_df(py: Python, records: Vec<PyObject>) -> PyResult<PyObject> {
+fn reconstruct_polars_df(py: Python, records: Vec<Py<PyAny>>) -> PyResult<Py<PyAny>> {
     // Try to import polars dynamically (no dependency)
     match py.import("polars") {
         Ok(polars) => {
             // Clone records using clone_ref to allow fallback
-            let records_copy: Vec<PyObject> = records.iter().map(|item| item.clone_ref(py)).collect();
+            let records_copy: Vec<Py<PyAny>> = records.iter().map(|item| item.clone_ref(py)).collect();
             // Call pl.DataFrame(records)
             match polars.call_method1("DataFrame", (records_copy,)) {
                 Ok(df) => Ok(df.unbind()),
@@ -1146,12 +1146,12 @@ fn reconstruct_polars_df(py: Python, records: Vec<PyObject>) -> PyResult<PyObjec
 
 /// Reconstruct PyArrow Table
 #[cfg(feature = "python")]
-fn reconstruct_pyarrow_table(py: Python, records: Vec<PyObject>) -> PyResult<PyObject> {
+fn reconstruct_pyarrow_table(py: Python, records: Vec<Py<PyAny>>) -> PyResult<Py<PyAny>> {
     // Try to import pyarrow dynamically (no dependency)
     match py.import("pyarrow") {
         Ok(pyarrow) => {
             // Clone records using clone_ref to allow fallback
-            let records_copy: Vec<PyObject> = records.iter().map(|item| item.clone_ref(py)).collect();
+            let records_copy: Vec<Py<PyAny>> = records.iter().map(|item| item.clone_ref(py)).collect();
             // Call pa.Table.from_pylist(records)
             let table_class = pyarrow.getattr("Table")?;
             match table_class.call_method1("from_pylist", (records_copy,)) {
@@ -1178,8 +1178,8 @@ fn reconstruct_pyarrow_table(py: Python, records: Vec<PyObject>) -> PyResult<PyO
 fn reconstruct_series(
     py: Python,
     series_type: SeriesType,
-    processed_items: Vec<PyObject>,
-) -> PyResult<PyObject> {
+    processed_items: Vec<Py<PyAny>>,
+) -> PyResult<Py<PyAny>> {
     match series_type {
         SeriesType::Pandas => reconstruct_pandas_series(py, processed_items),
         SeriesType::Polars => reconstruct_polars_series(py, processed_items),
@@ -1197,12 +1197,12 @@ fn reconstruct_series(
 
 /// Reconstruct pandas Series
 #[cfg(feature = "python")]
-fn reconstruct_pandas_series(py: Python, items: Vec<PyObject>) -> PyResult<PyObject> {
+fn reconstruct_pandas_series(py: Python, items: Vec<Py<PyAny>>) -> PyResult<Py<PyAny>> {
     // Try to import pandas dynamically (no dependency)
     match py.import("pandas") {
         Ok(pandas) => {
             // Clone items using clone_ref to allow fallback
-            let items_copy: Vec<PyObject> = items.iter().map(|item| item.clone_ref(py)).collect();
+            let items_copy: Vec<Py<PyAny>> = items.iter().map(|item| item.clone_ref(py)).collect();
             // Call pd.Series(items)
             match pandas.call_method1("Series", (items_copy,)) {
                 Ok(series) => Ok(series.unbind()),
@@ -1221,12 +1221,12 @@ fn reconstruct_pandas_series(py: Python, items: Vec<PyObject>) -> PyResult<PyObj
 
 /// Reconstruct polars Series
 #[cfg(feature = "python")]
-fn reconstruct_polars_series(py: Python, items: Vec<PyObject>) -> PyResult<PyObject> {
+fn reconstruct_polars_series(py: Python, items: Vec<Py<PyAny>>) -> PyResult<Py<PyAny>> {
     // Try to import polars dynamically (no dependency)
     match py.import("polars") {
         Ok(polars) => {
             // Clone items using clone_ref to allow fallback
-            let items_copy: Vec<PyObject> = items.iter().map(|item| item.clone_ref(py)).collect();
+            let items_copy: Vec<Py<PyAny>> = items.iter().map(|item| item.clone_ref(py)).collect();
             // Call pl.Series(items)
             match polars.call_method1("Series", (items_copy,)) {
                 Ok(series) => Ok(series.unbind()),
@@ -1245,12 +1245,12 @@ fn reconstruct_polars_series(py: Python, items: Vec<PyObject>) -> PyResult<PyObj
 
 /// Reconstruct PyArrow Array
 #[cfg(feature = "python")]
-fn reconstruct_pyarrow_array(py: Python, items: Vec<PyObject>) -> PyResult<PyObject> {
+fn reconstruct_pyarrow_array(py: Python, items: Vec<Py<PyAny>>) -> PyResult<Py<PyAny>> {
     // Try to import pyarrow dynamically (no dependency)
     match py.import("pyarrow") {
         Ok(pyarrow) => {
             // Clone items using clone_ref to allow fallback
-            let items_copy: Vec<PyObject> = items.iter().map(|item| item.clone_ref(py)).collect();
+            let items_copy: Vec<Py<PyAny>> = items.iter().map(|item| item.clone_ref(py)).collect();
             // Call pa.array(items)
             match pyarrow.call_method1("array", (items_copy,)) {
                 Ok(array) => Ok(array.unbind()),
@@ -1278,7 +1278,7 @@ impl PyJSONTools {
         &self,
         df: &Bound<'_, PyAny>,
         df_type: DataFrameType,
-    ) -> PyResult<PyObject> {
+    ) -> PyResult<Py<PyAny>> {
         let py = df.py();
 
         // Step 1: Convert DataFrame to list of dicts (as serde_json::Value)
@@ -1295,7 +1295,7 @@ impl PyJSONTools {
 
         // Step 3: Process through existing pipeline (releases GIL)
         let result = py
-            .allow_threads(|| {
+            .detach(|| {
                 let mut guard = self.inner.lock().unwrap();
                 let tools = mem::take(&mut *guard);
                 let result = tools.execute(json_strings); // Batch processing
@@ -1308,7 +1308,7 @@ impl PyJSONTools {
         match result {
             JsonOutput::Multiple(processed_list) => {
                 // Convert JSON strings back to Python dicts
-                let mut processed_dicts: Vec<PyObject> = Vec::with_capacity(processed_list.len());
+                let mut processed_dicts: Vec<Py<PyAny>> = Vec::with_capacity(processed_list.len());
                 for json_str in processed_list {
                     let value: serde_json::Value = json_parser::from_str(&json_str).map_err(|e| {
                         JsonToolsError::new_err(format!("Failed to parse result: {}", e))
@@ -1333,7 +1333,7 @@ impl PyJSONTools {
         &self,
         series: &Bound<'_, PyAny>,
         series_type: SeriesType,
-    ) -> PyResult<PyObject> {
+    ) -> PyResult<Py<PyAny>> {
         let py = series.py();
 
         // Step 1: Convert Series to Python list
@@ -1372,7 +1372,7 @@ impl PyJSONTools {
 
         // Step 3: Process through existing pipeline (releases GIL)
         let result = py
-            .allow_threads(|| {
+            .detach(|| {
                 let mut guard = self.inner.lock().unwrap();
                 let tools = mem::take(&mut *guard);
                 let result = tools.execute(json_strings);
@@ -1388,7 +1388,7 @@ impl PyJSONTools {
                 let all_strings = is_str_flags.iter().all(|&b| b);
                 let all_dicts = is_str_flags.iter().all(|&b| !b);
 
-                let processed_items: Vec<PyObject> = if all_strings {
+                let processed_items: Vec<Py<PyAny>> = if all_strings {
                     // All strings - convert to list of strings
                     processed_list
                         .into_iter()
