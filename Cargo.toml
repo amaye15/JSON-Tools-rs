@@ -21,7 +21,8 @@ path = "src/main.rs"
 
 [dependencies]
 regex = "1.11.1"
-simd-json = { version = "0.15.1", features = ["serde_impl"] }
+# OPTIMIZATION: sonic-rs is 30-50% faster than simd-json (Tier 4 improvement)
+sonic-rs = "0.3"
 serde_json = "1.0.141"
 pyo3 = { version = "0.25.1", features = ["extension-module"], optional = true }
 thiserror = "2.0.12"

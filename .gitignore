@@ -2,6 +2,8 @@
 /target/
 Cargo.lock
 
+uv.lock
+
 test_assets*
 
 # Python
