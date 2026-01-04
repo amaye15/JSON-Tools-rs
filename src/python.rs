@@ -32,6 +32,40 @@ pyo3::create_exception!(
     "Python exception for JSON Tools operations"
 );
 
+// =============================================================================
+// DataFrame and Series Support Types
+// =============================================================================
+
+/// Type of DataFrame library detected
+#[cfg(feature = "python")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DataFrameType {
+    Pandas,
+    Polars,
+    PyArrow,  // PyArrow Table
+    PySpark,
+    Generic,  // Any object with to_dict() or to_json()
+}
+
+/// Type of Series library detected
+#[cfg(feature = "python")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SeriesType {
+    Pandas,
+    Polars,
+    PyArrow,  // PyArrow Array/ChunkedArray
+    PySpark,
+    Generic,  // Any object with to_list() or tolist()
+}
+
+/// Unified data structure type for detection
+#[cfg(feature = "python")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DataStructureType {
+    DataFrame(DataFrameType),
+    Series(SeriesType),
+}
+
 /// Python wrapper for JsonOutput enum
 #[cfg(feature = "python")]
 #[pyclass(name = "JsonOutput")]
@@ -176,6 +210,265 @@ pub struct PyJSONTools {
 impl Default for PyJSONTools {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+// =============================================================================
+// DataFrame and Series Detection Functions
+// =============================================================================
+
+/// Detect if the input is a DataFrame or Series
+#[cfg(feature = "python")]
+fn detect_data_structure(obj: &Bound<'_, PyAny>) -> PyResult<Option<DataStructureType>> {
+    // Try DataFrame detection first
+    if let Some(df_type) = detect_dataframe_type(obj)? {
+        return Ok(Some(DataStructureType::DataFrame(df_type)));
+    }
+
+    // Try Series detection
+    if let Some(series_type) = detect_series_type(obj)? {
+        return Ok(Some(DataStructureType::Series(series_type)));
+    }
+
+    // Neither DataFrame nor Series
+    Ok(None)
+}
+
+/// Detect DataFrame type using duck typing (no imports)
+#[cfg(feature = "python")]
+fn detect_dataframe_type(obj: &Bound<'_, PyAny>) -> PyResult<Option<DataFrameType>> {
+    // Get module and class name for specific detection
+    let module = obj
+        .getattr("__class__")?
+        .getattr("__module__")?
+        .extract::<String>()
+        .unwrap_or_default();
+
+    let class_name = obj
+        .getattr("__class__")?
+        .getattr("__name__")?
+        .extract::<String>()
+        .unwrap_or_default();
+
+    // Check for PyArrow Table (class name is "Table", not "DataFrame")
+    if module.starts_with("pyarrow") && class_name == "Table" {
+        return Ok(Some(DataFrameType::PyArrow));
+    }
+
+    // Check for DataFrame-like methods
+    let has_to_dict = obj.hasattr("to_dict")?;
+    let has_columns = obj.hasattr("columns")?;
+
+    if !has_to_dict && !has_columns {
+        return Ok(None);  // Not a DataFrame
+    }
+
+    // Check if it's actually a DataFrame class
+    if class_name != "DataFrame" {
+        return Ok(None);
+    }
+
+    // Detect specific library
+    if module.starts_with("pandas") {
+        Ok(Some(DataFrameType::Pandas))
+    } else if module.starts_with("polars") {
+        Ok(Some(DataFrameType::Polars))
+    } else if module.contains("pyspark.sql") {
+        Ok(Some(DataFrameType::PySpark))
+    } else if has_to_dict || obj.hasattr("to_json")? {
+        // Generic DataFrame-like object
+        Ok(Some(DataFrameType::Generic))
+    } else {
+        Ok(None)
+    }
+}
+
+/// Detect Series type using duck typing (no imports)
+#[cfg(feature = "python")]
+fn detect_series_type(obj: &Bound<'_, PyAny>) -> PyResult<Option<SeriesType>> {
+    // Get module and class name for specific detection
+    let module = obj
+        .getattr("__class__")?
+        .getattr("__module__")?
+        .extract::<String>()
+        .unwrap_or_default();
+
+    let class_name = obj
+        .getattr("__class__")?
+        .getattr("__name__")?
+        .extract::<String>()
+        .unwrap_or_default();
+
+    // Check for PyArrow Array/ChunkedArray (various class names: Array, ChunkedArray, Int64Array, etc.)
+    if module.starts_with("pyarrow") && (class_name.contains("Array") || obj.hasattr("to_pylist")?) {
+        return Ok(Some(SeriesType::PyArrow));
+    }
+
+    // Check for Series-like methods
+    let has_to_list = obj.hasattr("to_list")? || obj.hasattr("tolist")?;
+    let has_dtype = obj.hasattr("dtype")?;
+
+    if !has_to_list && !has_dtype {
+        return Ok(None);  // Not a Series
+    }
+
+    // Check if it's actually a Series class
+    if class_name != "Series" {
+        return Ok(None);
+    }
+
+    // Detect specific library
+    if module.starts_with("pandas") {
+        Ok(Some(SeriesType::Pandas))
+    } else if module.starts_with("polars") {
+        Ok(Some(SeriesType::Polars))
+    } else if module.contains("pyspark") {
+        Ok(Some(SeriesType::PySpark))
+    } else if has_to_list {
+        // Generic Series-like object
+        Ok(Some(SeriesType::Generic))
+    } else {
+        Ok(None)
+    }
+}
+
+// =============================================================================
+// DataFrame Conversion Functions
+// =============================================================================
+
+/// Convert DataFrame to list of records (dicts)
+#[cfg(feature = "python")]
+fn dataframe_to_records(
+    df: &Bound<'_, PyAny>,
+    df_type: DataFrameType,
+) -> PyResult<Vec<serde_json::Value>> {
+    let py = df.py();
+
+    match df_type {
+        DataFrameType::Pandas => {
+            // Call df.to_dict(orient='records')
+            let kwargs = pyo3::types::PyDict::new(py);
+            kwargs.set_item("orient", "records")?;
+            let records = df.call_method("to_dict", (), Some(&kwargs))?;
+
+            // Convert Python list of dicts to Vec<serde_json::Value>
+            let list = records.downcast::<pyo3::types::PyList>()?;
+            convert_pylist_to_json_values(list)
+        }
+
+        DataFrameType::Polars => {
+            // Call df.to_dicts()
+            let records = df.call_method0("to_dicts")?;
+            let list = records.downcast::<pyo3::types::PyList>()?;
+            convert_pylist_to_json_values(list)
+        }
+
+        DataFrameType::PyArrow => {
+            // Call table.to_pylist()
+            let records = df.call_method0("to_pylist")?;
+            let list = records.downcast::<pyo3::types::PyList>()?;
+            convert_pylist_to_json_values(list)
+        }
+
+        DataFrameType::PySpark => {
+            // Call df.toPandas().to_dict(orient='records')
+            let pandas_df = df.call_method0("toPandas")?;
+            let kwargs = pyo3::types::PyDict::new(py);
+            kwargs.set_item("orient", "records")?;
+            let records = pandas_df.call_method("to_dict", (), Some(&kwargs))?;
+
+            let list = records.downcast::<pyo3::types::PyList>()?;
+            convert_pylist_to_json_values(list)
+        }
+
+        DataFrameType::Generic => {
+            // Try to_dict() first, fallback to to_json()
+            if df.hasattr("to_dict")? {
+                let kwargs = pyo3::types::PyDict::new(py);
+                kwargs.set_item("orient", "records")?;
+                let records = df.call_method("to_dict", (), Some(&kwargs))?;
+                let list = records.downcast::<pyo3::types::PyList>()?;
+                convert_pylist_to_json_values(list)
+            } else {
+                return Err(JsonToolsError::new_err(
+                    "Generic DataFrame must have to_dict() method",
+                ));
+            }
+        }
+    }
+}
+
+/// Convert Python list of dicts to Vec<serde_json::Value>
+#[cfg(feature = "python")]
+fn convert_pylist_to_json_values(
+    list: &Bound<'_, pyo3::types::PyList>,
+) -> PyResult<Vec<serde_json::Value>> {
+    let mut values = Vec::with_capacity(list.len());
+    for item in list.iter() {
+        // Use depythonize for efficient conversion
+        let value: serde_json::Value = depythonize(&item).map_err(|e| {
+            JsonToolsError::new_err(format!("Failed to convert record: {}", e))
+        })?;
+        values.push(value);
+    }
+    Ok(values)
+}
+
+// =============================================================================
+// Series Conversion Functions
+// =============================================================================
+
+/// Convert Series to Python list
+#[cfg(feature = "python")]
+fn series_to_list<'py>(
+    series: &Bound<'py, PyAny>,
+    series_type: SeriesType,
+) -> PyResult<Bound<'py, pyo3::types::PyList>> {
+    match series_type {
+        SeriesType::Pandas => {
+            // Try to_list() first, fallback to tolist()
+            if series.hasattr("to_list")? {
+                let list = series.call_method0("to_list")?;
+                Ok(list.downcast::<pyo3::types::PyList>()?.clone())
+            } else {
+                let list = series.call_method0("tolist")?;
+                Ok(list.downcast::<pyo3::types::PyList>()?.clone())
+            }
+        }
+
+        SeriesType::Polars => {
+            // Polars uses to_list()
+            let list = series.call_method0("to_list")?;
+            Ok(list.downcast::<pyo3::types::PyList>()?.clone())
+        }
+
+        SeriesType::PyArrow => {
+            // PyArrow Arrays use to_pylist()
+            let list = series.call_method0("to_pylist")?;
+            Ok(list.downcast::<pyo3::types::PyList>()?.clone())
+        }
+
+        SeriesType::PySpark => {
+            // PySpark doesn't have Series, but if it exists, convert via pandas
+            let pandas_series = series.call_method0("toPandas")?;
+            let list = pandas_series.call_method0("tolist")?;
+            Ok(list.downcast::<pyo3::types::PyList>()?.clone())
+        }
+
+        SeriesType::Generic => {
+            // Try to_list() first, fallback to tolist()
+            if series.hasattr("to_list")? {
+                let list = series.call_method0("to_list")?;
+                Ok(list.downcast::<pyo3::types::PyList>()?.clone())
+            } else if series.hasattr("tolist")? {
+                let list = series.call_method0("tolist")?;
+                Ok(list.downcast::<pyo3::types::PyList>()?.clone())
+            } else {
+                Err(JsonToolsError::new_err(
+                    "Generic Series must have to_list() or tolist() method",
+                ))
+            }
+        }
     }
 }
 
@@ -502,6 +795,19 @@ impl PyJSONTools {
     pub fn execute(&self, json_input: &Bound<'_, PyAny>) -> PyResult<PyObject> {
         let py = json_input.py();
 
+        // NEW: Check for DataFrame or Series first (before other type checks)
+        match detect_data_structure(json_input)? {
+            Some(DataStructureType::DataFrame(df_type)) => {
+                return self.execute_dataframe(json_input, df_type);
+            }
+            Some(DataStructureType::Series(series_type)) => {
+                return self.execute_series(json_input, series_type);
+            }
+            None => {
+                // Fall through to existing type checks
+            }
+        }
+
         // Fast path: single JSON string → return JSON string
         if let Ok(json_str) = json_input.extract::<String>() {
             // TIER 6→3 OPTIMIZATION: Take ownership instead of cloning
@@ -675,6 +981,9 @@ impl PyJSONTools {
     pub fn execute_to_output(&self, json_input: &Bound<'_, PyAny>) -> PyResult<PyJsonOutput> {
         let py = json_input.py();
 
+        // Note: DataFrames/Series are not supported in execute_to_output()
+        // Use execute() instead for DataFrame/Series support
+
         // Single JSON string
         if let Ok(json_str) = json_input.extract::<String>() {
             // TIER 6→3: Take ownership instead of cloning (10K-50K cycles saved)
@@ -752,8 +1061,368 @@ impl PyJSONTools {
         }
 
         Err(PyValueError::new_err(
-            "json_input must be a JSON string, Python dict, list of JSON strings, or list of Python dicts",
+            "json_input must be a JSON string, Python dict, DataFrame, Series, list of JSON strings, or list of Python dicts",
         ))
+    }
+}
+
+// =============================================================================
+// DataFrame Reconstruction Functions
+// =============================================================================
+
+/// Reconstruct DataFrame from list of dicts (with fallback to list)
+#[cfg(feature = "python")]
+fn reconstruct_dataframe(
+    py: Python,
+    df_type: DataFrameType,
+    processed_dicts: Vec<PyObject>,
+) -> PyResult<PyObject> {
+    match df_type {
+        DataFrameType::Pandas => reconstruct_pandas_df(py, processed_dicts),
+        DataFrameType::Polars => reconstruct_polars_df(py, processed_dicts),
+        DataFrameType::PyArrow => reconstruct_pyarrow_table(py, processed_dicts),
+        DataFrameType::PySpark => {
+            // PySpark reconstruction would need SparkSession - fallback to list for now
+            Ok(processed_dicts.into_pyobject(py)?.into_any().unbind())
+        }
+        DataFrameType::Generic => {
+            // Generic - just return list of dicts
+            Ok(processed_dicts.into_pyobject(py)?.into_any().unbind())
+        }
+    }
+}
+
+/// Reconstruct pandas DataFrame
+#[cfg(feature = "python")]
+fn reconstruct_pandas_df(py: Python, records: Vec<PyObject>) -> PyResult<PyObject> {
+    // Try to import pandas dynamically (no dependency)
+    match py.import("pandas") {
+        Ok(pandas) => {
+            // Clone records using clone_ref to allow fallback
+            let records_copy: Vec<PyObject> = records.iter().map(|item| item.clone_ref(py)).collect();
+            // Call pd.DataFrame(records)
+            match pandas.call_method1("DataFrame", (records_copy,)) {
+                Ok(df) => Ok(df.unbind()),
+                Err(_) => {
+                    // Fallback to list if DataFrame construction fails
+                    Ok(records.into_pyobject(py)?.into_any().unbind())
+                }
+            }
+        }
+        Err(_) => {
+            // pandas not installed - fallback to list
+            Ok(records.into_pyobject(py)?.into_any().unbind())
+        }
+    }
+}
+
+/// Reconstruct polars DataFrame
+#[cfg(feature = "python")]
+fn reconstruct_polars_df(py: Python, records: Vec<PyObject>) -> PyResult<PyObject> {
+    // Try to import polars dynamically (no dependency)
+    match py.import("polars") {
+        Ok(polars) => {
+            // Clone records using clone_ref to allow fallback
+            let records_copy: Vec<PyObject> = records.iter().map(|item| item.clone_ref(py)).collect();
+            // Call pl.DataFrame(records)
+            match polars.call_method1("DataFrame", (records_copy,)) {
+                Ok(df) => Ok(df.unbind()),
+                Err(_) => {
+                    // Fallback to list if DataFrame construction fails
+                    Ok(records.into_pyobject(py)?.into_any().unbind())
+                }
+            }
+        }
+        Err(_) => {
+            // polars not installed - fallback to list
+            Ok(records.into_pyobject(py)?.into_any().unbind())
+        }
+    }
+}
+
+/// Reconstruct PyArrow Table
+#[cfg(feature = "python")]
+fn reconstruct_pyarrow_table(py: Python, records: Vec<PyObject>) -> PyResult<PyObject> {
+    // Try to import pyarrow dynamically (no dependency)
+    match py.import("pyarrow") {
+        Ok(pyarrow) => {
+            // Clone records using clone_ref to allow fallback
+            let records_copy: Vec<PyObject> = records.iter().map(|item| item.clone_ref(py)).collect();
+            // Call pa.Table.from_pylist(records)
+            let table_class = pyarrow.getattr("Table")?;
+            match table_class.call_method1("from_pylist", (records_copy,)) {
+                Ok(table) => Ok(table.unbind()),
+                Err(_) => {
+                    // Fallback to list if Table construction fails
+                    Ok(records.into_pyobject(py)?.into_any().unbind())
+                }
+            }
+        }
+        Err(_) => {
+            // pyarrow not installed - fallback to list
+            Ok(records.into_pyobject(py)?.into_any().unbind())
+        }
+    }
+}
+
+// =============================================================================
+// Series Reconstruction Functions
+// =============================================================================
+
+/// Reconstruct Series from list (with fallback to list)
+#[cfg(feature = "python")]
+fn reconstruct_series(
+    py: Python,
+    series_type: SeriesType,
+    processed_items: Vec<PyObject>,
+) -> PyResult<PyObject> {
+    match series_type {
+        SeriesType::Pandas => reconstruct_pandas_series(py, processed_items),
+        SeriesType::Polars => reconstruct_polars_series(py, processed_items),
+        SeriesType::PyArrow => reconstruct_pyarrow_array(py, processed_items),
+        SeriesType::PySpark => {
+            // PySpark doesn't have Series - fallback to list
+            Ok(processed_items.into_pyobject(py)?.into_any().unbind())
+        }
+        SeriesType::Generic => {
+            // Generic - just return list
+            Ok(processed_items.into_pyobject(py)?.into_any().unbind())
+        }
+    }
+}
+
+/// Reconstruct pandas Series
+#[cfg(feature = "python")]
+fn reconstruct_pandas_series(py: Python, items: Vec<PyObject>) -> PyResult<PyObject> {
+    // Try to import pandas dynamically (no dependency)
+    match py.import("pandas") {
+        Ok(pandas) => {
+            // Clone items using clone_ref to allow fallback
+            let items_copy: Vec<PyObject> = items.iter().map(|item| item.clone_ref(py)).collect();
+            // Call pd.Series(items)
+            match pandas.call_method1("Series", (items_copy,)) {
+                Ok(series) => Ok(series.unbind()),
+                Err(_) => {
+                    // Fallback to list if Series construction fails
+                    Ok(items.into_pyobject(py)?.into_any().unbind())
+                }
+            }
+        }
+        Err(_) => {
+            // pandas not installed - fallback to list
+            Ok(items.into_pyobject(py)?.into_any().unbind())
+        }
+    }
+}
+
+/// Reconstruct polars Series
+#[cfg(feature = "python")]
+fn reconstruct_polars_series(py: Python, items: Vec<PyObject>) -> PyResult<PyObject> {
+    // Try to import polars dynamically (no dependency)
+    match py.import("polars") {
+        Ok(polars) => {
+            // Clone items using clone_ref to allow fallback
+            let items_copy: Vec<PyObject> = items.iter().map(|item| item.clone_ref(py)).collect();
+            // Call pl.Series(items)
+            match polars.call_method1("Series", (items_copy,)) {
+                Ok(series) => Ok(series.unbind()),
+                Err(_) => {
+                    // Fallback to list if Series construction fails
+                    Ok(items.into_pyobject(py)?.into_any().unbind())
+                }
+            }
+        }
+        Err(_) => {
+            // polars not installed - fallback to list
+            Ok(items.into_pyobject(py)?.into_any().unbind())
+        }
+    }
+}
+
+/// Reconstruct PyArrow Array
+#[cfg(feature = "python")]
+fn reconstruct_pyarrow_array(py: Python, items: Vec<PyObject>) -> PyResult<PyObject> {
+    // Try to import pyarrow dynamically (no dependency)
+    match py.import("pyarrow") {
+        Ok(pyarrow) => {
+            // Clone items using clone_ref to allow fallback
+            let items_copy: Vec<PyObject> = items.iter().map(|item| item.clone_ref(py)).collect();
+            // Call pa.array(items)
+            match pyarrow.call_method1("array", (items_copy,)) {
+                Ok(array) => Ok(array.unbind()),
+                Err(_) => {
+                    // Fallback to list if Array construction fails
+                    Ok(items.into_pyobject(py)?.into_any().unbind())
+                }
+            }
+        }
+        Err(_) => {
+            // pyarrow not installed - fallback to list
+            Ok(items.into_pyobject(py)?.into_any().unbind())
+        }
+    }
+}
+
+// =============================================================================
+// PyJSONTools Helper Methods (DataFrame and Series Processing)
+// =============================================================================
+
+#[cfg(feature = "python")]
+impl PyJSONTools {
+    /// Process DataFrame through existing pipeline
+    fn execute_dataframe(
+        &self,
+        df: &Bound<'_, PyAny>,
+        df_type: DataFrameType,
+    ) -> PyResult<PyObject> {
+        let py = df.py();
+
+        // Step 1: Convert DataFrame to list of dicts (as serde_json::Value)
+        let records = dataframe_to_records(df, df_type)?;
+
+        // Step 2: Serialize to JSON strings for processing
+        let mut json_strings = Vec::with_capacity(records.len());
+        for record in records {
+            let json_str = sonic_rs::to_string(&record).map_err(|e| {
+                JsonToolsError::new_err(format!("Failed to serialize record: {}", e))
+            })?;
+            json_strings.push(json_str);
+        }
+
+        // Step 3: Process through existing pipeline (releases GIL)
+        let result = py
+            .allow_threads(|| {
+                let mut guard = self.inner.lock().unwrap();
+                let tools = mem::take(&mut *guard);
+                let result = tools.execute(json_strings); // Batch processing
+                *guard = tools;
+                result
+            })
+            .map_err(|e| JsonToolsError::new_err(format!("Failed to process DataFrame: {}", e)))?;
+
+        // Step 4: Reconstruct DataFrame from results
+        match result {
+            JsonOutput::Multiple(processed_list) => {
+                // Convert JSON strings back to Python dicts
+                let mut processed_dicts: Vec<PyObject> = Vec::with_capacity(processed_list.len());
+                for json_str in processed_list {
+                    let value: serde_json::Value = sonic_rs::from_str(&json_str).map_err(|e| {
+                        JsonToolsError::new_err(format!("Failed to parse result: {}", e))
+                    })?;
+                    let py_dict = pythonize(py, &value).map_err(|e| {
+                        JsonToolsError::new_err(format!("Failed to convert to Python: {}", e))
+                    })?;
+                    processed_dicts.push(py_dict.unbind());
+                }
+
+                // Reconstruct DataFrame (with fallback to list)
+                reconstruct_dataframe(py, df_type, processed_dicts)
+            }
+            JsonOutput::Single(_) => Err(PyValueError::new_err(
+                "Unexpected single result for DataFrame input",
+            )),
+        }
+    }
+
+    /// Process Series through existing list pipeline (REUSE existing code!)
+    fn execute_series(
+        &self,
+        series: &Bound<'_, PyAny>,
+        series_type: SeriesType,
+    ) -> PyResult<PyObject> {
+        let py = series.py();
+
+        // Step 1: Convert Series to Python list
+        let list = series_to_list(series, series_type)?;
+
+        // Step 2: Process using EXISTING list handling code (copy from execute() method)
+        let mut json_strings: Vec<String> = Vec::with_capacity(list.len());
+        let mut is_str_flags: Vec<bool> = Vec::with_capacity(list.len());
+        let mut has_other_types = false;
+
+        for item in list.iter() {
+            if let Ok(json_str) = item.extract::<String>() {
+                json_strings.push(json_str);
+                is_str_flags.push(true);
+            } else if item.is_instance_of::<pyo3::types::PyDict>() {
+                // Direct conversion: Python dict → serde_json::Value → JSON string
+                let value: serde_json::Value = depythonize(&item).map_err(|e| {
+                    JsonToolsError::new_err(format!("Failed to convert dict in series: {}", e))
+                })?;
+                let json_str = sonic_rs::to_string(&value).map_err(|e| {
+                    JsonToolsError::new_err(format!("Failed to serialize dict: {}", e))
+                })?;
+                json_strings.push(json_str);
+                is_str_flags.push(false);
+            } else {
+                has_other_types = true;
+                break;
+            }
+        }
+
+        if has_other_types {
+            return Err(PyValueError::new_err(
+                "Series items must be either JSON strings or Python dictionaries",
+            ));
+        }
+
+        // Step 3: Process through existing pipeline (releases GIL)
+        let result = py
+            .allow_threads(|| {
+                let mut guard = self.inner.lock().unwrap();
+                let tools = mem::take(&mut *guard);
+                let result = tools.execute(json_strings);
+                *guard = tools;
+                result
+            })
+            .map_err(|e| JsonToolsError::new_err(format!("Failed to process Series: {}", e)))?;
+
+        // Step 4: Reconstruct Series from results
+        match result {
+            JsonOutput::Multiple(processed_list) => {
+                // Type preservation: convert back to appropriate format
+                let all_strings = is_str_flags.iter().all(|&b| b);
+                let all_dicts = is_str_flags.iter().all(|&b| !b);
+
+                let processed_items: Vec<PyObject> = if all_strings {
+                    // All strings - convert to list of strings
+                    processed_list
+                        .into_iter()
+                        .map(|s| s.into_pyobject(py).unwrap().into_any().unbind())
+                        .collect()
+                } else if all_dicts {
+                    // All dicts - convert to list of dicts
+                    let mut dict_results = Vec::with_capacity(processed_list.len());
+                    for processed_json in processed_list {
+                        let result_value: serde_json::Value = sonic_rs::from_str(&processed_json)
+                            .map_err(|e| JsonToolsError::new_err(format!("Failed to parse result: {}", e)))?;
+                        let python_dict = pythonize(py, &result_value)
+                            .map_err(|e| JsonToolsError::new_err(format!("Failed to convert to Python dict: {}", e)))?;
+                        dict_results.push(python_dict.unbind());
+                    }
+                    dict_results
+                } else {
+                    // Mixed results - convert each based on type
+                    let mut mixed_results = Vec::with_capacity(processed_list.len());
+                    for (processed_json, is_str) in processed_list.into_iter().zip(is_str_flags.into_iter()) {
+                        if is_str {
+                            mixed_results.push(processed_json.into_pyobject(py)?.into_any().unbind());
+                        } else {
+                            let result_value: serde_json::Value = sonic_rs::from_str(&processed_json)
+                                .map_err(|e| JsonToolsError::new_err(format!("Failed to parse result: {}", e)))?;
+                            let python_dict = pythonize(py, &result_value)
+                                .map_err(|e| JsonToolsError::new_err(format!("Failed to convert to Python: {}", e)))?;
+                            mixed_results.push(python_dict.unbind());
+                        }
+                    }
+                    mixed_results
+                };
+
+                // Reconstruct Series (with fallback to list)
+                reconstruct_series(py, series_type, processed_items)
+            }
+            JsonOutput::Single(_) => Err(PyValueError::new_err("Unexpected single result for Series input")),
+        }
     }
 }
 

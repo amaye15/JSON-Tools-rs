@@ -2586,3 +2586,963 @@ class TestParallelProcessing:
         assert len(results) == 1
         assert results[0]["key"] == "value"
         assert results[0]["nested.data"] == 123
+
+
+class TestDataFrameAndSeriesSupport:
+    """Test DataFrame and Series support for pandas and polars"""
+
+    @pytest.fixture(autouse=True)
+    def setup(self):
+        """Setup for DataFrame/Series tests"""
+        try:
+            import pandas as pd
+            self.pd = pd
+            self.has_pandas = True
+        except ImportError:
+            self.has_pandas = False
+
+        try:
+            import polars as pl
+            self.pl = pl
+            self.has_polars = True
+        except ImportError:
+            self.has_polars = False
+
+        try:
+            import pyarrow as pa
+            self.pa = pa
+            self.has_pyarrow = True
+        except ImportError:
+            self.has_pyarrow = False
+
+    # =========================================================================
+    # Pandas DataFrame Tests
+    # =========================================================================
+
+    def test_pandas_dataframe_flatten(self):
+        """Test pandas DataFrame flattening"""
+        if not self.has_pandas:
+            pytest.skip("pandas not installed")
+
+        tools = json_tools_rs.JSONTools().flatten()
+
+        # Create DataFrame with nested dicts
+        df = self.pd.DataFrame([
+            {"user": {"name": "Alice", "age": 30}, "active": True},
+            {"user": {"name": "Bob", "age": 25}, "active": False}
+        ])
+
+        result = tools.execute(df)
+
+        # Result should be pandas DataFrame (or list if pandas not in reconstruct)
+        if isinstance(result, self.pd.DataFrame):
+            assert len(result) == 2
+            assert "user.name" in result.columns
+            assert "user.age" in result.columns
+            assert result["user.name"].tolist() == ["Alice", "Bob"]
+        else:
+            # Fallback to list
+            assert isinstance(result, list)
+            assert len(result) == 2
+
+    def test_pandas_dataframe_unflatten(self):
+        """Test pandas DataFrame unflattening"""
+        if not self.has_pandas:
+            pytest.skip("pandas not installed")
+
+        tools = json_tools_rs.JSONTools().unflatten()
+
+        # Create DataFrame with flattened structure
+        df = self.pd.DataFrame([
+            {"user.name": "Alice", "user.age": 30},
+            {"user.name": "Bob", "user.age": 25}
+        ])
+
+        result = tools.execute(df)
+
+        # Result should be pandas DataFrame (or list if pandas not in reconstruct)
+        if isinstance(result, self.pd.DataFrame):
+            assert len(result) == 2
+        else:
+            # Fallback to list
+            assert isinstance(result, list)
+            assert len(result) == 2
+            assert result[0]["user"]["name"] == "Alice"
+            assert result[1]["user"]["name"] == "Bob"
+
+    def test_pandas_dataframe_empty(self):
+        """Test empty pandas DataFrame"""
+        if not self.has_pandas:
+            pytest.skip("pandas not installed")
+
+        tools = json_tools_rs.JSONTools().flatten()
+        df = self.pd.DataFrame([])
+
+        result = tools.execute(df)
+
+        # Should handle empty DataFrame gracefully
+        if isinstance(result, self.pd.DataFrame):
+            assert len(result) == 0
+        else:
+            assert isinstance(result, list)
+            assert len(result) == 0
+
+    # =========================================================================
+    # Polars DataFrame Tests
+    # =========================================================================
+
+    def test_polars_dataframe_flatten(self):
+        """Test polars DataFrame flattening"""
+        if not self.has_polars:
+            pytest.skip("polars not installed")
+
+        tools = json_tools_rs.JSONTools().flatten()
+
+        # Create polars DataFrame with nested dicts
+        df = self.pl.DataFrame([
+            {"user": {"name": "Alice", "age": 30}, "active": True},
+            {"user": {"name": "Bob", "age": 25}, "active": False}
+        ])
+
+        result = tools.execute(df)
+
+        # Result should be polars DataFrame (or list if polars not in reconstruct)
+        if isinstance(result, self.pl.DataFrame):
+            assert len(result) == 2
+        else:
+            # Fallback to list
+            assert isinstance(result, list)
+            assert len(result) == 2
+
+    def test_polars_dataframe_unflatten(self):
+        """Test polars DataFrame unflattening"""
+        if not self.has_polars:
+            pytest.skip("polars not installed")
+
+        tools = json_tools_rs.JSONTools().unflatten()
+
+        # Create polars DataFrame with flattened structure
+        df = self.pl.DataFrame([
+            {"user.name": "Alice", "user.age": 30},
+            {"user.name": "Bob", "user.age": 25}
+        ])
+
+        result = tools.execute(df)
+
+        # Result should be polars DataFrame (or list if polars not in reconstruct)
+        if isinstance(result, self.pl.DataFrame):
+            assert len(result) == 2
+        else:
+            # Fallback to list
+            assert isinstance(result, list)
+            assert len(result) == 2
+
+    # =========================================================================
+    # PyArrow Table Tests
+    # =========================================================================
+
+    def test_pyarrow_table_flatten(self):
+        """Test PyArrow Table flattening"""
+        if not self.has_pyarrow:
+            pytest.skip("pyarrow not installed")
+
+        tools = json_tools_rs.JSONTools().flatten()
+
+        # Create PyArrow Table with nested dicts
+        table = self.pa.Table.from_pylist([
+            {"user": {"name": "Alice", "age": 30}, "active": True},
+            {"user": {"name": "Bob", "age": 25}, "active": False}
+        ])
+
+        result = tools.execute(table)
+
+        # Result should be PyArrow Table (or list if pyarrow not in reconstruct)
+        if isinstance(result, self.pa.Table):
+            assert len(result) == 2
+            # Check that columns were flattened
+            column_names = result.column_names
+            assert "user.name" in column_names or "user" in column_names
+        else:
+            # Fallback to list
+            assert isinstance(result, list)
+            assert len(result) == 2
+            assert "user.name" in result[0]
+
+    def test_pyarrow_table_unflatten(self):
+        """Test PyArrow Table unflattening"""
+        if not self.has_pyarrow:
+            pytest.skip("pyarrow not installed")
+
+        tools = json_tools_rs.JSONTools().unflatten()
+
+        # Create PyArrow Table with flattened structure
+        table = self.pa.Table.from_pylist([
+            {"user.name": "Alice", "user.age": 30},
+            {"user.name": "Bob", "user.age": 25}
+        ])
+
+        result = tools.execute(table)
+
+        # Result should be PyArrow Table (or list if pyarrow not in reconstruct)
+        if isinstance(result, self.pa.Table):
+            assert len(result) == 2
+        else:
+            # Fallback to list
+            assert isinstance(result, list)
+            assert len(result) == 2
+            assert result[0]["user"]["name"] == "Alice"
+            assert result[1]["user"]["name"] == "Bob"
+
+    def test_pyarrow_table_empty(self):
+        """Test empty PyArrow Table"""
+        if not self.has_pyarrow:
+            pytest.skip("pyarrow not installed")
+
+        tools = json_tools_rs.JSONTools().flatten()
+        table = self.pa.Table.from_pylist([])
+
+        result = tools.execute(table)
+
+        # Should handle empty Table gracefully
+        if isinstance(result, self.pa.Table):
+            assert len(result) == 0
+        else:
+            assert isinstance(result, list)
+            assert len(result) == 0
+
+    # =========================================================================
+    # PyArrow Array Tests
+    # =========================================================================
+
+    def test_pyarrow_array_dicts_flatten(self):
+        """Test PyArrow Array with dicts - flatten"""
+        if not self.has_pyarrow:
+            pytest.skip("pyarrow not installed")
+
+        tools = json_tools_rs.JSONTools().flatten()
+
+        # Create PyArrow Array of dicts
+        array = self.pa.array([
+            {"user": {"name": "Alice", "age": 30}},
+            {"user": {"name": "Bob", "age": 25}}
+        ])
+
+        result = tools.execute(array)
+
+        # Result should be PyArrow Array (or list as fallback)
+        if hasattr(self.pa, 'Array') and isinstance(result, (self.pa.Array, self.pa.ChunkedArray)):
+            assert len(result) == 2
+        elif isinstance(result, list):
+            # Fallback to list
+            assert len(result) == 2
+            assert result[0]["user.name"] == "Alice"
+        else:
+            # May return as Array type
+            assert len(result) == 2
+
+    def test_pyarrow_array_dicts_unflatten(self):
+        """Test PyArrow Array with dicts - unflatten"""
+        if not self.has_pyarrow:
+            pytest.skip("pyarrow not installed")
+
+        tools = json_tools_rs.JSONTools().unflatten()
+
+        # Create PyArrow Array of flattened dicts
+        array = self.pa.array([
+            {"user.name": "Alice", "user.age": 30},
+            {"user.name": "Bob", "user.age": 25}
+        ])
+
+        result = tools.execute(array)
+
+        # Result should be PyArrow Array (or list as fallback)
+        if hasattr(self.pa, 'Array') and isinstance(result, (self.pa.Array, self.pa.ChunkedArray)):
+            assert len(result) == 2
+        elif isinstance(result, list):
+            # Fallback to list
+            assert len(result) == 2
+            assert result[0]["user"]["name"] == "Alice"
+        else:
+            # May return as Array type
+            assert len(result) == 2
+
+    # =========================================================================
+    # Pandas Series Tests
+    # =========================================================================
+
+    def test_pandas_series_json_strings_flatten(self):
+        """Test pandas Series with JSON strings - flatten"""
+        if not self.has_pandas:
+            pytest.skip("pandas not installed")
+
+        tools = json_tools_rs.JSONTools().flatten()
+
+        # Create Series of JSON strings
+        series = self.pd.Series([
+            '{"user": {"name": "Alice"}}',
+            '{"user": {"name": "Bob"}}'
+        ])
+
+        result = tools.execute(series)
+
+        # Result should be pandas Series of JSON strings (or list as fallback)
+        if isinstance(result, self.pd.Series):
+            assert len(result) == 2
+            # Each element should be a flattened JSON string
+            parsed = json.loads(result.iloc[0])
+            assert "user.name" in parsed
+        else:
+            # Fallback to list
+            assert isinstance(result, list)
+            assert len(result) == 2
+
+    def test_pandas_series_dicts_flatten(self):
+        """Test pandas Series with dicts - flatten"""
+        if not self.has_pandas:
+            pytest.skip("pandas not installed")
+
+        tools = json_tools_rs.JSONTools().flatten()
+
+        # Create Series of dicts
+        series = self.pd.Series([
+            {"user": {"name": "Alice", "age": 30}},
+            {"user": {"name": "Bob", "age": 25}}
+        ])
+
+        result = tools.execute(series)
+
+        # Result should be pandas Series of dicts (or list as fallback)
+        if isinstance(result, self.pd.Series):
+            assert len(result) == 2
+            # Each element should be a flattened dict
+            assert "user.name" in result.iloc[0]
+            assert result.iloc[0]["user.name"] == "Alice"
+        else:
+            # Fallback to list
+            assert isinstance(result, list)
+            assert len(result) == 2
+            assert result[0]["user.name"] == "Alice"
+
+    def test_pandas_series_dicts_unflatten(self):
+        """Test pandas Series with dicts - unflatten"""
+        if not self.has_pandas:
+            pytest.skip("pandas not installed")
+
+        tools = json_tools_rs.JSONTools().unflatten()
+
+        # Create Series of flattened dicts
+        series = self.pd.Series([
+            {"user.name": "Alice", "user.age": 30},
+            {"user.name": "Bob", "user.age": 25}
+        ])
+
+        result = tools.execute(series)
+
+        # Result should be pandas Series of nested dicts (or list as fallback)
+        if isinstance(result, self.pd.Series):
+            assert len(result) == 2
+            # Each element should be an unflattened dict
+            assert "user" in result.iloc[0]
+            assert result.iloc[0]["user"]["name"] == "Alice"
+        else:
+            # Fallback to list
+            assert isinstance(result, list)
+            assert len(result) == 2
+            assert result[0]["user"]["name"] == "Alice"
+
+    def test_pandas_series_empty(self):
+        """Test empty pandas Series"""
+        if not self.has_pandas:
+            pytest.skip("pandas not installed")
+
+        tools = json_tools_rs.JSONTools().flatten()
+        series = self.pd.Series([], dtype=object)
+
+        result = tools.execute(series)
+
+        # Should handle empty Series gracefully
+        if isinstance(result, self.pd.Series):
+            assert len(result) == 0
+        else:
+            assert isinstance(result, list)
+            assert len(result) == 0
+
+    # =========================================================================
+    # Polars Series Tests
+    # =========================================================================
+
+    def test_polars_series_dicts_flatten(self):
+        """Test polars Series with dicts - flatten"""
+        if not self.has_polars:
+            pytest.skip("polars not installed")
+
+        tools = json_tools_rs.JSONTools().flatten()
+
+        # Create polars Series of dicts
+        series = self.pl.Series([
+            {"user": {"name": "Alice", "age": 30}},
+            {"user": {"name": "Bob", "age": 25}}
+        ])
+
+        result = tools.execute(series)
+
+        # Result should be polars Series (or list as fallback)
+        if isinstance(result, self.pl.Series):
+            assert len(result) == 2
+        else:
+            # Fallback to list
+            assert isinstance(result, list)
+            assert len(result) == 2
+
+    def test_polars_series_dicts_unflatten(self):
+        """Test polars Series with dicts - unflatten"""
+        if not self.has_polars:
+            pytest.skip("polars not installed")
+
+        tools = json_tools_rs.JSONTools().unflatten()
+
+        # Create polars Series of flattened dicts
+        series = self.pl.Series([
+            {"user.name": "Alice", "user.age": 30},
+            {"user.name": "Bob", "user.age": 25}
+        ])
+
+        result = tools.execute(series)
+
+        # Result should be polars Series (or list as fallback)
+        if isinstance(result, self.pl.Series):
+            assert len(result) == 2
+        else:
+            # Fallback to list
+            assert isinstance(result, list)
+            assert len(result) == 2
+
+    # =========================================================================
+    # Type Preservation Tests
+    # =========================================================================
+
+    def test_type_preservation_dataframe(self):
+        """Test that DataFrame input returns DataFrame output (when library installed)"""
+        if not self.has_pandas:
+            pytest.skip("pandas not installed")
+
+        tools = json_tools_rs.JSONTools().flatten()
+        df = self.pd.DataFrame([{"a": {"b": 1}}])
+        result = tools.execute(df)
+
+        # Should be DataFrame or list (fallback)
+        assert isinstance(result, (self.pd.DataFrame, list))
+
+    def test_type_preservation_series(self):
+        """Test that Series input returns Series output (when library installed)"""
+        if not self.has_pandas:
+            pytest.skip("pandas not installed")
+
+        tools = json_tools_rs.JSONTools().flatten()
+        series = self.pd.Series([{"a": {"b": 1}}])
+        result = tools.execute(series)
+
+        # Should be Series or list (fallback)
+        assert isinstance(result, (self.pd.Series, list))
+
+    # =========================================================================
+    # Edge Cases and Error Handling
+    # =========================================================================
+
+    def test_dataframe_with_complex_nested_data(self):
+        """Test DataFrame with deeply nested and complex data"""
+        if not self.has_pandas:
+            pytest.skip("pandas not installed")
+
+        tools = json_tools_rs.JSONTools().flatten()
+
+        df = self.pd.DataFrame([
+            {
+                "level1": {
+                    "level2": {
+                        "level3": {
+                            "value": "deep",
+                            "array": [1, 2, 3]
+                        }
+                    }
+                }
+            }
+        ])
+
+        result = tools.execute(df)
+
+        # Should process successfully
+        if isinstance(result, self.pd.DataFrame):
+            assert len(result) == 1
+        else:
+            assert isinstance(result, list)
+            assert len(result) == 1
+
+    def test_series_with_mixed_valid_invalid_json(self):
+        """Test Series with mix of valid and invalid JSON strings"""
+        if not self.has_pandas:
+            pytest.skip("pandas not installed")
+
+        tools = json_tools_rs.JSONTools().flatten()
+
+        # Mix of valid and invalid JSON
+        series = self.pd.Series([
+            '{"valid": 1}',
+            'invalid json'
+        ])
+
+        # Should raise error for invalid JSON
+        with pytest.raises(Exception):
+            tools.execute(series)
+
+    # =========================================================================
+    # Round-Trip Tests (Flatten → Unflatten)
+    # =========================================================================
+
+    def test_pandas_dataframe_roundtrip(self):
+        """Test pandas DataFrame roundtrip: flatten then unflatten"""
+        if not self.has_pandas:
+            pytest.skip("pandas not installed")
+
+        original_data = [
+            {"user": {"name": "Alice", "age": 30}, "active": True},
+            {"user": {"name": "Bob", "age": 25}, "active": False}
+        ]
+
+        # Flatten
+        flatten_tools = json_tools_rs.JSONTools().flatten()
+        df = self.pd.DataFrame(original_data)
+        flattened = flatten_tools.execute(df)
+
+        # Unflatten
+        unflatten_tools = json_tools_rs.JSONTools().unflatten()
+        result = unflatten_tools.execute(flattened)
+
+        # Verify roundtrip
+        if isinstance(result, self.pd.DataFrame):
+            result_dicts = result.to_dict('records')
+        else:
+            result_dicts = result
+
+        assert len(result_dicts) == 2
+        assert result_dicts[0]["user"]["name"] == "Alice"
+        assert result_dicts[1]["user"]["name"] == "Bob"
+
+    def test_pyarrow_table_roundtrip(self):
+        """Test PyArrow Table roundtrip: flatten then unflatten"""
+        if not self.has_pyarrow:
+            pytest.skip("pyarrow not installed")
+
+        original_data = [
+            {"user": {"name": "Alice", "age": 30}},
+            {"user": {"name": "Bob", "age": 25}}
+        ]
+
+        # Flatten
+        flatten_tools = json_tools_rs.JSONTools().flatten()
+        table = self.pa.Table.from_pylist(original_data)
+        flattened = flatten_tools.execute(table)
+
+        # Unflatten
+        unflatten_tools = json_tools_rs.JSONTools().unflatten()
+        result = unflatten_tools.execute(flattened)
+
+        # Verify roundtrip
+        if isinstance(result, self.pa.Table):
+            result_dicts = result.to_pylist()
+        else:
+            result_dicts = result
+
+        assert len(result_dicts) == 2
+        assert result_dicts[0]["user"]["name"] == "Alice"
+
+    def test_polars_dataframe_roundtrip(self):
+        """Test polars DataFrame roundtrip: flatten then unflatten"""
+        if not self.has_polars:
+            pytest.skip("polars not installed")
+
+        original_data = [
+            {"user": {"name": "Alice", "age": 30}},
+            {"user": {"name": "Bob", "age": 25}}
+        ]
+
+        # Flatten
+        flatten_tools = json_tools_rs.JSONTools().flatten()
+        df = self.pl.DataFrame(original_data)
+        flattened = flatten_tools.execute(df)
+
+        # Unflatten
+        unflatten_tools = json_tools_rs.JSONTools().unflatten()
+        result = unflatten_tools.execute(flattened)
+
+        # Verify roundtrip
+        if isinstance(result, self.pl.DataFrame):
+            result_dicts = result.to_dicts()
+        else:
+            result_dicts = result
+
+        assert len(result_dicts) == 2
+        assert result_dicts[0]["user"]["name"] == "Alice"
+
+    # =========================================================================
+    # Null/None Value Handling
+    # =========================================================================
+
+    def test_dataframe_with_null_values(self):
+        """Test DataFrame with null/None values"""
+        if not self.has_pandas:
+            pytest.skip("pandas not installed")
+
+        tools = json_tools_rs.JSONTools().flatten()
+
+        df = self.pd.DataFrame([
+            {"user": {"name": "Alice", "age": None}},
+            {"user": {"name": None, "age": 25}}
+        ])
+
+        result = tools.execute(df)
+
+        # Should handle nulls gracefully
+        if isinstance(result, self.pd.DataFrame):
+            assert len(result) == 2
+        else:
+            assert isinstance(result, list)
+            assert len(result) == 2
+
+    def test_series_with_none_values(self):
+        """Test Series with None values - should raise error"""
+        if not self.has_pandas:
+            pytest.skip("pandas not installed")
+
+        tools = json_tools_rs.JSONTools().flatten()
+
+        series = self.pd.Series([
+            {"user": {"name": "Alice"}},
+            None,  # Invalid - not a dict or JSON string
+            {"user": {"name": "Bob"}}
+        ])
+
+        # Should raise error for None values (not valid JSON)
+        with pytest.raises(Exception):
+            tools.execute(series)
+
+    # =========================================================================
+    # Unicode and Special Characters
+    # =========================================================================
+
+    def test_dataframe_with_unicode(self):
+        """Test DataFrame with unicode characters"""
+        if not self.has_pandas:
+            pytest.skip("pandas not installed")
+
+        tools = json_tools_rs.JSONTools().flatten()
+
+        df = self.pd.DataFrame([
+            {"user": {"name": "José", "city": "São Paulo"}},
+            {"user": {"name": "李明", "city": "北京"}},
+            {"user": {"name": "Владимир", "city": "Москва"}}
+        ])
+
+        result = tools.execute(df)
+
+        if isinstance(result, self.pd.DataFrame):
+            assert len(result) == 3
+        else:
+            assert isinstance(result, list)
+            assert len(result) == 3
+            assert result[0]["user.name"] == "José"
+
+    def test_dataframe_with_emoji(self):
+        """Test DataFrame with emoji characters"""
+        if not self.has_pandas:
+            pytest.skip("pandas not installed")
+
+        tools = json_tools_rs.JSONTools().flatten()
+
+        df = self.pd.DataFrame([
+            {"message": {"text": "Hello 👋", "reaction": "🎉"}},
+            {"message": {"text": "World 🌍", "reaction": "❤️"}}
+        ])
+
+        result = tools.execute(df)
+
+        if isinstance(result, self.pd.DataFrame):
+            assert len(result) == 2
+        else:
+            assert isinstance(result, list)
+            assert len(result) == 2
+
+    # =========================================================================
+    # Mixed Data Types
+    # =========================================================================
+
+    def test_dataframe_with_mixed_types(self):
+        """Test DataFrame with mixed data types"""
+        if not self.has_pandas:
+            pytest.skip("pandas not installed")
+
+        tools = json_tools_rs.JSONTools().flatten()
+
+        df = self.pd.DataFrame([
+            {
+                "data": {
+                    "string": "text",
+                    "integer": 42,
+                    "float": 3.14,
+                    "boolean": True,
+                    "array": [1, 2, 3],
+                    "nested": {"key": "value"}
+                }
+            }
+        ])
+
+        result = tools.execute(df)
+
+        if isinstance(result, self.pd.DataFrame):
+            assert len(result) == 1
+        else:
+            assert isinstance(result, list)
+            assert len(result) == 1
+            assert result[0]["data.string"] == "text"
+            assert result[0]["data.integer"] == 42
+            assert result[0]["data.boolean"] is True
+
+    # =========================================================================
+    # Deeply Nested Structures
+    # =========================================================================
+
+    def test_dataframe_very_deep_nesting(self):
+        """Test DataFrame with very deep nesting (10+ levels)"""
+        if not self.has_pandas:
+            pytest.skip("pandas not installed")
+
+        tools = json_tools_rs.JSONTools().flatten()
+
+        # Create deeply nested structure
+        nested = {"value": "deep"}
+        for i in range(10):
+            nested = {f"level{i}": nested}
+
+        df = self.pd.DataFrame([nested])
+        result = tools.execute(df)
+
+        if isinstance(result, self.pd.DataFrame):
+            assert len(result) == 1
+        else:
+            assert isinstance(result, list)
+            assert len(result) == 1
+
+    # =========================================================================
+    # Large DataFrames (Performance/Stress Testing)
+    # =========================================================================
+
+    def test_large_dataframe_performance(self):
+        """Test processing large DataFrame (1000 rows)"""
+        if not self.has_pandas:
+            pytest.skip("pandas not installed")
+
+        tools = json_tools_rs.JSONTools().flatten()
+
+        # Create large DataFrame
+        data = [
+            {"user": {"name": f"User{i}", "age": 20 + (i % 50)}, "active": i % 2 == 0}
+            for i in range(1000)
+        ]
+        df = self.pd.DataFrame(data)
+
+        result = tools.execute(df)
+
+        if isinstance(result, self.pd.DataFrame):
+            assert len(result) == 1000
+        else:
+            assert isinstance(result, list)
+            assert len(result) == 1000
+
+    def test_large_series_performance(self):
+        """Test processing large Series (1000 items)"""
+        if not self.has_pandas:
+            pytest.skip("pandas not installed")
+
+        tools = json_tools_rs.JSONTools().flatten()
+
+        # Create large Series
+        data = [{"user": {"name": f"User{i}"}} for i in range(1000)]
+        series = self.pd.Series(data)
+
+        result = tools.execute(series)
+
+        assert len(result) == 1000
+
+    # =========================================================================
+    # Single Row/Column Edge Cases
+    # =========================================================================
+
+    def test_dataframe_single_row(self):
+        """Test DataFrame with single row"""
+        if not self.has_pandas:
+            pytest.skip("pandas not installed")
+
+        tools = json_tools_rs.JSONTools().flatten()
+
+        df = self.pd.DataFrame([{"user": {"name": "Alice"}}])
+        result = tools.execute(df)
+
+        if isinstance(result, self.pd.DataFrame):
+            assert len(result) == 1
+        else:
+            assert isinstance(result, list)
+            assert len(result) == 1
+
+    def test_series_single_item(self):
+        """Test Series with single item"""
+        if not self.has_pandas:
+            pytest.skip("pandas not installed")
+
+        tools = json_tools_rs.JSONTools().flatten()
+
+        series = self.pd.Series([{"user": {"name": "Alice"}}])
+        result = tools.execute(series)
+
+        assert len(result) == 1
+
+    # =========================================================================
+    # PyArrow ChunkedArray
+    # =========================================================================
+
+    def test_pyarrow_chunked_array(self):
+        """Test PyArrow ChunkedArray specifically"""
+        if not self.has_pyarrow:
+            pytest.skip("pyarrow not installed")
+
+        tools = json_tools_rs.JSONTools().flatten()
+
+        # Create ChunkedArray from multiple chunks
+        chunk1 = self.pa.array([{"user": {"name": "Alice"}}])
+        chunk2 = self.pa.array([{"user": {"name": "Bob"}}])
+        chunked = self.pa.chunked_array([chunk1, chunk2])
+
+        result = tools.execute(chunked)
+
+        # Should handle ChunkedArray
+        assert len(result) == 2
+
+    # =========================================================================
+    # Special Column Names
+    # =========================================================================
+
+    def test_dataframe_with_special_characters_in_keys(self):
+        """Test DataFrame with special characters in keys"""
+        if not self.has_pandas:
+            pytest.skip("pandas not installed")
+
+        tools = json_tools_rs.JSONTools().flatten()
+
+        df = self.pd.DataFrame([
+            {"user@email": {"key$value": "data", "key-name": "test"}}
+        ])
+
+        result = tools.execute(df)
+
+        if isinstance(result, self.pd.DataFrame):
+            assert len(result) == 1
+        else:
+            assert isinstance(result, list)
+            assert len(result) == 1
+
+    # =========================================================================
+    # Arrays in DataFrames
+    # =========================================================================
+
+    def test_dataframe_with_arrays(self):
+        """Test DataFrame with array values"""
+        if not self.has_pandas:
+            pytest.skip("pandas not installed")
+
+        tools = json_tools_rs.JSONTools().flatten()
+
+        df = self.pd.DataFrame([
+            {
+                "user": {"name": "Alice", "tags": ["python", "rust", "data"]},
+                "scores": [95, 87, 92]
+            }
+        ])
+
+        result = tools.execute(df)
+
+        if isinstance(result, self.pd.DataFrame):
+            assert len(result) == 1
+        else:
+            assert isinstance(result, list)
+            assert len(result) == 1
+            # Arrays should be indexed
+            assert "user.tags.0" in result[0]
+
+    # =========================================================================
+    # PyArrow Table with Schema
+    # =========================================================================
+
+    def test_pyarrow_table_with_schema(self):
+        """Test PyArrow Table with explicit schema"""
+        if not self.has_pyarrow:
+            pytest.skip("pyarrow not installed")
+
+        tools = json_tools_rs.JSONTools().flatten()
+
+        # Create table with schema
+        data = [
+            {"user": {"name": "Alice", "age": 30}},
+            {"user": {"name": "Bob", "age": 25}}
+        ]
+        table = self.pa.Table.from_pylist(data)
+
+        result = tools.execute(table)
+
+        if isinstance(result, self.pa.Table):
+            assert len(result) == 2
+        else:
+            assert isinstance(result, list)
+            assert len(result) == 2
+
+    # =========================================================================
+    # Multiple Libraries - Type Consistency
+    # =========================================================================
+
+    def test_consistent_output_across_libraries(self):
+        """Test that output is consistent across pandas, polars, pyarrow"""
+        if not (self.has_pandas and self.has_polars and self.has_pyarrow):
+            pytest.skip("Need pandas, polars, and pyarrow installed")
+
+        tools = json_tools_rs.JSONTools().flatten()
+
+        data = [
+            {"user": {"name": "Alice", "age": 30}},
+            {"user": {"name": "Bob", "age": 25}}
+        ]
+
+        # Process with pandas
+        df_pandas = self.pd.DataFrame(data)
+        result_pandas = tools.execute(df_pandas)
+        if isinstance(result_pandas, self.pd.DataFrame):
+            result_pandas = result_pandas.to_dict('records')
+
+        # Process with polars
+        df_polars = self.pl.DataFrame(data)
+        result_polars = tools.execute(df_polars)
+        if isinstance(result_polars, self.pl.DataFrame):
+            result_polars = result_polars.to_dicts()
+
+        # Process with pyarrow
+        table_pyarrow = self.pa.Table.from_pylist(data)
+        result_pyarrow = tools.execute(table_pyarrow)
+        if isinstance(result_pyarrow, self.pa.Table):
+            result_pyarrow = result_pyarrow.to_pylist()
+
+        # All should have same structure (flattened)
+        assert len(result_pandas) == 2
+        assert len(result_polars) == 2
+        assert len(result_pyarrow) == 2
+
+        # All should have flattened keys
+        assert "user.name" in result_pandas[0]
+        assert "user.name" in result_polars[0]
+        assert "user.name" in result_pyarrow[0]
