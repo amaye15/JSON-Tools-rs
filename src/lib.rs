@@ -3068,58 +3068,6 @@ fn serialize_flattened(
     json_parser::to_string(flattened)
 }
 
-/// Estimate the serialized JSON size for optimal buffer pre-allocation
-/// OPTIMIZATION: Sample-based estimation for more accurate capacity prediction
-#[inline]
-fn estimate_serialized_size(map: &FlatMap) -> usize {
-    if map.is_empty() {
-        return 100; // Empty object: "{}"
-    }
-
-    // For small maps, use a conservative estimate
-    if map.len() <= 5 {
-        return map.len() * 60 + 100;
-    }
-
-    // For larger maps, sample a few entries to get a better estimate
-    // Sample up to 10 entries (or 10% of the map, whichever is smaller)
-    let sample_size = std::cmp::min(10, map.len() / 10).max(5);
-    let mut total_sample_size = 0;
-
-    for (key, value) in map.iter().take(sample_size) {
-        // Estimate key size: "key": (key length + 4 for quotes and colon-space)
-        total_sample_size += key.len() + 4;
-
-        // Estimate value size based on type
-        total_sample_size += match value {
-            Value::Null => 4,  // "null"
-            Value::Bool(true) => 4,  // "true"
-            Value::Bool(false) => 5, // "false"
-            Value::Number(n) => n.to_string().len(),
-            Value::String(s) => s.len() + 2, // +2 for quotes
-            Value::Array(arr) => {
-                // Rough estimate: 10 chars per element + brackets
-                arr.len() * 10 + 10
-            }
-            Value::Object(obj) => {
-                // Rough estimate: 30 chars per field + braces
-                obj.len() * 30 + 10
-            }
-        };
-
-        // Add comma separator
-        total_sample_size += 1;
-    }
-
-    // Calculate average size per entry from sample
-    let avg_entry_size = total_sample_size / sample_size;
-
-    // Extrapolate to full map size with 10% buffer for safety
-    let estimated = (map.len() * avg_entry_size) + 100;
-    (estimated * 110) / 100
-}
-
-
 
 
 // ================================================================================================

@@ -1,5 +1,6 @@
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, criterion_main, Criterion};
 use json_tools_rs::JSONTools;
+use std::hint::black_box;
 use std::time::Duration;
 
 // ============================================================================
