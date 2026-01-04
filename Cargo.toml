@@ -31,7 +31,6 @@ fast-float = "0.2"
 rayon = "1.10"
 memchr = "2.7"  # SIMD-optimized byte searching
 smallvec = "1.13"  # Stack-allocated vectors for small buffers
-lru = "0.16.2"  # O(1) LRU cache for regex patterns
 phf = { version = "0.13.1", features = ["macros"] }  # Perfect hash for boolean parsing
 pythonize = { version = "0.27.0", optional = true }
 chrono = { version = "0.4.42", default-features = false, features = ["std", "clock"] }
