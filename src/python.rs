@@ -20,6 +20,10 @@ use std::mem;
 #[cfg(feature = "python")]
 use crate::{JSONTools, JsonOutput};
 
+// Use conditional JSON parser module (sonic-rs on 64-bit, simd-json on 32-bit)
+#[cfg(feature = "python")]
+use crate::json_parser;
+
 // TIER 6→3 OPTIMIZATION: Direct Python<->Rust conversion without JSON serialization
 #[cfg(feature = "python")]
 use pythonize::{depythonize, pythonize};
@@ -837,7 +841,7 @@ impl PyJSONTools {
                 .map_err(|e| JsonToolsError::new_err(format!("Failed to convert Python dict: {}", e)))?;
 
             // Serialize to JSON string using fast sonic-rs
-            let json_str = sonic_rs::to_string(&value)
+            let json_str = json_parser::to_string(&value)
                 .map_err(|e| JsonToolsError::new_err(format!("Failed to serialize: {}", e)))?;
 
             // Process with Rust tools (release GIL)
@@ -853,7 +857,7 @@ impl PyJSONTools {
             match result {
                 JsonOutput::Single(processed) => {
                     // Parse result and convert back to Python dict (direct, no json.loads!)
-                    let result_value: serde_json::Value = sonic_rs::from_str(&processed)
+                    let result_value: serde_json::Value = json_parser::from_str(&processed)
                         .map_err(|e| JsonToolsError::new_err(format!("Failed to parse result: {}", e)))?;
 
                     let python_dict = pythonize(py, &result_value)
@@ -887,7 +891,7 @@ impl PyJSONTools {
                     // Direct conversion: Python dict → serde_json::Value → JSON string
                     let value: serde_json::Value = depythonize(&item)
                         .map_err(|e| JsonToolsError::new_err(format!("Failed to convert dict in list: {}", e)))?;
-                    let json_str = sonic_rs::to_string(&value)
+                    let json_str = json_parser::to_string(&value)
                         .map_err(|e| JsonToolsError::new_err(format!("Failed to serialize dict: {}", e)))?;
                     json_strings.push(json_str);
                     is_str_flags.push(false);
@@ -928,7 +932,7 @@ impl PyJSONTools {
                         // TIER 6→3: Direct conversion using pythonize (no Python json.loads!)
                         let mut dict_results: Vec<PyObject> = Vec::with_capacity(processed_list.len());
                         for processed_json in processed_list {
-                            let result_value: serde_json::Value = sonic_rs::from_str(&processed_json)
+                            let result_value: serde_json::Value = json_parser::from_str(&processed_json)
                                 .map_err(|e| JsonToolsError::new_err(format!("Failed to parse JSON: {}", e)))?;
                             let python_dict = pythonize(py, &result_value)
                                 .map_err(|e| JsonToolsError::new_err(format!("Failed to convert to Python dict: {}", e)))?;
@@ -942,7 +946,7 @@ impl PyJSONTools {
                             if is_str {
                                 mixed_results.push(processed_json.into_pyobject(py)?.into_any().unbind());
                             } else {
-                                let result_value: serde_json::Value = sonic_rs::from_str(&processed_json)
+                                let result_value: serde_json::Value = json_parser::from_str(&processed_json)
                                     .map_err(|e| JsonToolsError::new_err(format!("Failed to parse JSON: {}", e)))?;
                                 let python_dict = pythonize(py, &result_value)
                                     .map_err(|e| JsonToolsError::new_err(format!("Failed to convert to Python dict: {}", e)))?;
@@ -1004,7 +1008,7 @@ impl PyJSONTools {
             let value: serde_json::Value = depythonize(json_input)
                 .map_err(|e| JsonToolsError::new_err(format!("Failed to convert Python dict: {}", e)))?;
 
-            let json_str = sonic_rs::to_string(&value)
+            let json_str = json_parser::to_string(&value)
                 .map_err(|e| JsonToolsError::new_err(format!("Failed to serialize: {}", e)))?;
 
             // TIER 6→3 OPTIMIZATION: Take ownership instead of cloning
@@ -1037,7 +1041,7 @@ impl PyJSONTools {
                     // Direct conversion: Python dict → serde_json::Value → JSON string
                     let value: serde_json::Value = depythonize(&item)
                         .map_err(|e| JsonToolsError::new_err(format!("Failed to convert dict in list: {}", e)))?;
-                    let json_str = sonic_rs::to_string(&value)
+                    let json_str = json_parser::to_string(&value)
                         .map_err(|e| JsonToolsError::new_err(format!("Failed to serialize dict: {}", e)))?;
                     json_strings.push(json_str);
                 } else {
@@ -1283,7 +1287,7 @@ impl PyJSONTools {
         // Step 2: Serialize to JSON strings for processing
         let mut json_strings = Vec::with_capacity(records.len());
         for record in records {
-            let json_str = sonic_rs::to_string(&record).map_err(|e| {
+            let json_str = json_parser::to_string(&record).map_err(|e| {
                 JsonToolsError::new_err(format!("Failed to serialize record: {}", e))
             })?;
             json_strings.push(json_str);
@@ -1306,7 +1310,7 @@ impl PyJSONTools {
                 // Convert JSON strings back to Python dicts
                 let mut processed_dicts: Vec<PyObject> = Vec::with_capacity(processed_list.len());
                 for json_str in processed_list {
-                    let value: serde_json::Value = sonic_rs::from_str(&json_str).map_err(|e| {
+                    let value: serde_json::Value = json_parser::from_str(&json_str).map_err(|e| {
                         JsonToolsError::new_err(format!("Failed to parse result: {}", e))
                     })?;
                     let py_dict = pythonize(py, &value).map_err(|e| {
@@ -1349,7 +1353,7 @@ impl PyJSONTools {
                 let value: serde_json::Value = depythonize(&item).map_err(|e| {
                     JsonToolsError::new_err(format!("Failed to convert dict in series: {}", e))
                 })?;
-                let json_str = sonic_rs::to_string(&value).map_err(|e| {
+                let json_str = json_parser::to_string(&value).map_err(|e| {
                     JsonToolsError::new_err(format!("Failed to serialize dict: {}", e))
                 })?;
                 json_strings.push(json_str);
@@ -1394,7 +1398,7 @@ impl PyJSONTools {
                     // All dicts - convert to list of dicts
                     let mut dict_results = Vec::with_capacity(processed_list.len());
                     for processed_json in processed_list {
-                        let result_value: serde_json::Value = sonic_rs::from_str(&processed_json)
+                        let result_value: serde_json::Value = json_parser::from_str(&processed_json)
                             .map_err(|e| JsonToolsError::new_err(format!("Failed to parse result: {}", e)))?;
                         let python_dict = pythonize(py, &result_value)
                             .map_err(|e| JsonToolsError::new_err(format!("Failed to convert to Python dict: {}", e)))?;
@@ -1408,7 +1412,7 @@ impl PyJSONTools {
                         if is_str {
                             mixed_results.push(processed_json.into_pyobject(py)?.into_any().unbind());
                         } else {
-                            let result_value: serde_json::Value = sonic_rs::from_str(&processed_json)
+                            let result_value: serde_json::Value = json_parser::from_str(&processed_json)
                                 .map_err(|e| JsonToolsError::new_err(format!("Failed to parse result: {}", e)))?;
                             let python_dict = pythonize(py, &result_value)
                                 .map_err(|e| JsonToolsError::new_err(format!("Failed to convert to Python: {}", e)))?;

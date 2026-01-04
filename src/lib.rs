@@ -439,6 +439,53 @@ use std::borrow::Cow;
 use std::cell::RefCell;
 use std::sync::{Arc, LazyLock};
 
+// =============================================================================
+// JSON Parser Selection: sonic-rs (64-bit) or simd-json (32-bit)
+// =============================================================================
+
+/// Conditional JSON parser module
+/// Uses sonic-rs on 64-bit platforms (faster), simd-json on 32-bit (compatibility)
+mod json_parser {
+    use serde::Serialize;
+    use serde_json::Value;
+
+    #[cfg(target_pointer_width = "64")]
+    pub use sonic_rs::Error as JsonError;
+
+    #[cfg(target_pointer_width = "32")]
+    pub use simd_json::Error as JsonError;
+
+    /// Parse JSON string to serde_json::Value
+    #[cfg(target_pointer_width = "64")]
+    #[inline]
+    pub fn from_str(s: &str) -> Result<Value, JsonError> {
+        sonic_rs::from_str(s)
+    }
+
+    /// Parse JSON string to serde_json::Value
+    /// Note: simd-json requires mutable input, so we need to clone
+    #[cfg(target_pointer_width = "32")]
+    #[inline]
+    pub fn from_str(s: &str) -> Result<Value, JsonError> {
+        let mut bytes = s.as_bytes().to_vec();
+        simd_json::serde::from_slice(&mut bytes)
+    }
+
+    /// Serialize any serializable type to JSON string
+    #[cfg(target_pointer_width = "64")]
+    #[inline]
+    pub fn to_string<T: Serialize>(value: &T) -> Result<String, JsonError> {
+        sonic_rs::to_string(value)
+    }
+
+    /// Serialize any serializable type to JSON string
+    #[cfg(target_pointer_width = "32")]
+    #[inline]
+    pub fn to_string<T: Serialize>(value: &T) -> Result<String, JsonError> {
+        simd_json::serde::to_string(value)
+    }
+}
+
 // OPTIMIZATION: Use Arc<str> for HashMap keys to enable zero-copy sharing of repeated keys
 // This significantly reduces memory allocations for large datasets with repeated field names
 type FlatMap = FxHashMap<Arc<str>, Value>;
@@ -460,8 +507,8 @@ type FlatMap = FxHashMap<Arc<str>, Value>;
 /// - Optimized for modern x86-64 CPUs
 #[inline]
 fn parse_json(json: &str) -> Result<Value, JsonToolsError> {
-    // sonic-rs directly parses from &str without requiring mutable buffer or padding
-    sonic_rs::from_str(json).map_err(JsonToolsError::json_parse_error)
+    // Use json_parser module (sonic-rs on 64-bit, simd-json on 32-bit)
+    json_parser::from_str(json).map_err(JsonToolsError::json_parse_error)
 }
 
 // ================================================================================================
@@ -1044,7 +1091,7 @@ pub enum JsonToolsError {
         message: String,
         suggestion: String,
         #[source]
-        source: sonic_rs::Error,
+        source: json_parser::JsonError,
     },
 
     /// Error compiling or using regex patterns with helpful suggestions
@@ -1100,7 +1147,7 @@ pub enum JsonToolsError {
         message: String,
         suggestion: String,
         #[source]
-        source: sonic_rs::Error,
+        source: json_parser::JsonError,
     },
 }
 
@@ -1136,7 +1183,7 @@ impl JsonToolsError {
     /// Create a JSON parse error with helpful suggestions
     #[cold]  // Optimization #19: Mark error paths as cold
     #[inline(never)]
-    pub fn json_parse_error(source: sonic_rs::Error) -> Self {
+    pub fn json_parse_error(source: json_parser::JsonError) -> Self {
         let suggestion = "Verify your JSON syntax using a JSON validator. Common issues include: missing quotes around keys or values, trailing commas, unescaped characters, incomplete JSON (missing closing braces or brackets), or invalid escape sequences.";
 
         JsonToolsError::JsonParseError {
@@ -1247,7 +1294,7 @@ impl JsonToolsError {
     /// Create a serialization error
     #[cold]  // Optimization #12: Mark error paths as cold
     #[inline(never)]
-    pub fn serialization_error(source: sonic_rs::Error) -> Self {
+    pub fn serialization_error(source: json_parser::JsonError) -> Self {
         JsonToolsError::SerializationError {
             message: source.to_string(),
             suggestion: "This is likely an internal error. The processed data couldn't be serialized back to JSON. Please report this issue.".to_string(),
@@ -1256,9 +1303,9 @@ impl JsonToolsError {
     }
 }
 
-// Automatic conversion from sonic_rs::Error
-impl From<sonic_rs::Error> for JsonToolsError {
-    fn from(error: sonic_rs::Error) -> Self {
+// Automatic conversion from json_parser::JsonError
+impl From<json_parser::JsonError> for JsonToolsError {
+    fn from(error: json_parser::JsonError) -> Self {
         JsonToolsError::json_parse_error(error)
     }
 }
@@ -2083,7 +2130,7 @@ fn handle_root_level_primitives_unflatten(
             }
 
 
-            Ok(Some(sonic_rs::to_string(&single_value)?))
+            Ok(Some(json_parser::to_string(&single_value)?))
         }
         Value::Object(obj) if obj.is_empty() => {
             // Empty object should remain empty object
@@ -2236,7 +2283,7 @@ fn process_single_json_for_unflatten(
     )?;
 
     // Serialize the result
-    Ok(sonic_rs::to_string(&unflattened)?)
+    Ok(json_parser::to_string(&unflattened)?)
 }
 
 /// Handle root-level primitive values and empty containers for flattening
@@ -2252,7 +2299,7 @@ fn handle_root_level_primitives_flatten(
             if let Some(patterns) = value_replacements {
                 apply_value_replacement_patterns(&mut single_value, patterns)?;
             }
-            Ok(Some(sonic_rs::to_string(&single_value)?))
+            Ok(Some(json_parser::to_string(&single_value)?))
         }
         Value::Object(obj) if obj.is_empty() => {
             // Empty object should remain empty object
@@ -2877,7 +2924,7 @@ fn process_single_json_normal(
     }
 
     // Serialize back to JSON
-    Ok(sonic_rs::to_string(&value)?)
+    Ok(json_parser::to_string(&value)?)
 }
 
 /// Recursively apply value replacements to all string values
@@ -3014,11 +3061,11 @@ fn apply_value_replacements(
 #[inline]
 fn serialize_flattened(
     flattened: &FlatMap,
-) -> Result<String, sonic_rs::Error> {
+) -> Result<String, json_parser::JsonError> {
     // Direct serialization - no intermediate HashMap needed
     // Arc<str> implements Serialize via Deref to str
     // FxHashMap implements Serialize just like std HashMap
-    sonic_rs::to_string(flattened)
+    json_parser::to_string(flattened)
 }
 
 /// Estimate the serialized JSON size for optimal buffer pre-allocation
