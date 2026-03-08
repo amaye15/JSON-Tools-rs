@@ -1,4 +1,3 @@
-
 //! # JSON Tools RS
 //!
 //! A Rust library for advanced JSON manipulation, including flattening and unflattening
@@ -422,14 +421,13 @@
 //! ```
 //!
 
-
 // ================================================================================================
 // MODULE: External Dependencies and Imports
 // ================================================================================================
 
 use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
 use dashmap::DashMap;
-use memchr::{memchr, memchr2, memchr3, memmem, memrchr};
+use memchr::{memchr, memchr2, memchr3, memchr_iter, memmem, memrchr};
 use phf::phf_map;
 use regex::Regex;
 use rustc_hash::FxHashMap;
@@ -531,13 +529,14 @@ static COMMON_REGEX_PATTERNS: LazyLock<FxHashMap<&'static str, Arc<Regex>>> = La
         (r"\s", "Any whitespace"),
         (r"\n+", "Multiple newlines"),
         (r"\r\n", "Windows line ending"),
-
         // Special character patterns
         (r"[^\w\s]", "Non-word, non-space characters"),
         (r"[^a-zA-Z0-9]", "Non-alphanumeric"),
         (r"[^a-zA-Z0-9_]", "Non-alphanumeric except underscore"),
-        (r"[^a-zA-Z0-9_-]", "Non-alphanumeric except underscore and hyphen"),
-
+        (
+            r"[^a-zA-Z0-9_-]",
+            "Non-alphanumeric except underscore and hyphen",
+        ),
         // Common JSON key patterns
         (r"[A-Z]", "Uppercase letters"),
         (r"[a-z]", "Lowercase letters"),
@@ -545,55 +544,48 @@ static COMMON_REGEX_PATTERNS: LazyLock<FxHashMap<&'static str, Arc<Regex>>> = La
         (r"_+", "Multiple underscores"),
         (r"-+", "Multiple hyphens"),
         (r"\.+", "Multiple dots"),
-
         // Email and URL patterns (common in JSON data)
         (r"@", "At symbol (emails)"),
         (r"\.", "Dot (domains, decimals)"),
         (r"://", "Protocol separator"),
         (r"https?://", "HTTP/HTTPS protocol"),
-
         // Date/time patterns
         (r"\d{4}-\d{2}-\d{2}", "ISO date (YYYY-MM-DD)"),
         (r"\d{2}:\d{2}:\d{2}", "Time format (HH:MM:SS)"),
         (r"\d{4}/\d{2}/\d{2}", "US date format (YYYY/MM/DD)"),
         (r"\d{2}/\d{2}/\d{4}", "Date format (MM/DD/YYYY)"),
-
         // UUID patterns
-        (r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}", "UUID format"),
+        (
+            r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}",
+            "UUID format",
+        ),
         (r"[0-9a-fA-F]{32}", "UUID without hyphens"),
-
         // IP address patterns
         (r"\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}", "IPv4 address"),
         (r"([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}", "IPv6 address"),
-
         // Naming convention patterns
         (r"[a-z]+([A-Z][a-z]+)*", "camelCase"),
         (r"[a-z]+(_[a-z]+)*", "snake_case"),
         (r"[a-z]+(-[a-z]+)*", "kebab-case"),
         (r"[A-Z]+([A-Z][a-z]+)*", "PascalCase"),
-
         // Currency patterns
         (r"\$\d+(\.\d{2})?", "USD currency"),
         (r"€\d+(\.\d{2})?", "EUR currency"),
         (r"£\d+(\.\d{2})?", "GBP currency"),
         (r"\d+(\.\d{2})?\s*(USD|EUR|GBP)", "Currency with code"),
-
         // Version number patterns
         (r"\d+\.\d+\.\d+", "Semantic version"),
         (r"v\d+\.\d+", "Version prefix"),
-
         // File and path patterns
         (r"\.\w+$", "File extension"),
         (r"/[^/]+", "Path segment"),
         (r"\\[^\\]+", "Windows path segment"),
-
         // Bracket and quote patterns
         (r"\[.*?\]", "Square brackets with content"),
         (r"\{.*?\}", "Curly braces with content"),
         (r"\(.*?\)", "Parentheses with content"),
         (r#"".*?""#, "Double quoted string"),
         (r"'.*?'", "Single quoted string"),
-
         // Common user patterns for key/value replacements
         // OPTIMIZATION: Pre-compile commonly used patterns from user analysis
         (r"^(user|admin)_", "User/admin prefix"),
@@ -632,17 +624,15 @@ static COMMON_REGEX_PATTERNS: LazyLock<FxHashMap<&'static str, Arc<Regex>>> = La
 ///
 /// Trade-off: No LRU eviction (uses bounded size with random eviction instead)
 /// Max 512 patterns cached globally to prevent unbounded memory growth
-static REGEX_CACHE: LazyLock<DashMap<String, Arc<Regex>>> = LazyLock::new(|| {
-    DashMap::with_capacity(512)
-});
+static REGEX_CACHE: LazyLock<DashMap<Arc<str>, Arc<Regex>>> =
+    LazyLock::new(|| DashMap::with_capacity(512));
 
 // Thread-local regex cache for even better performance
-// Using Arc<Regex> for O(1) cloning
+// Using Arc<Regex> for O(1) cloning; Arc<str> key avoids String allocation on cache miss
 thread_local! {
-    static THREAD_LOCAL_REGEX_CACHE: std::cell::RefCell<FxHashMap<String, Arc<Regex>>> =
-        std::cell::RefCell::new(FxHashMap::with_capacity_and_hasher(32, Default::default()));
+    static THREAD_LOCAL_REGEX_CACHE: std::cell::RefCell<FxHashMap<Arc<str>, Arc<Regex>>> =
+        std::cell::RefCell::new(FxHashMap::with_capacity_and_hasher(64, Default::default()));
 }
-
 
 /// Get a cached regex, using Arc<Regex> for O(1) cloning
 ///
@@ -674,10 +664,15 @@ fn get_cached_regex(pattern: &str) -> Result<Arc<Regex>, regex::Error> {
         // Cache in thread-local for next access
         THREAD_LOCAL_REGEX_CACHE.with(|cache| {
             let mut cache_ref = cache.borrow_mut();
-            if cache_ref.len() >= 32 {
-                cache_ref.clear(); // Simple eviction strategy
+            if cache_ref.len() >= 64 {
+                // Evict ~half instead of clearing entirely to preserve hot entries
+                let mut keep = true;
+                cache_ref.retain(|_, _| {
+                    keep = !keep;
+                    keep
+                });
             }
-            cache_ref.insert(pattern.to_string(), Arc::clone(&regex_arc));
+            cache_ref.insert(Arc::from(pattern), Arc::clone(&regex_arc));
         });
 
         return Ok(regex_arc);
@@ -699,15 +694,20 @@ fn get_cached_regex(pattern: &str) -> Result<Arc<Regex>, regex::Error> {
     }
 
     // Insert the newly compiled regex (concurrent inserts are safe with DashMap)
-    REGEX_CACHE.insert(pattern.to_string(), Arc::clone(&regex));
+    REGEX_CACHE.insert(Arc::from(pattern), Arc::clone(&regex));
 
     // Cache in thread-local for next access
     THREAD_LOCAL_REGEX_CACHE.with(|cache| {
         let mut cache_ref = cache.borrow_mut();
-        if cache_ref.len() >= 32 {
-            cache_ref.clear();
+        if cache_ref.len() >= 64 {
+            // Evict ~half instead of clearing entirely to preserve hot entries
+            let mut keep = true;
+            cache_ref.retain(|_, _| {
+                keep = !keep;
+                keep
+            });
         }
-        cache_ref.insert(pattern.to_string(), Arc::clone(&regex));
+        cache_ref.insert(Arc::from(pattern), Arc::clone(&regex));
     });
 
     Ok(regex)
@@ -719,17 +719,12 @@ struct KeyDeduplicator {
     /// Cache of deduplicated keys using Arc<str> as key to avoid allocations
     /// TIER 6→3 OPTIMIZATION: Use Arc<str> as HashMap key instead of String
     key_cache: FxHashMap<std::sync::Arc<str>, std::sync::Arc<str>>,
-    /// Statistics for monitoring effectiveness
-    cache_hits: usize,
-    cache_misses: usize,
 }
 
 impl KeyDeduplicator {
     fn new() -> Self {
         Self {
             key_cache: FxHashMap::with_capacity_and_hasher(128, Default::default()),
-            cache_hits: 0,
-            cache_misses: 0,
         }
     }
 
@@ -744,19 +739,16 @@ impl KeyDeduplicator {
         // FAST PATH: Check if key exists without allocation (Tier 3)
         // Note: HashMap::get with &str works because Arc<str> implements Borrow<str>
         if let Some(cached_key) = self.key_cache.get(key) {
-            self.cache_hits += 1;
             return Arc::clone(cached_key); // O(1) Arc increment
         }
 
         // SLOW PATH: Key not found, create and cache it (Tier 6)
         // Use Arc<str> directly as key to avoid String allocation
-        self.cache_misses += 1;
         let arc_key: std::sync::Arc<str> = key.into();
-        self.key_cache.insert(Arc::clone(&arc_key), Arc::clone(&arc_key));
+        self.key_cache
+            .insert(Arc::clone(&arc_key), Arc::clone(&arc_key));
         arc_key
     }
-
-
 }
 
 thread_local! {
@@ -891,12 +883,10 @@ fn is_simple_key(key: &str) -> bool {
         for &b in bytes {
             // Optimized check: valid chars are 0-9, a-z, A-Z, '.', '_', '-'
             // ASCII values: 0-9 (48-57), A-Z (65-90), a-z (97-122), '.' (46), '_' (95), '-' (45)
-            let is_valid = (b >= b'0' && b <= b'9')   // digits
-                        || (b >= b'a' && b <= b'z')   // lowercase
-                        || (b >= b'A' && b <= b'Z')   // uppercase
+            let is_valid = b.is_ascii_alphanumeric()
                         || b == b'.'                   // dot
                         || b == b'_'                   // underscore
-                        || b == b'-';                  // hyphen
+                        || b == b'-'; // hyphen
             if !is_valid {
                 return false;
             }
@@ -913,18 +903,18 @@ fn is_simple_key(key: &str) -> bool {
     // Compiler will auto-vectorize this loop for medium-sized inputs
     for &b in bytes {
         // Fast rejection: if byte is outside all valid ranges, reject immediately
-        if b < b'-' || b > b'z' {
+        if !(b'-'..=b'z').contains(&b) {
             return false;
         }
 
         // Fine-grained check for bytes within the broader range
         let is_valid = match b {
-            b'-' | b'.' => true,                          // 45-46
-            b'0'..=b'9' => true,                          // 48-57
-            b'A'..=b'Z' => true,                          // 65-90
-            b'_' => true,                                 // 95
-            b'a'..=b'z' => true,                          // 97-122
-            _ => false,  // Everything else (47, 58-64, 91-94, 96)
+            b'-' | b'.' => true, // 45-46
+            b'0'..=b'9' => true, // 48-57
+            b'A'..=b'Z' => true, // 65-90
+            b'_' => true,        // 95
+            b'a'..=b'z' => true, // 97-122
+            _ => false,          // Everything else (47, 58-64, 91-94, 96)
         };
 
         if !is_valid {
@@ -962,14 +952,8 @@ fn deduplicate_key(key: &str) -> std::sync::Arc<str> {
     }
 }
 
-
-
 /// Radix tree/trie for efficient prefix-based key operations
 /// Optimized for JSON key processing with path analysis and collision detection
-
-
-
-
 
 // ================================================================================================
 // MODULE: Feature Gates and External Modules
@@ -989,7 +973,7 @@ mod tests;
 
 /// Input type for JSON flattening operations with Cow optimization
 #[derive(Debug, Clone)]
-#[repr(u8)]  // OPTIMIZATION: Smaller discriminant for better cache locality
+#[repr(u8)] // OPTIMIZATION: Smaller discriminant for better cache locality
 pub enum JsonInput<'a> {
     /// Single JSON string with Cow for efficient memory usage
     Single(Cow<'a, str>),
@@ -1031,13 +1015,18 @@ impl<'a> From<Vec<String>> for JsonInput<'a> {
 
 impl<'a> From<&'a [String]> for JsonInput<'a> {
     fn from(json_list: &'a [String]) -> Self {
-        JsonInput::MultipleOwned(json_list.iter().map(|s| Cow::Borrowed(s.as_str())).collect())
+        JsonInput::MultipleOwned(
+            json_list
+                .iter()
+                .map(|s| Cow::Borrowed(s.as_str()))
+                .collect(),
+        )
     }
 }
 
 /// Output type for JSON flattening operations
 #[derive(Debug, Clone)]
-#[repr(u8)]  // OPTIMIZATION: Smaller discriminant for better cache locality
+#[repr(u8)] // OPTIMIZATION: Smaller discriminant for better cache locality
 pub enum JsonOutput {
     /// Single flattened JSON string
     Single(String),
@@ -1083,7 +1072,7 @@ impl JsonOutput {
 /// - Actionable suggestion
 /// - Source error (where applicable)
 #[derive(Debug, thiserror::Error)]
-#[non_exhaustive]  // Allow adding variants without breaking changes
+#[non_exhaustive] // Allow adding variants without breaking changes
 pub enum JsonToolsError {
     /// Error parsing JSON input with detailed context and suggestions
     #[error("[E001] JSON parsing failed: {message}\n💡 Suggestion: {suggestion}")]
@@ -1105,27 +1094,20 @@ pub enum JsonToolsError {
 
     /// Invalid replacement pattern configuration with detailed guidance
     #[error("[E003] Invalid replacement pattern: {message}\n💡 Suggestion: {suggestion}")]
-    InvalidReplacementPattern {
-        message: String,
-        suggestion: String,
-    },
+    InvalidReplacementPattern { message: String, suggestion: String },
 
     /// Invalid JSON structure for the requested operation
     #[error("[E004] Invalid JSON structure: {message}\n💡 Suggestion: {suggestion}")]
-    InvalidJsonStructure {
-        message: String,
-        suggestion: String,
-    },
+    InvalidJsonStructure { message: String, suggestion: String },
 
     /// Configuration error when operation mode is not set
     #[error("[E005] Operation mode not configured: {message}\n💡 Suggestion: {suggestion}")]
-    ConfigurationError {
-        message: String,
-        suggestion: String,
-    },
+    ConfigurationError { message: String, suggestion: String },
 
     /// Error processing batch item with detailed context
-    #[error("[E006] Batch processing failed at index {index}: {message}\n💡 Suggestion: {suggestion}")]
+    #[error(
+        "[E006] Batch processing failed at index {index}: {message}\n💡 Suggestion: {suggestion}"
+    )]
     BatchProcessingError {
         index: usize,
         message: String,
@@ -1136,10 +1118,7 @@ pub enum JsonToolsError {
 
     /// Input validation error with helpful guidance
     #[error("[E007] Input validation failed: {message}\n💡 Suggestion: {suggestion}")]
-    InputValidationError {
-        message: String,
-        suggestion: String,
-    },
+    InputValidationError { message: String, suggestion: String },
 
     /// Serialization error when converting results back to JSON
     #[error("[E008] JSON serialization failed: {message}\n💡 Suggestion: {suggestion}")]
@@ -1181,7 +1160,7 @@ impl JsonToolsError {
     }
 
     /// Create a JSON parse error with helpful suggestions
-    #[cold]  // Optimization #19: Mark error paths as cold
+    #[cold] // Optimization #19: Mark error paths as cold
     #[inline(never)]
     pub fn json_parse_error(source: json_parser::JsonError) -> Self {
         let suggestion = "Verify your JSON syntax using a JSON validator. Common issues include: missing quotes around keys or values, trailing commas, unescaped characters, incomplete JSON (missing closing braces or brackets), or invalid escape sequences.";
@@ -1194,7 +1173,7 @@ impl JsonToolsError {
     }
 
     /// Create a regex error with helpful suggestions
-    #[cold]  // Optimization #19: Mark error paths as cold
+    #[cold] // Optimization #19: Mark error paths as cold
     #[inline(never)]
     pub fn regex_error(source: regex::Error) -> Self {
         let suggestion = match source {
@@ -1213,7 +1192,7 @@ impl JsonToolsError {
     }
 
     /// Create an invalid replacement pattern error
-    #[cold]  // Optimization #19: Mark error paths as cold
+    #[cold] // Optimization #19: Mark error paths as cold
     #[inline(never)]
     pub fn invalid_replacement_pattern(message: impl Into<String>) -> Self {
         let msg = message.into();
@@ -1232,7 +1211,7 @@ impl JsonToolsError {
     }
 
     /// Create an invalid JSON structure error
-    #[cold]  // Optimization #19: Mark error paths as cold
+    #[cold] // Optimization #19: Mark error paths as cold
     #[inline(never)]
     pub fn invalid_json_structure(message: impl Into<String>) -> Self {
         let msg = message.into();
@@ -1251,7 +1230,7 @@ impl JsonToolsError {
     }
 
     /// Create a configuration error
-    #[cold]  // Optimization #12: Mark error paths as cold
+    #[cold] // Optimization #12: Mark error paths as cold
     #[inline(never)]
     pub fn configuration_error(message: impl Into<String>) -> Self {
         JsonToolsError::ConfigurationError {
@@ -1261,7 +1240,7 @@ impl JsonToolsError {
     }
 
     /// Create a batch processing error
-    #[cold]  // Optimization #12: Mark error paths as cold
+    #[cold] // Optimization #12: Mark error paths as cold
     #[inline(never)]
     pub fn batch_processing_error(index: usize, source: JsonToolsError) -> Self {
         JsonToolsError::BatchProcessingError {
@@ -1273,7 +1252,7 @@ impl JsonToolsError {
     }
 
     /// Create an input validation error
-    #[cold]  // Optimization #12: Mark error paths as cold
+    #[cold] // Optimization #12: Mark error paths as cold
     #[inline(never)]
     pub fn input_validation_error(message: impl Into<String>) -> Self {
         let msg = message.into();
@@ -1292,7 +1271,7 @@ impl JsonToolsError {
     }
 
     /// Create a serialization error
-    #[cold]  // Optimization #12: Mark error paths as cold
+    #[cold] // Optimization #12: Mark error paths as cold
     #[inline(never)]
     pub fn serialization_error(source: json_parser::JsonError) -> Self {
         JsonToolsError::SerializationError {
@@ -1319,7 +1298,7 @@ impl From<regex::Error> for JsonToolsError {
 
 /// Operation mode for the unified JSONTools API
 #[derive(Debug, Clone, PartialEq)]
-#[repr(u8)]  // OPTIMIZATION: Smaller discriminant for better cache locality
+#[repr(u8)] // OPTIMIZATION: Smaller discriminant for better cache locality
 enum OperationMode {
     /// Flatten JSON structures
     Flatten,
@@ -1378,7 +1357,10 @@ impl FilteringConfig {
 
     /// Check if any filtering is enabled
     pub fn has_any_filter(&self) -> bool {
-        self.remove_empty_strings || self.remove_nulls || self.remove_empty_objects || self.remove_empty_arrays
+        self.remove_empty_strings
+            || self.remove_nulls
+            || self.remove_empty_objects
+            || self.remove_empty_arrays
     }
 }
 
@@ -1391,7 +1373,9 @@ pub struct CollisionConfig {
 
 impl CollisionConfig {
     /// Create a new CollisionConfig with collision handling disabled
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     /// Enable collision handling by collecting values into arrays
     pub fn handle_collisions(mut self, enabled: bool) -> Self {
@@ -1400,7 +1384,9 @@ impl CollisionConfig {
     }
 
     /// Check if any collision handling is enabled
-    pub fn has_collision_handling(&self) -> bool { self.handle_collisions }
+    pub fn has_collision_handling(&self) -> bool {
+        self.handle_collisions
+    }
 }
 
 /// Configuration for replacement operations
@@ -1424,13 +1410,21 @@ impl ReplacementConfig {
     }
 
     /// Add a key replacement pattern
-    pub fn add_key_replacement(mut self, find: impl Into<String>, replace: impl Into<String>) -> Self {
+    pub fn add_key_replacement(
+        mut self,
+        find: impl Into<String>,
+        replace: impl Into<String>,
+    ) -> Self {
         self.key_replacements.push((find.into(), replace.into()));
         self
     }
 
     /// Add a value replacement pattern
-    pub fn add_value_replacement(mut self, find: impl Into<String>, replace: impl Into<String>) -> Self {
+    pub fn add_value_replacement(
+        mut self,
+        find: impl Into<String>,
+        replace: impl Into<String>,
+    ) -> Self {
         self.value_replacements.push((find.into(), replace.into()));
         self
     }
@@ -1463,7 +1457,7 @@ pub struct ProcessingConfig {
     pub auto_convert_types: bool,
     /// Minimum batch size for parallel processing
     pub parallel_threshold: usize,
-    /// Number of threads for parallel processing (None = use Rayon default)
+    /// Number of threads for parallel processing (None = use system default)
     pub num_threads: Option<usize>,
     /// Minimum object/array size for nested parallel processing within a single JSON document
     /// Only objects/arrays with more than this many keys/items will be processed in parallel
@@ -1481,7 +1475,7 @@ impl Default for ProcessingConfig {
             replacements: ReplacementConfig::default(),
             auto_convert_types: false,
             parallel_threshold: 10,
-            num_threads: None, // Use Rayon default (number of logical CPUs)
+            num_threads: None, // Use system default (number of logical CPUs)
             nested_parallel_threshold: std::env::var("JSON_TOOLS_NESTED_PARALLEL_THRESHOLD")
                 .ok()
                 .and_then(|v| v.parse().ok())
@@ -1580,7 +1574,7 @@ pub struct JSONTools {
     // Medium fields (8 bytes on 64-bit systems)
     /// Minimum batch size to use parallel processing (default: 10)
     parallel_threshold: usize,
-    /// Number of threads for parallel processing (None = use Rayon default)
+    /// Number of threads for parallel processing (None = use system default)
     num_threads: Option<usize>,
     /// Minimum object/array size for nested parallel processing within a single JSON document
     nested_parallel_threshold: usize,
@@ -1637,7 +1631,6 @@ impl Default for JSONTools {
         }
     }
 }
-
 
 impl JSONTools {
     /// Create a new JSONTools instance with default settings
@@ -1885,12 +1878,12 @@ impl JSONTools {
 
     /// Configure the number of threads for parallel processing
     ///
-    /// By default, Rayon uses the number of logical CPUs. This method allows you to override
+    /// By default, the number of logical CPUs is used. This method allows you to override
     /// that behavior for specific workloads or resource constraints.
     ///
     /// # Arguments
     ///
-    /// * `num_threads` - Number of threads to use (None = use Rayon default)
+    /// * `num_threads` - Number of threads to use (None = use system default)
     ///
     /// # Examples
     ///
@@ -1974,7 +1967,7 @@ impl JSONTools {
         processor: F,
     ) -> Result<JsonOutput, JsonToolsError>
     where
-        F: Fn(&str, &ProcessingConfig) -> Result<String, JsonToolsError> + Sync,
+        F: Fn(&str, &ProcessingConfig) -> Result<String, JsonToolsError> + Sync + Send,
     {
         match input {
             JsonInput::Single(json_cow) => {
@@ -1983,49 +1976,44 @@ impl JSONTools {
             }
             JsonInput::Multiple(json_list) => {
                 // Use parallel processing if batch size meets threshold
-                // Removed 2x hysteresis as it prevented parallelization of medium-sized batches
                 if json_list.len() >= config.parallel_threshold {
-                    use rayon::prelude::*;
+                    let n_threads = std::thread::available_parallelism()
+                        .map(|p| p.get())
+                        .unwrap_or(4)
+                        .min(json_list.len());
+                    let chunk_size = json_list.len().div_ceil(n_threads);
 
-                    // For very large batches (>1000), use chunked processing for better cache locality
-                    if json_list.len() > 1000 {
-                            // Calculate optimal chunk size: balance parallelism with cache locality
-                            // Aim for ~100-200 items per chunk for good cache performance
-                            let num_cpus = rayon::current_num_threads();
-                            let chunk_size = (json_list.len() / num_cpus).max(100).min(200);
+                    // Pre-allocate result slots; each thread writes to its own non-overlapping slice,
+                    // preserving input order without sorting or channels.
+                    let mut slots: Vec<Option<Result<String, JsonToolsError>>> =
+                        (0..json_list.len()).map(|_| None).collect();
 
-                            // Process chunks in parallel, then flatten results
-                            let chunk_results: Result<Vec<Vec<String>>, _> = json_list
-                                .par_chunks(chunk_size)
-                                .enumerate()
-                                .map(|(chunk_idx, chunk)| {
-                                    let base_index = chunk_idx * chunk_size;
-                                    chunk.iter().enumerate()
-                                        .map(|(item_idx, json)| {
-                                            processor(json, config)
-                                                .map_err(|e| JsonToolsError::batch_processing_error(base_index + item_idx, e))
-                                        })
-                                        .collect()
-                                })
-                                .collect();
-
-                            // Flatten the results
-                            let results: Vec<String> = chunk_results?.into_iter().flatten().collect();
-                            return Ok(JsonOutput::Multiple(results));
-                        } else {
-                            // For smaller batches, use simple par_iter for maximum parallelism
-                            let results: Result<Vec<_>, _> = json_list
-                                .par_iter()
-                                .enumerate()
-                                .map(|(index, json)| {
-                                    processor(json, config)
-                                        .map_err(|e| JsonToolsError::batch_processing_error(index, e))
-                                })
-                                .collect();
-
-                            return Ok(JsonOutput::Multiple(results?));
+                    // &F is Copy (shared ref), so each closure iteration captures its own ptr
+                    let proc = &processor;
+                    crossbeam::thread::scope(|s| {
+                        for (chunk_idx, (inputs, outputs)) in json_list
+                            .chunks(chunk_size)
+                            .zip(slots.chunks_mut(chunk_size))
+                            .enumerate()
+                        {
+                            let base = chunk_idx * chunk_size;
+                            s.spawn(move |_| {
+                                for (i, (json, slot)) in
+                                    inputs.iter().zip(outputs.iter_mut()).enumerate()
+                                {
+                                    *slot = Some(proc(json, config).map_err(|e| {
+                                        JsonToolsError::batch_processing_error(base + i, e)
+                                    }));
+                                }
+                            });
                         }
-                    }
+                    })
+                    .expect("batch processing thread panicked");
+
+                    let results: Result<Vec<_>, _> =
+                        slots.into_iter().map(|s| s.unwrap()).collect();
+                    return Ok(JsonOutput::Multiple(results?));
+                }
 
                 // Sequential processing (default or below threshold)
                 let mut results = Vec::with_capacity(json_list.len());
@@ -2039,49 +2027,41 @@ impl JSONTools {
             }
             JsonInput::MultipleOwned(vecs) => {
                 // Use parallel processing if batch size meets threshold
-                // Removed 2x hysteresis as it prevented parallelization of medium-sized batches
                 if vecs.len() >= config.parallel_threshold {
-                    use rayon::prelude::*;
+                    let n_threads = std::thread::available_parallelism()
+                        .map(|p| p.get())
+                        .unwrap_or(4)
+                        .min(vecs.len());
+                    let chunk_size = vecs.len().div_ceil(n_threads);
 
-                    // For very large batches (>1000), use chunked processing for better cache locality
-                    if vecs.len() > 1000 {
-                            // Calculate optimal chunk size: balance parallelism with cache locality
-                            // Aim for ~100-200 items per chunk for good cache performance
-                            let num_cpus = rayon::current_num_threads();
-                            let chunk_size = (vecs.len() / num_cpus).max(100).min(200);
+                    let mut slots: Vec<Option<Result<String, JsonToolsError>>> =
+                        (0..vecs.len()).map(|_| None).collect();
 
-                            // Process chunks in parallel, then flatten results
-                            let chunk_results: Result<Vec<Vec<String>>, _> = vecs
-                                .par_chunks(chunk_size)
-                                .enumerate()
-                                .map(|(chunk_idx, chunk)| {
-                                    let base_index = chunk_idx * chunk_size;
-                                    chunk.iter().enumerate()
-                                        .map(|(item_idx, json_cow)| {
-                                            processor(json_cow.as_ref(), config)
-                                                .map_err(|e| JsonToolsError::batch_processing_error(base_index + item_idx, e))
-                                        })
-                                        .collect()
-                                })
-                                .collect();
-
-                            // Flatten the results
-                            let results: Vec<String> = chunk_results?.into_iter().flatten().collect();
-                            return Ok(JsonOutput::Multiple(results));
-                        } else {
-                            // For smaller batches, use simple par_iter for maximum parallelism
-                            let results: Result<Vec<_>, _> = vecs
-                                .par_iter()
-                                .enumerate()
-                                .map(|(index, json_cow)| {
-                                    processor(json_cow.as_ref(), config)
-                                        .map_err(|e| JsonToolsError::batch_processing_error(index, e))
-                                })
-                                .collect();
-
-                            return Ok(JsonOutput::Multiple(results?));
+                    let proc = &processor;
+                    crossbeam::thread::scope(|s| {
+                        for (chunk_idx, (inputs, outputs)) in vecs
+                            .chunks(chunk_size)
+                            .zip(slots.chunks_mut(chunk_size))
+                            .enumerate()
+                        {
+                            let base = chunk_idx * chunk_size;
+                            s.spawn(move |_| {
+                                for (i, (json_cow, slot)) in
+                                    inputs.iter().zip(outputs.iter_mut()).enumerate()
+                                {
+                                    *slot = Some(proc(json_cow.as_ref(), config).map_err(|e| {
+                                        JsonToolsError::batch_processing_error(base + i, e)
+                                    }));
+                                }
+                            });
                         }
-                    }
+                    })
+                    .expect("batch processing thread panicked");
+
+                    let results: Result<Vec<_>, _> =
+                        slots.into_iter().map(|s| s.unwrap()).collect();
+                    return Ok(JsonOutput::Multiple(results?));
+                }
 
                 // Sequential processing (default or below threshold)
                 let mut results = Vec::with_capacity(vecs.len());
@@ -2110,10 +2090,7 @@ impl JSONTools {
         let config = ProcessingConfig::from_json_tools(self);
         Self::execute_with_processor(input, &config, process_single_json_normal)
     }
-
 }
-
-
 
 /// Handle root-level primitive values and empty containers for unflattening
 #[inline]
@@ -2128,7 +2105,6 @@ fn handle_root_level_primitives_unflatten(
             if !value_replacements.is_empty() {
                 apply_value_replacement_patterns(&mut single_value, value_replacements)?;
             }
-
 
             Ok(Some(json_parser::to_string(&single_value)?))
         }
@@ -2153,8 +2129,8 @@ fn extract_flattened_object(flattened: Value) -> Result<Map<String, Value>, Json
     match flattened {
         Value::Object(obj) => Ok(obj),
         _ => Err(JsonToolsError::invalid_json_structure(
-            "Expected object for unflattening"
-        ))
+            "Expected object for unflattening",
+        )),
     }
 }
 
@@ -2174,18 +2150,22 @@ fn apply_transformations_unflatten(
         // Use optimized version when collision handling is disabled for better performance
         if !config.collision.handle_collisions {
             // Pass ownership to avoid cloning all values
-            processed_obj = apply_key_replacements_for_unflatten(processed_obj, &config.replacements.key_replacements)?;
-        } else {
-            processed_obj = apply_key_replacements_unflatten_with_collisions(
+            processed_obj = apply_key_replacements_for_unflatten(
                 processed_obj,
-                config,
+                &config.replacements.key_replacements,
             )?;
+        } else {
+            processed_obj =
+                apply_key_replacements_unflatten_with_collisions(processed_obj, config)?;
         }
     }
 
     // Apply value replacements
     if config.replacements.has_value_replacements() {
-        apply_value_replacements_for_unflatten(&mut processed_obj, &config.replacements.value_replacements)?;
+        apply_value_replacements_for_unflatten(
+            &mut processed_obj,
+            &config.replacements.value_replacements,
+        )?;
     }
 
     // Apply lowercase conversion if specified
@@ -2195,18 +2175,12 @@ fn apply_transformations_unflatten(
         // If collision handling is enabled but no key replacements were applied,
         // we need to check for collisions after lowercase conversion
         if config.collision.handle_collisions && !config.replacements.has_key_replacements() {
-            processed_obj = handle_key_collisions_for_unflatten(
-                processed_obj,
-                config,
-            );
+            processed_obj = handle_key_collisions_for_unflatten(processed_obj, config);
         }
     } else if config.collision.handle_collisions && !config.replacements.has_key_replacements() {
         // If collision handling is enabled but no transformations were applied,
         // we still need to check for collisions (though this would be rare)
-        processed_obj = handle_key_collisions_for_unflatten(
-            processed_obj,
-            config,
-        );
+        processed_obj = handle_key_collisions_for_unflatten(processed_obj, config);
     }
 
     Ok(processed_obj)
@@ -2258,7 +2232,9 @@ fn process_single_json_for_unflatten(
     }
 
     // Handle root-level primitives and empty containers
-    if let Some(result) = handle_root_level_primitives_unflatten(&flattened, &config.replacements.value_replacements)? {
+    if let Some(result) =
+        handle_root_level_primitives_unflatten(&flattened, &config.replacements.value_replacements)?
+    {
         return Ok(result);
     }
 
@@ -2266,10 +2242,7 @@ fn process_single_json_for_unflatten(
     let flattened_obj = extract_flattened_object(flattened)?;
 
     // Apply key and value transformations
-    let processed_obj = apply_transformations_unflatten(
-        flattened_obj,
-        config,
-    )?;
+    let processed_obj = apply_transformations_unflatten(flattened_obj, config)?;
 
     // Perform the actual unflattening and apply filtering
     // Pass ownership to avoid cloning values during unflatten
@@ -2316,14 +2289,57 @@ fn handle_root_level_primitives_flatten(
     }
 }
 
-/// Initialize flattened HashMap with optimized capacity
+/// One-level-deep O(1) peek to estimate a value's leaf count.
+/// Used for capacity pre-allocation without traversing the full tree.
 #[inline]
-fn initialize_flattened_map(value: &Value) -> FlatMap {
-    let estimated_size = estimate_flattened_size(value);
-    let optimal_capacity = calculate_optimal_capacity(estimated_size);
+fn quick_leaf_estimate(v: &Value) -> usize {
+    match v {
+        Value::Object(m) if m.is_empty() => 1,
+        Value::Object(m) => m.len().max(1),
+        Value::Array(a) => {
+            // Peek at first element only — O(1)
+            let fpv = a
+                .first()
+                .map(|elem| match elem {
+                    Value::Object(m) => m.len().max(1),
+                    _ => 1,
+                })
+                .unwrap_or(1);
+            (a.len() * fpv).max(1)
+        }
+        _ => 1,
+    }
+}
 
-    // Use FxHashMap for better performance with string keys
-    FxHashMap::with_capacity_and_hasher(optimal_capacity, Default::default())
+fn initialize_flattened_map(value: &Value) -> FlatMap {
+    // OPTIMIZATION: O(1) two-level peek instead of the previous O(n) full tree traversal.
+    // Handles both flat wide objects (m.len() is exact) and the common wrapper pattern
+    // {"items": [...N objects...]} where a single top-level key wraps a large array.
+    let capacity = match value {
+        Value::Object(m) if m.is_empty() => 1,
+        Value::Object(m) if m.len() > 10 => {
+            // Wide flat object: top-level key count is close to leaf count.
+            (m.len() * 4).max(16)
+        }
+        Value::Object(m) => {
+            // Few top-level keys (common wrapper pattern) — peek one level deeper.
+            // Sample up to 3 values to estimate average child size (still O(1)).
+            let avg: usize = m
+                .values()
+                .take(3)
+                .map(quick_leaf_estimate)
+                .sum::<usize>()
+                .max(1);
+            (m.len() * avg).max(16)
+        }
+        Value::Array(a) => {
+            // Peek at first element to estimate fields per element.
+            let fpv = a.first().map(quick_leaf_estimate).unwrap_or(1);
+            (a.len() * fpv).max(16)
+        }
+        _ => 1,
+    };
+    FxHashMap::with_capacity_and_hasher(capacity, Default::default())
 }
 
 /// Perform the core flattening operation
@@ -2341,16 +2357,17 @@ fn perform_flattening(value: &Value, separator: &str, nested_threshold: usize) -
             flatten_value_with_threshold(value, &mut builder, &mut flattened, nested_threshold);
         });
     } else {
-        // Slow path: create builder for custom separator or parallel processing
-        let max_key_length = estimate_max_key_length(value);
-        let builder_capacity = std::cmp::max(max_key_length * 4, 512);
-        let mut builder = FastStringBuilder::with_capacity_and_separator(builder_capacity, separator);
+        // Slow path: create builder for custom separator or parallel processing.
+        // OPTIMIZATION: Use a fixed 512-byte capacity instead of calling
+        // estimate_max_key_length() which was an O(n) tree traversal just to size a
+        // String buffer that would grow on demand anyway. FastStringBuilder::push_str
+        // already handles growth via String's amortized doubling.
+        let mut builder = FastStringBuilder::with_capacity_and_separator(512, separator);
         flatten_value_with_threshold(value, &mut builder, &mut flattened, nested_threshold);
     }
 
     flattened
 }
-
 
 /// Apply key transformations including replacements and lowercase conversion for flattening
 #[inline]
@@ -2364,11 +2381,8 @@ fn apply_key_transformations_flatten(
         let key_patterns = convert_tuples_to_patterns(&config.replacements.key_replacements);
 
         // Use the consolidated function that handles both optimized and collision scenarios
-        flattened = apply_key_replacements_with_collision_handling(
-            flattened,
-            &key_patterns,
-            config,
-        )?;
+        flattened =
+            apply_key_replacements_with_collision_handling(flattened, &key_patterns, config)?;
     }
 
     // Apply lowercase conversion to keys if requested
@@ -2377,19 +2391,16 @@ fn apply_key_transformations_flatten(
 
         // If collision handling is enabled but no key replacements were applied,
         // we need to check for collisions after lowercase conversion
-        if config.collision.has_collision_handling() && !config.replacements.has_key_replacements() {
-            flattened = handle_key_collisions(
-                flattened,
-                config.collision.handle_collisions,
-            );
+        if config.collision.has_collision_handling() && !config.replacements.has_key_replacements()
+        {
+            flattened = handle_key_collisions(flattened, config.collision.handle_collisions);
         }
-    } else if config.collision.has_collision_handling() && !config.replacements.has_key_replacements() {
+    } else if config.collision.has_collision_handling()
+        && !config.replacements.has_key_replacements()
+    {
         // If collision handling is enabled but no transformations were applied,
         // we still need to check for collisions (though this would be rare)
-        flattened = handle_key_collisions(
-            flattened,
-            config.collision.handle_collisions,
-        );
+        flattened = handle_key_collisions(flattened, config.collision.handle_collisions);
     }
 
     Ok(flattened)
@@ -2411,10 +2422,7 @@ fn apply_value_replacements_flatten(
 
 /// Apply filtering to flattened data after replacements
 #[inline]
-fn apply_filtering_flatten(
-    flattened: &mut FlatMap,
-    config: &ProcessingConfig,
-) {
+fn apply_filtering_flatten(flattened: &mut FlatMap, config: &ProcessingConfig) {
     if !config.filtering.has_any_filter() {
         return;
     }
@@ -2474,15 +2482,17 @@ fn apply_key_replacement_patterns(
         // Try to compile as regex first
         match get_cached_regex(pattern) {
             Ok(regex) => {
-                // Successfully compiled as regex - use regex replacement
-                if regex.is_match(&new_key) {
-                    new_key = Cow::Owned(regex.replace_all(&new_key, replacement).into_owned());
+                // Use replace_all's Cow return to detect matches without a separate is_match()
+                // scan — Cow::Owned means replacement happened, Cow::Borrowed means no match.
+                if let Cow::Owned(s) = regex.replace_all(&new_key, replacement.as_str()) {
+                    new_key = Cow::Owned(s);
                     changed = true;
                 }
             }
             Err(_) => {
                 // Failed to compile as regex - fall back to literal replacement
-                if new_key.contains(pattern) {
+                // Use SIMD-accelerated memmem::find instead of str::contains
+                if memmem::find(new_key.as_bytes(), pattern.as_bytes()).is_some() {
                     new_key = Cow::Owned(new_key.replace(pattern, replacement));
                     changed = true;
                 }
@@ -2517,15 +2527,17 @@ fn apply_value_replacement_patterns(
             // Try to compile as regex first
             match get_cached_regex(pattern) {
                 Ok(regex) => {
-                    // Successfully compiled as regex - use regex replacement
-                    if regex.is_match(&current_value) {
-                        current_value = Cow::Owned(regex.replace_all(&current_value, replacement).into_owned());
+                    // Use replace_all's Cow return to detect matches without a separate is_match()
+                    // scan — Cow::Owned means replacement happened, Cow::Borrowed means no match.
+                    if let Cow::Owned(s) = regex.replace_all(&current_value, replacement.as_str()) {
+                        current_value = Cow::Owned(s);
                         changed = true;
                     }
                 }
                 Err(_) => {
                     // Failed to compile as regex - fall back to literal replacement
-                    if current_value.contains(pattern) {
+                    // Use SIMD-accelerated memmem::find instead of str::contains
+                    if memmem::find(current_value.as_bytes(), pattern.as_bytes()).is_some() {
                         current_value = Cow::Owned(current_value.replace(pattern, replacement));
                         changed = true;
                     }
@@ -2549,13 +2561,13 @@ where
     V: Clone,
 {
     // Pre-allocate with estimated capacity for better performance
-    let mut key_groups: FxHashMap<K, Vec<V>> = FxHashMap::with_capacity_and_hasher(64, Default::default());
+    let mut key_groups: FxHashMap<K, Vec<V>> =
+        FxHashMap::with_capacity_and_hasher(64, Default::default());
     for (key, value) in items {
         key_groups.entry(key).or_default().push(value);
     }
     key_groups
 }
-
 
 /// Apply collision handling strategy by collecting values into arrays
 #[inline]
@@ -2565,15 +2577,18 @@ fn apply_collision_handling<K>(
     filter_config: Option<&FilteringConfig>,
 ) -> Option<(K, Value)> {
     let filtered_values: Vec<Value> = if let Some(config) = filter_config {
-        values.into_iter().filter(|value| {
-            should_include_value(
-                value,
-                config.remove_empty_strings,
-                config.remove_nulls,
-                config.remove_empty_objects,
-                config.remove_empty_arrays,
-            )
-        }).collect()
+        values
+            .into_iter()
+            .filter(|value| {
+                should_include_value(
+                    value,
+                    config.remove_empty_strings,
+                    config.remove_nulls,
+                    config.remove_empty_objects,
+                    config.remove_empty_arrays,
+                )
+            })
+            .collect()
     } else {
         values
     };
@@ -2591,10 +2606,7 @@ fn apply_collision_handling<K>(
 
 /// Core flattening logic for a single JSON string
 #[inline]
-fn process_single_json(
-    json: &str,
-    config: &ProcessingConfig,
-) -> Result<String, JsonToolsError> {
+fn process_single_json(json: &str, config: &ProcessingConfig) -> Result<String, JsonToolsError> {
     // Parse JSON using optimized SIMD parsing
     let mut value = parse_json(json)?;
 
@@ -2604,12 +2616,15 @@ fn process_single_json(
     }
 
     // Handle root-level primitives and empty containers
-    if let Some(result) = handle_root_level_primitives_flatten(&value, Some(&config.replacements.value_replacements))? {
+    if let Some(result) =
+        handle_root_level_primitives_flatten(&value, Some(&config.replacements.value_replacements))?
+    {
         return Ok(result);
     }
 
     // Perform the core flattening operation
-    let mut flattened = perform_flattening(&value, &config.separator, config.nested_parallel_threshold);
+    let mut flattened =
+        perform_flattening(&value, &config.separator, config.nested_parallel_threshold);
 
     // Apply key transformations (replacements and lowercase conversion)
     flattened = apply_key_transformations_flatten(flattened, config)?;
@@ -2646,9 +2661,9 @@ fn apply_lowercase_keys(flattened: FlatMap) -> FlatMap {
     // TIER 6→2 OPTIMIZATION: Early-exit if all keys are already lowercase
     // Avoids expensive HashMap allocation + all value moves when no transformation needed
     // This is critical because most JSON keys are already lowercase in practice
-    let needs_lowercasing = flattened.keys().any(|key| {
-        key.as_bytes().iter().any(|&b| matches!(b, b'A'..=b'Z'))
-    });
+    let needs_lowercasing = flattened
+        .keys()
+        .any(|key| key.as_bytes().iter().any(|b| b.is_ascii_uppercase()));
 
     // Fast path: All keys already lowercase, return original map
     if !needs_lowercasing {
@@ -2691,134 +2706,6 @@ fn apply_lowercase_keys(flattened: FlatMap) -> FlatMap {
     result
 }
 
-/// Estimates the flattened size to pre-allocate HashMap capacity
-/// Improved algorithm that considers nesting depth and provides more accurate estimates
-fn estimate_flattened_size(value: &Value) -> usize {
-    estimate_flattened_size_with_depth(value, 0)
-}
-
-/// Internal function that tracks depth for more accurate capacity estimation
-/// OPTIMIZATION: Uses 3-point sampling for very large objects to reduce overhead
-fn estimate_flattened_size_with_depth(value: &Value, depth: usize) -> usize {
-    match value {
-        Value::Object(obj) => {
-            if obj.is_empty() {
-                1
-            } else if obj.len() <= 100 {
-                // Small objects: full counting
-                let depth_multiplier = if depth > 3 { 1.2 } else { 1.0 };
-                let base_size: usize = obj.iter()
-                    .map(|(_, v)| estimate_flattened_size_with_depth(v, depth + 1))
-                    .sum();
-                (base_size as f64 * depth_multiplier).ceil() as usize
-            } else {
-                // OPTIMIZATION: Large objects - use 3-point sampling (first, middle, last)
-                // This avoids traversing thousands of similar entries
-                let sample_size = 50; // Sample 50 items total
-                let first_chunk = sample_size / 2;  // 25 from start
-                let middle_chunk = sample_size / 4; // 12 from middle
-                let last_chunk = sample_size / 4;   // 13 from end
-
-                let mut total_sampled = 0;
-                let mut samples_counted = 0;
-
-                // Sample first chunk
-                for (_, val) in obj.iter().take(first_chunk) {
-                    total_sampled += estimate_flattened_size_with_depth(val, depth + 1);
-                    samples_counted += 1;
-                }
-
-                // Sample middle chunk
-                let middle_start = obj.len() / 2;
-                for (_, val) in obj.iter().skip(middle_start).take(middle_chunk) {
-                    total_sampled += estimate_flattened_size_with_depth(val, depth + 1);
-                    samples_counted += 1;
-                }
-
-                // TIER 6→3 OPTIMIZATION: Sample last chunk without Vec allocation
-                // Calculate skip position to avoid collecting entire object into Vec
-                // Saves 50K-100K cycles for large objects (Tier 6 allocation → Tier 3 iteration)
-                let last_start = if obj.len() > last_chunk {
-                    obj.len() - last_chunk
-                } else {
-                    0
-                };
-                for (_, val) in obj.iter().skip(last_start).take(last_chunk) {
-                    total_sampled += estimate_flattened_size_with_depth(val, depth + 1);
-                    samples_counted += 1;
-                }
-
-                // Extrapolate from sample to full size
-                let avg_per_item = if samples_counted > 0 {
-                    total_sampled as f64 / samples_counted as f64
-                } else {
-                    1.0
-                };
-
-                let depth_multiplier = if depth > 3 { 1.2 } else { 1.0 };
-                let estimated = (avg_per_item * obj.len() as f64 * depth_multiplier).ceil() as usize;
-
-                // Add 20% buffer for variance in sampling
-                (estimated as f64 * 1.2).ceil() as usize
-            }
-        }
-        Value::Array(arr) => {
-            if arr.is_empty() {
-                1
-            } else if arr.len() <= 100 {
-                // Small arrays: full counting
-                let depth_multiplier = if depth > 2 { 1.3 } else { 1.1 };
-                let base_size: usize = arr.iter()
-                    .map(|v| estimate_flattened_size_with_depth(v, depth + 1))
-                    .sum();
-                (base_size as f64 * depth_multiplier).ceil() as usize
-            } else {
-                // OPTIMIZATION: Large arrays - use 3-point sampling
-                let sample_size = 50;
-                let first_chunk = sample_size / 2;
-                let middle_chunk = sample_size / 4;
-                let last_chunk = sample_size / 4;
-
-                let mut total_sampled = 0;
-                let mut samples_counted = 0;
-
-                // Sample first chunk
-                for val in arr.iter().take(first_chunk) {
-                    total_sampled += estimate_flattened_size_with_depth(val, depth + 1);
-                    samples_counted += 1;
-                }
-
-                // Sample middle chunk
-                let middle_start = arr.len() / 2;
-                for val in arr.iter().skip(middle_start).take(middle_chunk) {
-                    total_sampled += estimate_flattened_size_with_depth(val, depth + 1);
-                    samples_counted += 1;
-                }
-
-                // Sample last chunk
-                for val in arr.iter().rev().take(last_chunk) {
-                    total_sampled += estimate_flattened_size_with_depth(val, depth + 1);
-                    samples_counted += 1;
-                }
-
-                // Extrapolate from sample
-                let avg_per_item = if samples_counted > 0 {
-                    total_sampled as f64 / samples_counted as f64
-                } else {
-                    1.0
-                };
-
-                let depth_multiplier = if depth > 2 { 1.3 } else { 1.1 };
-                let estimated = (avg_per_item * arr.len() as f64 * depth_multiplier).ceil() as usize;
-
-                // Add 20% buffer for variance
-                (estimated as f64 * 1.2).ceil() as usize
-            }
-        }
-        _ => 1,
-    }
-}
-
 /// Estimates optimal HashMap capacity based on expected size and load factor
 fn calculate_optimal_capacity(estimated_size: usize) -> usize {
     if estimated_size == 0 {
@@ -2839,49 +2726,6 @@ fn calculate_optimal_capacity(estimated_size: usize) -> usize {
     let max_capacity = 65536; // 2^16
     std::cmp::min(next_power_of_2, max_capacity)
 }
-
-/// Estimates the maximum key length for string pre-allocation
-fn estimate_max_key_length(value: &Value) -> usize {
-    fn estimate_depth_and_width(value: &Value, current_depth: usize) -> (usize, usize) {
-        match value {
-            Value::Object(obj) => {
-                if obj.is_empty() {
-                    (current_depth, 0)
-                } else {
-                    let max_key_len = obj.keys().map(|k| k.len()).max().unwrap_or(0);
-                    let (max_child_depth, max_child_width) = obj
-                        .values()
-                        .map(|v| estimate_depth_and_width(v, current_depth + 1))
-                        .fold((current_depth, max_key_len), |(max_d, max_w), (d, w)| {
-                            (max_d.max(d), max_w.max(w))
-                        });
-                    (max_child_depth, max_child_width)
-                }
-            }
-            Value::Array(arr) => {
-                if arr.is_empty() {
-                    (current_depth, 0)
-                } else {
-                    let max_index_len = (arr.len() - 1).to_string().len();
-                    let (max_child_depth, max_child_width) = arr
-                        .iter()
-                        .map(|v| estimate_depth_and_width(v, current_depth + 1))
-                        .fold((current_depth, max_index_len), |(max_d, max_w), (d, w)| {
-                            (max_d.max(d), max_w.max(w))
-                        });
-                    (max_child_depth, max_child_width)
-                }
-            }
-            _ => (current_depth, 0),
-        }
-    }
-
-    let (max_depth, max_width) = estimate_depth_and_width(value, 0);
-    // Estimate: max_depth * (max_width + 1 for dot) + some buffer
-    max_depth * (max_width + 1) + 50
-}
-
-
 
 // ================================================================================================
 // MODULE: Core Processing Functions - Normal (No Flatten/Unflatten) Operations
@@ -2908,7 +2752,10 @@ fn process_single_json_normal(
     }
 
     // Apply key transformations (key replacements and lowercase), with collision handling
-    if config.replacements.has_key_replacements() || config.lowercase_keys || config.collision.has_collision_handling() {
+    if config.replacements.has_key_replacements()
+        || config.lowercase_keys
+        || config.collision.has_collision_handling()
+    {
         value = apply_key_transformations_normal(value, config)?;
     }
 
@@ -2928,7 +2775,10 @@ fn process_single_json_normal(
 }
 
 /// Recursively apply value replacements to all string values
-fn apply_value_replacements_recursive(value: &mut Value, patterns: &[(String, String)]) -> Result<(), JsonToolsError> {
+fn apply_value_replacements_recursive(
+    value: &mut Value,
+    patterns: &[(String, String)],
+) -> Result<(), JsonToolsError> {
     match value {
         Value::Object(map) => {
             for v in map.values_mut() {
@@ -2949,7 +2799,10 @@ fn apply_value_replacements_recursive(value: &mut Value, patterns: &[(String, St
 }
 
 /// Apply key replacements and lowercase to all object keys recursively, with collision handling
-fn apply_key_transformations_normal(value: Value, config: &ProcessingConfig) -> Result<Value, JsonToolsError> {
+fn apply_key_transformations_normal(
+    value: Value,
+    config: &ProcessingConfig,
+) -> Result<Value, JsonToolsError> {
     match value {
         Value::Object(map) => {
             // Transform this level's keys first
@@ -2960,13 +2813,23 @@ fn apply_key_transformations_normal(value: Value, config: &ProcessingConfig) -> 
 
                 // Apply key replacement patterns
                 let new_key: String = if config.replacements.has_key_replacements() {
-                    if let Some(repl) = apply_key_replacement_patterns(&key, &config.replacements.key_replacements)? {
+                    if let Some(repl) =
+                        apply_key_replacement_patterns(&key, &config.replacements.key_replacements)?
+                    {
                         repl
-                    } else { key }
-                } else { key };
+                    } else {
+                        key
+                    }
+                } else {
+                    key
+                };
 
                 // Apply lowercase if needed
-                let final_key = if config.lowercase_keys { new_key.to_lowercase() } else { new_key };
+                let final_key = if config.lowercase_keys {
+                    new_key.to_lowercase()
+                } else {
+                    new_key
+                };
 
                 // Insert; we'll handle collisions later
                 transformed.insert(final_key, v);
@@ -3002,7 +2865,7 @@ fn apply_value_replacements(
 ) -> Result<(), JsonToolsError> {
     if !patterns.len().is_multiple_of(2) {
         return Err(JsonToolsError::invalid_replacement_pattern(
-            "Value replacement patterns must be provided in pairs (pattern, replacement)"
+            "Value replacement patterns must be provided in pairs (pattern, replacement)",
         ));
     }
 
@@ -3031,11 +2894,8 @@ fn apply_value_replacements(
 
                 if let Some(regex) = compiled_regex {
                     if regex.is_match(&new_value) {
-                        new_value = Cow::Owned(
-                            regex
-                                .replace_all(&new_value, *replacement)
-                                .to_string(),
-                        );
+                        new_value =
+                            Cow::Owned(regex.replace_all(&new_value, *replacement).to_string());
                         changed = true;
                     }
                 } else if new_value.contains(pattern) {
@@ -3059,16 +2919,12 @@ fn apply_value_replacements(
 /// The intermediate HashMap<&str, &Value> allocation is removed (saves ~500 cycles for large maps)
 /// Note: This works because both Arc<str> and FxHashMap implement Serialize
 #[inline]
-fn serialize_flattened(
-    flattened: &FlatMap,
-) -> Result<String, json_parser::JsonError> {
+fn serialize_flattened(flattened: &FlatMap) -> Result<String, json_parser::JsonError> {
     // Direct serialization - no intermediate HashMap needed
     // Arc<str> implements Serialize via Deref to str
     // FxHashMap implements Serialize just like std HashMap
     json_parser::to_string(flattened)
 }
-
-
 
 // ================================================================================================
 // MODULE: Performance Utilities and Optimized Data Structures
@@ -3077,10 +2933,10 @@ fn serialize_flattened(
 /// Cached separator information for operations with Cow optimization
 #[derive(Clone)]
 struct SeparatorCache {
-    separator: Cow<'static, str>,    // Cow for efficient memory usage
-    is_single_char: bool,            // True if separator is a single character
-    single_char: Option<char>,       // The character if single-char separator
-    length: usize,                   // Pre-computed length
+    separator: Cow<'static, str>, // Cow for efficient memory usage
+    is_single_char: bool,         // True if separator is a single character
+    single_char: Option<char>,    // The character if single-char separator
+    length: usize,                // Pre-computed length
 }
 
 impl SeparatorCache {
@@ -3094,6 +2950,12 @@ impl SeparatorCache {
             "/" => Cow::Borrowed("/"),
             "-" => Cow::Borrowed("-"),
             "|" => Cow::Borrowed("|"),
+            "->" => Cow::Borrowed("->"),
+            "__" => Cow::Borrowed("__"),
+            "#" => Cow::Borrowed("#"),
+            "~" => Cow::Borrowed("~"),
+            "@" => Cow::Borrowed("@"),
+            "%" => Cow::Borrowed("%"),
             _ => Cow::Owned(separator.to_string()),
         };
 
@@ -3183,19 +3045,19 @@ impl FastStringBuilder {
         }
     }
 
-    #[inline(always)]  // Optimization #13: Force inline for hot path
+    #[inline(always)] // Optimization #13: Force inline for hot path
     fn push_level(&mut self) {
         self.stack.push(self.buffer.len());
     }
 
-    #[inline(always)]  // Optimization #13: Force inline for hot path
+    #[inline(always)] // Optimization #13: Force inline for hot path
     fn pop_level(&mut self) {
         if let Some(len) = self.stack.pop() {
             self.buffer.truncate(len);
         }
     }
 
-    #[inline(always)]  // Optimization #13: Force inline for hot path
+    #[inline(always)] // Optimization #13: Force inline for hot path
     fn append_key(&mut self, key: &str, needs_separator: bool) {
         // OPTIMIZATION: In debug mode, validate key doesn't contain separator using SIMD
         debug_assert!(
@@ -3222,45 +3084,21 @@ impl FastStringBuilder {
 
     #[inline]
     fn append_index(&mut self, index: usize, needs_separator: bool) {
-        // Pre-calculate index string length for capacity optimization
-        let index_len = if index < 10 {
-            1
-        } else if index < 100 {
-            2
-        } else if index < 1000 {
-            3
-        } else if index < 10000 {
-            4
-        } else {
-            // For very large indices, calculate the length
-            (index as f64).log10().floor() as usize + 1
-        };
+        // OPTIMIZATION: itoa::Buffer is stack-allocated (no heap), formats integers
+        // ~3-5 cycles vs ~30+ for write!()/fmt. Also eliminates the f64 log10 used
+        // previously for digit-count estimation and the write! fallback for index >= 100.
+        let mut buf = itoa::Buffer::new();
+        let s = buf.format(index);
 
         if needs_separator {
             self.separator_cache
-                .reserve_capacity_for_append(&mut self.buffer, index_len);
+                .reserve_capacity_for_append(&mut self.buffer, s.len());
             self.separator_cache.append_to_buffer(&mut self.buffer);
-        } else {
-            // Reserve capacity for just the index
-            if self.buffer.capacity() < self.buffer.len() + index_len {
-                self.buffer.reserve(index_len);
-            }
+        } else if self.buffer.capacity() < self.buffer.len() + s.len() {
+            self.buffer.reserve(s.len());
         }
 
-        // Ultra-fast path for single digits
-        if index < 10 {
-            self.buffer.push(char::from(b'0' + index as u8));
-        } else if index < 100 {
-            // Fast path for two digits
-            let tens = index / 10;
-            let ones = index % 10;
-            self.buffer.push(char::from(b'0' + tens as u8));
-            self.buffer.push(char::from(b'0' + ones as u8));
-        } else {
-            // Fallback for larger numbers
-            use std::fmt::Write;
-            write!(self.buffer, "{}", index).unwrap();
-        }
+        self.buffer.push_str(s);
     }
 
     #[inline]
@@ -3302,23 +3140,7 @@ fn optimize_value_clone(value: &Value) -> Value {
         Value::Bool(b) => Value::Bool(*b),
         Value::Null => Value::Null,
 
-        // For strings, we could optimize further with string interning or Arc for large strings
-        // However, this requires architectural changes to serde_json::Value
-        // For now, we clone but track size for potential future optimization
-        Value::String(s) => {
-            // Small strings (<= 128 bytes) - cloning is fast enough
-            // Large strings (> 128 bytes) - could benefit from Arc/interning in the future
-            // Note: This is a marker for future optimization if profiling shows it's needed
-            if s.len() > 128 {
-                // Could use Arc<str> in a custom value type, but serde_json doesn't support it
-                // For now, clone as normal
-                value.clone()
-            } else {
-                value.clone()
-            }
-        },
-
-        // Numbers need clone due to serde_json::Number not being Copy
+        // Numbers and strings need clone; serde_json::Value doesn't support Arc<str> internally
         _ => value.clone(),
     }
 }
@@ -3340,53 +3162,63 @@ fn flatten_value_with_threshold(
                 result.insert(key, Value::Object(Map::new()));
             } else if obj.len() > nested_threshold {
                 // PARALLEL PATH: Large object - process keys in parallel
-                use rayon::prelude::*;
-
-                // TIER 6→3 OPTIMIZATION: Use Arc<str> instead of String for prefix
-                // Arc::clone is O(1) (Tier 2-3) vs String clone which is O(n) (Tier 6)
-                // Saves 100-200 cycles per large object
                 let prefix: Arc<str> = builder.as_str().into();
-                // TIER 6→2 OPTIMIZATION: Borrow separator instead of cloning
-                // &str is Copy, avoids Cow clone allocation (50-100 cycles saved)
                 let separator = &*builder.separator_cache.separator;
                 let needs_dot = !builder.is_empty();
 
-                // Convert to Vec for parallel iteration (serde_json::Map doesn't implement ParallelIterator)
+                // serde_json::Map doesn't implement Send, collect keys/vals into a Vec first
                 let entries: Vec<_> = obj.iter().collect();
+                let n_threads = std::thread::available_parallelism()
+                    .map(|p| p.get())
+                    .unwrap_or(4)
+                    .min(entries.len());
+                let chunk_size = entries.len().div_ceil(n_threads);
 
-                // OPTIMIZATION: Use reduce() to avoid intermediate Vec allocation
-                // This eliminates the temporary Vec<FxHashMap> and merges results directly
-                let merged_result = entries
-                    .par_iter()
-                    .map(|(key, val)| {
-                        // Create a new builder for this branch
-                        let mut branch_builder = FastStringBuilder::with_capacity_and_separator(
-                            prefix.len() + key.len() + 10,
-                            &separator,
-                        );
-
-                        // Build the prefix for this branch
-                        if !prefix.is_empty() {
-                            branch_builder.buffer.push_str(&prefix);
-                        }
-                        branch_builder.push_level();
-                        branch_builder.append_key(key, needs_dot);
-
-                        // Recursively flatten this branch
-                        let mut branch_result = FxHashMap::with_capacity_and_hasher(16, Default::default());
-                        flatten_value_with_threshold(val, &mut branch_builder, &mut branch_result, nested_threshold);
-                        branch_result
-                    })
-                    .reduce(
-                        || FxHashMap::with_capacity_and_hasher(128, Default::default()),
-                        |mut acc, partial| {
-                            acc.extend(partial);
-                            acc
-                        }
-                    );
-
-                // Merge the parallel result into the main result
-                result.extend(merged_result);
+                // Each thread flattens its chunk directly into a single partial map;
+                // main thread merges in order. Avoids per-entry HashMap allocation+merge.
+                crossbeam::thread::scope(|s| {
+                    let handles: Vec<_> = entries
+                        .chunks(chunk_size)
+                        .map(|chunk| {
+                            let prefix = Arc::clone(&prefix);
+                            s.spawn(move |_| {
+                                let chunk_estimate: usize = chunk
+                                    .iter()
+                                    .map(|(_, v)| quick_leaf_estimate(v))
+                                    .sum::<usize>()
+                                    .max(4);
+                                let mut partial: FxHashMap<Arc<str>, Value> =
+                                    FxHashMap::with_capacity_and_hasher(
+                                        chunk_estimate,
+                                        Default::default(),
+                                    );
+                                for (key, val) in chunk {
+                                    let mut branch_builder =
+                                        FastStringBuilder::with_capacity_and_separator(
+                                            prefix.len() + key.len() + 10,
+                                            separator,
+                                        );
+                                    if !prefix.is_empty() {
+                                        branch_builder.buffer.push_str(&prefix);
+                                    }
+                                    branch_builder.push_level();
+                                    branch_builder.append_key(key, needs_dot);
+                                    flatten_value_with_threshold(
+                                        val,
+                                        &mut branch_builder,
+                                        &mut partial,
+                                        nested_threshold,
+                                    );
+                                }
+                                partial
+                            })
+                        })
+                        .collect();
+                    for handle in handles {
+                        result.extend(handle.join().expect("flatten thread panicked"));
+                    }
+                })
+                .expect("flatten thread panicked");
             } else {
                 // SEQUENTIAL PATH: Small object
                 let needs_dot = !builder.is_empty();
@@ -3404,51 +3236,61 @@ fn flatten_value_with_threshold(
                 result.insert(key, Value::Array(vec![]));
             } else if arr.len() > nested_threshold {
                 // PARALLEL PATH: Large array - process indices in parallel
-                use rayon::prelude::*;
-
-                // TIER 6→3 OPTIMIZATION: Use Arc<str> instead of String for prefix
-                // Arc::clone is O(1) (Tier 2-3) vs String clone which is O(n) (Tier 6)
-                // Saves 100-200 cycles per large array
                 let prefix: Arc<str> = builder.as_str().into();
-                // TIER 6→2 OPTIMIZATION: Borrow separator instead of cloning
-                // &str is Copy, avoids Cow clone allocation (50-100 cycles saved)
                 let separator = &*builder.separator_cache.separator;
                 let needs_dot = !builder.is_empty();
 
-                // OPTIMIZATION: Use reduce() to avoid intermediate Vec allocation
-                // This eliminates the temporary Vec<FxHashMap> and merges results directly
-                let merged_result = arr
-                    .par_iter()
-                    .enumerate()
-                    .map(|(index, val)| {
-                        // Create a new builder for this branch
-                        let mut branch_builder = FastStringBuilder::with_capacity_and_separator(
-                            prefix.len() + 10,
-                            &separator,
-                        );
+                let n_threads = std::thread::available_parallelism()
+                    .map(|p| p.get())
+                    .unwrap_or(4)
+                    .min(arr.len());
+                let chunk_size = arr.len().div_ceil(n_threads);
 
-                        // Build the prefix for this branch
-                        if !prefix.is_empty() {
-                            branch_builder.buffer.push_str(&prefix);
-                        }
-                        branch_builder.push_level();
-                        branch_builder.append_index(index, needs_dot);
-
-                        // Recursively flatten this branch
-                        let mut branch_result = FxHashMap::with_capacity_and_hasher(16, Default::default());
-                        flatten_value_with_threshold(val, &mut branch_builder, &mut branch_result, nested_threshold);
-                        branch_result
-                    })
-                    .reduce(
-                        || FxHashMap::with_capacity_and_hasher(128, Default::default()),
-                        |mut acc, partial| {
-                            acc.extend(partial);
-                            acc
-                        }
-                    );
-
-                // Merge the parallel result into the main result
-                result.extend(merged_result);
+                // Each thread flattens its contiguous index range directly into a single
+                // partial map. Avoids per-entry HashMap allocation+merge.
+                crossbeam::thread::scope(|s| {
+                    let handles: Vec<_> = arr
+                        .chunks(chunk_size)
+                        .enumerate()
+                        .map(|(chunk_idx, chunk)| {
+                            let prefix = Arc::clone(&prefix);
+                            let base_index = chunk_idx * chunk_size;
+                            s.spawn(move |_| {
+                                let chunk_estimate: usize =
+                                    chunk.iter().map(quick_leaf_estimate).sum::<usize>().max(4);
+                                let mut partial: FxHashMap<Arc<str>, Value> =
+                                    FxHashMap::with_capacity_and_hasher(
+                                        chunk_estimate,
+                                        Default::default(),
+                                    );
+                                for (i, val) in chunk.iter().enumerate() {
+                                    let index = base_index + i;
+                                    let mut branch_builder =
+                                        FastStringBuilder::with_capacity_and_separator(
+                                            prefix.len() + 10,
+                                            separator,
+                                        );
+                                    if !prefix.is_empty() {
+                                        branch_builder.buffer.push_str(&prefix);
+                                    }
+                                    branch_builder.push_level();
+                                    branch_builder.append_index(index, needs_dot);
+                                    flatten_value_with_threshold(
+                                        val,
+                                        &mut branch_builder,
+                                        &mut partial,
+                                        nested_threshold,
+                                    );
+                                }
+                                partial
+                            })
+                        })
+                        .collect();
+                    for handle in handles {
+                        result.extend(handle.join().expect("flatten thread panicked"));
+                    }
+                })
+                .expect("flatten thread panicked");
             } else {
                 // SEQUENTIAL PATH: Small array
                 let needs_dot = !builder.is_empty();
@@ -3525,7 +3367,7 @@ fn apply_lowercase_keys_for_unflatten(obj: Map<String, Value>) -> Map<String, Va
         let lowercase_key = to_lowercase(&key);
 
         let final_key = match lowercase_key {
-            Cow::Borrowed(_) => key, // Key was already lowercase, reuse original
+            Cow::Borrowed(_) => key,    // Key was already lowercase, reuse original
             Cow::Owned(lower) => lower, // Key was converted to lowercase
         };
 
@@ -3586,26 +3428,46 @@ fn try_parse_number(trimmed: &str) -> Option<f64> {
         }
     }
 
-    // Handle basis points: 25bp, 25bps, 25 bp, 25 bps
-    let bp_result = try_parse_basis_points(trimmed);
-    if bp_result.is_some() {
-        return bp_result;
+    // Byte-level discriminators: skip parsers that cannot possibly match,
+    // avoiding function call overhead for the common case (plain numbers).
+    let bytes = trimmed.as_bytes();
+    let last = bytes[bytes.len() - 1];
+
+    // Handle basis points: 25bp, 25bps, 25 bp, 25 bps — only if ends with 'p' or 's'
+    if matches!(last, b'p' | b's') {
+        if let result @ Some(_) = try_parse_basis_points(trimmed) {
+            return result;
+        }
     }
 
-    // Handle suffixed numbers: 1K, 2.5M, 3B, 1T (case-insensitive)
-    let suffix_result = try_parse_suffixed_number(trimmed);
-    if suffix_result.is_some() {
-        return suffix_result;
+    // Handle suffixed numbers: 1K, 2.5M, 3B, 1T — only if last byte is K/M/B/T
+    if matches!(last, b'K' | b'k' | b'M' | b'm' | b'B' | b'b' | b'T' | b't') {
+        if let result @ Some(_) = try_parse_suffixed_number(trimmed) {
+            return result;
+        }
     }
 
-    // Handle fractions: 1/2, 3/4, 2 1/2 (mixed fractions)
-    let fraction_result = try_parse_fraction(trimmed);
-    if fraction_result.is_some() {
-        return fraction_result;
+    // Handle fractions: 1/2, 3/4, 2 1/2 — only if '/' present (SIMD via memchr)
+    if memchr(b'/', bytes).is_some() {
+        if let result @ Some(_) = try_parse_fraction(trimmed) {
+            return result;
+        }
     }
 
-    // Handle hex, binary, octal numbers
-    let radix_result = try_parse_radix_number(trimmed);
+    // Handle hex, binary, octal — only if starts with 0x/0b/0o (or -0x etc.)
+    let check = if bytes[0] == b'-' && bytes.len() > 1 {
+        &bytes[1..]
+    } else {
+        bytes
+    };
+    let radix_result = if check.len() >= 2
+        && check[0] == b'0'
+        && matches!(check[1], b'x' | b'X' | b'b' | b'B' | b'o' | b'O')
+    {
+        try_parse_radix_number(trimmed)
+    } else {
+        None
+    };
     if radix_result.is_some() {
         return radix_result;
     }
@@ -3730,13 +3592,22 @@ fn try_parse_radix_number(s: &str) -> Option<f64> {
         (false, s)
     };
 
-    let result = if let Some(hex) = num_str.strip_prefix("0x").or_else(|| num_str.strip_prefix("0X")) {
+    let result = if let Some(hex) = num_str
+        .strip_prefix("0x")
+        .or_else(|| num_str.strip_prefix("0X"))
+    {
         // Hexadecimal: 0x1A2B, 0xFF
         i64::from_str_radix(hex, 16).ok().map(|n| n as f64)
-    } else if let Some(bin) = num_str.strip_prefix("0b").or_else(|| num_str.strip_prefix("0B")) {
+    } else if let Some(bin) = num_str
+        .strip_prefix("0b")
+        .or_else(|| num_str.strip_prefix("0B"))
+    {
         // Binary: 0b1010, 0B1111
         i64::from_str_radix(bin, 2).ok().map(|n| n as f64)
-    } else if let Some(oct) = num_str.strip_prefix("0o").or_else(|| num_str.strip_prefix("0O")) {
+    } else if let Some(oct) = num_str
+        .strip_prefix("0o")
+        .or_else(|| num_str.strip_prefix("0O"))
+    {
         // Octal: 0o777, 0O755
         i64::from_str_radix(oct, 8).ok().map(|n| n as f64)
     } else {
@@ -3866,8 +3737,12 @@ fn try_parse_compact_datetime(s: &str) -> Option<String> {
 
         let iso_str = format!(
             "{}-{}-{}T{}:{}:{}{}",
-            &date_part[0..4], &date_part[4..6], &date_part[6..8],
-            &time_part[0..2], &time_part[2..4], &time_part[4..6],
+            &date_part[0..4],
+            &date_part[4..6],
+            &date_part[6..8],
+            &time_part[0..2],
+            &time_part[2..4],
+            &time_part[4..6],
             formatted_offset
         );
 
@@ -3927,11 +3802,12 @@ fn try_parse_standard_date(s: &str, sep: u8) -> Option<String> {
 
     // Validate basic structure: YYYY-MM-DD
     if len >= 10
-        && (!bytes[0..4].iter().all(|b| b.is_ascii_digit()) ||
-           !bytes[5..7].iter().all(|b| b.is_ascii_digit()) ||
-           !bytes[8..10].iter().all(|b| b.is_ascii_digit())) {
-            return None;
-        }
+        && (!bytes[0..4].iter().all(|b| b.is_ascii_digit())
+            || !bytes[5..7].iter().all(|b| b.is_ascii_digit())
+            || !bytes[8..10].iter().all(|b| b.is_ascii_digit()))
+    {
+        return None;
+    }
 
     // Date-only (exactly 10 chars)
     if len == 10 {
@@ -3953,7 +3829,9 @@ fn try_parse_standard_date(s: &str, sep: u8) -> Option<String> {
     let normalized = if datetime_sep == b' ' {
         let mut s = normalized.into_owned();
         // Safe because position 10 is single-byte ASCII
-        unsafe { s.as_bytes_mut()[10] = b'T'; }
+        unsafe {
+            s.as_bytes_mut()[10] = b'T';
+        }
         Cow::Owned(s)
     } else {
         normalized
@@ -3975,10 +3853,10 @@ fn try_parse_standard_date(s: &str, sep: u8) -> Option<String> {
 
     // Try naive datetime formats
     let naive_formats = [
-        "%Y-%m-%dT%H:%M:%S%.f",  // With fractional seconds
-        "%Y-%m-%dT%H:%M:%S",     // Standard
-        "%Y-%m-%dT%H:%M",        // Without seconds
-        "%Y-%m-%dT%H",           // Hour only
+        "%Y-%m-%dT%H:%M:%S%.f", // With fractional seconds
+        "%Y-%m-%dT%H:%M:%S",    // Standard
+        "%Y-%m-%dT%H:%M",       // Without seconds
+        "%Y-%m-%dT%H",          // Hour only
     ];
 
     for fmt in &naive_formats {
@@ -4055,10 +3933,8 @@ fn normalize_offset(offset: &str) -> Option<String> {
             Some(format!("{}{}:{}", sign_char, &rest[..2], &rest[2..]))
         }
         // +HH:MM -> already correct
-        5 if rest.as_bytes()[2] == b':' => {
-            Some(offset.to_string())
-        }
-        _ => None
+        5 if rest.as_bytes()[2] == b':' => Some(offset.to_string()),
+        _ => None,
     }
 }
 
@@ -4098,7 +3974,7 @@ fn could_be_date(s: &str) -> bool {
 /// Separators: comma, dot, space, apostrophe, underscore
 /// Optimized with single-pass filtering and comprehensive format detection
 /// OPTIMIZATION: Returns Cow to avoid allocation when number is already clean
-#[inline(always)]  // Optimization #13: Force inline for hot path
+#[inline(always)] // Optimization #13: Force inline for hot path
 fn clean_number_string(s: &str) -> Cow<'_, str> {
     let trimmed = s.trim();
 
@@ -4138,7 +4014,8 @@ fn clean_number_string(s: &str) -> Cow<'_, str> {
         }
     } else {
         trimmed
-    }.trim();
+    }
+    .trim();
 
     // Remove leading plus sign if present
     let working_str = working_str.strip_prefix('+').unwrap_or(working_str).trim();
@@ -4149,7 +4026,8 @@ fn clean_number_string(s: &str) -> Cow<'_, str> {
 
     // Remove multi-character currency prefixes first (R$, A$, C$, AU$, CA$, US$)
     if without_currency.len() > 2 {
-        if let Some(rest) = without_currency.strip_prefix("R$")
+        if let Some(rest) = without_currency
+            .strip_prefix("R$")
             .or_else(|| without_currency.strip_prefix("A$"))
             .or_else(|| without_currency.strip_prefix("C$"))
             .or_else(|| without_currency.strip_prefix("AU$"))
@@ -4173,7 +4051,7 @@ fn clean_number_string(s: &str) -> Cow<'_, str> {
     // Only remove if followed by a space to avoid false positives like "ABC123"
     if without_currency.len() > 4 {
         let first_three = &without_currency[..3];
-        if first_three.chars().all(|c| c.is_ascii_uppercase()) {
+        if first_three.bytes().all(|b| b.is_ascii_uppercase()) {
             let potential_code = &without_currency[3..];
             // Only strip if followed by space (USD 123, EUR 45.67)
             if potential_code.starts_with(' ') {
@@ -4192,55 +4070,51 @@ fn clean_number_string(s: &str) -> Cow<'_, str> {
         .trim();
 
     // Early exit for simple cases (no special characters)
-    if !without_currency.contains(&[',', '.', ' ', '\'', '_'][..]) {
-        return if is_negative {
-            Cow::Owned(format!("-{}", without_currency))
-        } else {
-            Cow::Owned(without_currency.to_string())
-        };
+    // SIMD: 2 SIMD passes (memchr3 + memchr2) are faster than std::str::contains with a char slice
+    {
+        let b = without_currency.as_bytes();
+        if memchr3(b',', b'.', b' ', b).is_none() && memchr2(b'\'', b'_', b).is_none() {
+            return if is_negative {
+                Cow::Owned(format!("-{}", without_currency))
+            } else {
+                Cow::Owned(without_currency.to_string())
+            };
+        }
     }
 
-    // Find positions of commas and dots to determine format
-    let last_comma_pos = without_currency.rfind(',');
-    let last_dot_pos = without_currency.rfind('.');
-    let comma_count = without_currency.matches(',').count();
-    let dot_count = without_currency.matches('.').count();
+    // SIMD byte scan: compute last_comma_pos, last_dot_pos, comma_count, dot_count
+    // memchr_iter uses AVX2/SSE2/NEON to process 32+ bytes per cycle — faster than
+    // a sequential single-pass loop for inputs where SIMD amortizes the call overhead.
+    let bytes = without_currency.as_bytes();
+    let (last_comma_pos, comma_count) =
+        memchr_iter(b',', bytes).fold((None, 0usize), |(_, c), pos| (Some(pos), c + 1));
+    let (last_dot_pos, dot_count) =
+        memchr_iter(b'.', bytes).fold((None, 0usize), |(_, c), pos| (Some(pos), c + 1));
 
     // OPTIMIZATION #20: Use stack-allocated SmallVec buffer for short numbers
-    // Most numbers are under 32 bytes, so this avoids heap allocation entirely
-    let mut buffer: SmallVec<[u8; 32]> = SmallVec::new();
+    // Most numbers are under 64 bytes, so this avoids heap allocation entirely
+    let mut buffer: SmallVec<[u8; 64]> = SmallVec::new();
 
     // Add negative sign if needed
     if is_negative {
         buffer.push(b'-');
     }
 
-    // Helper macro to push ASCII character as byte
-    macro_rules! push_byte {
-        ($ch:expr) => {
-            // Valid number characters are ASCII, safe to cast
-            buffer.push($ch as u8)
-        };
-    }
-
     match (last_comma_pos, last_dot_pos, comma_count, dot_count) {
         // Both comma and dot present
         (Some(comma_pos), Some(dot_pos), _, _) => {
             if dot_pos > comma_pos {
-                // US format: 1,234.56 - keep dot, remove commas
-                for ch in without_currency.chars() {
-                    match ch {
-                        ',' | ' ' | '\'' | '_' => continue,  // Skip thousands separators
-                        _ => push_byte!(ch),
-                    }
-                }
+                // US format: 1,234.56 - keep dot, remove commas and separators
+                // SIMD: find skip bytes with memchr3+memchr, bulk-copy clean segments
+                extend_skipping_4(&mut buffer, bytes, b',', b' ', b'\'', b'_');
             } else {
-                // European format: 1.234,56 - keep comma as decimal, remove dots
-                for ch in without_currency.chars() {
-                    match ch {
-                        '.' | ' ' | '\'' | '_' => continue,  // Skip thousands separators
-                        ',' => buffer.push(b'.'),            // Convert decimal comma to dot
-                        _ => push_byte!(ch),
+                // European format: 1.234,56 - remove dots, then convert commas to dots
+                // Phase 1: copy all except '.', ' ', '\'', '_'  (commas kept)
+                extend_skipping_4(&mut buffer, bytes, b'.', b' ', b'\'', b'_');
+                // Phase 2: convert decimal commas to dots (auto-vectorized by LLVM)
+                for b in buffer.iter_mut() {
+                    if *b == b',' {
+                        *b = b'.';
                     }
                 }
             }
@@ -4248,11 +4122,12 @@ fn clean_number_string(s: &str) -> Cow<'_, str> {
         // Only comma present
         (Some(_), None, 1, 0) => {
             // Single comma - likely decimal separator (European format: 12,34)
-            for ch in without_currency.chars() {
-                match ch {
-                    ',' => buffer.push(b'.'),            // Convert decimal comma to dot
-                    ' ' | '\'' | '_' => continue,       // Skip separators
-                    _ => push_byte!(ch),
+            // Phase 1: copy all except ' ', '\'', '_'  (comma kept)
+            extend_skipping_3(&mut buffer, bytes, b' ', b'\'', b'_');
+            // Phase 2: convert the single decimal comma to a dot
+            for b in buffer.iter_mut() {
+                if *b == b',' {
+                    *b = b'.';
                 }
             }
         }
@@ -4260,11 +4135,13 @@ fn clean_number_string(s: &str) -> Cow<'_, str> {
             // Multiple commas - could be:
             // 1. US format thousands separators: 1,234,567 (3-digit groups)
             // 2. Indian numbering system: 1,00,000 (lakhs) or 1,00,00,000 (crores)
-            let segments: Vec<&str> = without_currency.split(',').collect();
+            let segments: SmallVec<[&str; 8]> = without_currency.split(',').collect();
 
             // Check US format: all segments after first have exactly 3 digits
             let is_us_thousands = segments.len() > 1
-                && segments[1..].iter().all(|seg| seg.len() == 3 && seg.chars().all(|c| c.is_ascii_digit()));
+                && segments[1..]
+                    .iter()
+                    .all(|seg| seg.len() == 3 && seg.bytes().all(|b| b.is_ascii_digit()));
 
             // Check Indian format: first segment 1-3 digits, then 2-digit groups, last 3 digits
             // Examples: 1,00,000 (1 lakh) → [1, 00, 000]
@@ -4276,29 +4153,25 @@ fn clean_number_string(s: &str) -> Cow<'_, str> {
 
                 // Last segment must be 3 digits (or 2 for lakhs like 1,00,000)
                 let last_valid = (last_seg.len() == 3 || last_seg.len() == 2)
-                    && last_seg.chars().all(|c| c.is_ascii_digit());
+                    && last_seg.bytes().all(|b| b.is_ascii_digit());
 
                 // Middle segments (if any) must be 2 digits
-                let middle_valid = middle_segs.iter().all(|seg| {
-                    seg.len() == 2 && seg.chars().all(|c| c.is_ascii_digit())
-                });
+                let middle_valid = middle_segs
+                    .iter()
+                    .all(|seg| seg.len() == 2 && seg.bytes().all(|b| b.is_ascii_digit()));
 
                 // First segment can be 1-3 digits
                 let first_valid = !segments[0].is_empty()
                     && segments[0].len() <= 3
-                    && segments[0].chars().all(|c| c.is_ascii_digit());
+                    && segments[0].bytes().all(|b| b.is_ascii_digit());
 
                 first_valid && middle_valid && last_valid
             };
 
             if is_us_thousands || is_indian_format {
                 // Valid thousands separators - remove commas
-                for ch in without_currency.chars() {
-                    match ch {
-                        ',' | ' ' | '\'' | '_' => continue,   // Skip thousands separators
-                        _ => push_byte!(ch),
-                    }
-                }
+                // SIMD: bulk-copy digit segments between separator positions
+                extend_skipping_4(&mut buffer, bytes, b',', b' ', b'\'', b'_');
             } else {
                 // Invalid format (like "12,34,56") - keep as-is and let it fail to parse
                 return Cow::Owned(without_currency.to_string());
@@ -4309,18 +4182,16 @@ fn clean_number_string(s: &str) -> Cow<'_, str> {
             // Multiple dots - could be thousands separators (European format: 1.234.567)
             // But need to validate the format - dots should be every 3 digits from right
             // Split by dots and check if all segments (except first) have 3 digits
-            let segments: Vec<&str> = without_currency.split('.').collect();
+            let segments: SmallVec<[&str; 8]> = without_currency.split('.').collect();
             let is_valid_thousands = segments.len() > 1
-                && segments[1..].iter().all(|seg| seg.len() == 3 && seg.chars().all(|c| c.is_ascii_digit()));
+                && segments[1..]
+                    .iter()
+                    .all(|seg| seg.len() == 3 && seg.bytes().all(|b| b.is_ascii_digit()));
 
             if is_valid_thousands {
                 // Valid thousands separators - remove dots
-                for ch in without_currency.chars() {
-                    match ch {
-                        '.' | ' ' | '\'' | '_' => continue,   // Skip thousands separators
-                        _ => push_byte!(ch),
-                    }
-                }
+                // SIMD: bulk-copy digit segments between dot positions
+                extend_skipping_4(&mut buffer, bytes, b'.', b' ', b'\'', b'_');
             } else {
                 // Invalid format (like "12.34.56") - keep as-is and let it fail to parse
                 return Cow::Owned(without_currency.to_string());
@@ -4328,12 +4199,8 @@ fn clean_number_string(s: &str) -> Cow<'_, str> {
         }
         // Default case: just remove spaces, apostrophes, and underscores
         _ => {
-            for ch in without_currency.chars() {
-                match ch {
-                    ' ' | '\'' | '_' => continue,         // Skip separators
-                    _ => push_byte!(ch),
-                }
-            }
+            // SIMD: memchr3 finds skip positions, extend_from_slice bulk-copies segments
+            extend_skipping_3(&mut buffer, bytes, b' ', b'\'', b'_');
         }
     }
 
@@ -4409,10 +4276,19 @@ fn f64_to_json_number(num: f64) -> Option<Value> {
 fn is_null_string(s: &str) -> bool {
     matches!(
         s,
-        "null" | "NULL" | "Null" |
-        "nil" | "NIL" | "Nil" |
-        "none" | "NONE" | "None" |
-        "N/A" | "n/a" | "NA" | "na"
+        "null"
+            | "NULL"
+            | "Null"
+            | "nil"
+            | "NIL"
+            | "Nil"
+            | "none"
+            | "NONE"
+            | "None"
+            | "N/A"
+            | "n/a"
+            | "NA"
+            | "na"
     )
 }
 
@@ -4568,7 +4444,8 @@ fn unflatten_object(obj: Map<String, Value>, separator: &str) -> Result<Value, J
 fn analyze_path_types(obj: &Map<String, Value>, separator: &str) -> FxHashMap<String, bool> {
     // Use a more efficient approach with pre-allocated capacity and optimized string operations
     let estimated_paths = obj.len() * 2; // Rough estimate of path count
-    let mut state: FxHashMap<String, u8> = FxHashMap::with_capacity_and_hasher(estimated_paths, Default::default());
+    let mut state: FxHashMap<String, u8> =
+        FxHashMap::with_capacity_and_hasher(estimated_paths, Default::default());
 
     // Pre-compile separator for faster matching
     let sep_bytes = separator.as_bytes();
@@ -4579,7 +4456,8 @@ fn analyze_path_types(obj: &Map<String, Value>, separator: &str) -> FxHashMap<St
     }
 
     // Convert bitmask state to final decision with pre-allocated result
-    let mut result: FxHashMap<String, bool> = FxHashMap::with_capacity_and_hasher(state.len(), Default::default());
+    let mut result: FxHashMap<String, bool> =
+        FxHashMap::with_capacity_and_hasher(state.len(), Default::default());
     for (k, mask) in state.into_iter() {
         let is_array = (mask & 0b10 == 0) && (mask & 0b01 != 0);
         result.insert(k, is_array);
@@ -4589,7 +4467,12 @@ fn analyze_path_types(obj: &Map<String, Value>, separator: &str) -> FxHashMap<St
 
 /// Optimized key path analysis with efficient string operations
 #[inline]
-fn analyze_key_path(key: &str, sep_bytes: &[u8], sep_len: usize, state: &mut FxHashMap<String, u8>) {
+fn analyze_key_path(
+    key: &str,
+    sep_bytes: &[u8],
+    sep_len: usize,
+    state: &mut FxHashMap<String, u8>,
+) {
     let key_bytes = key.as_bytes();
     let mut search_start = 0;
 
@@ -4608,8 +4491,7 @@ fn analyze_key_path(key: &str, sep_bytes: &[u8], sep_len: usize, state: &mut FxH
         // Look ahead to classify child
         let child_start = next_sep + sep_len;
         if child_start < key_bytes.len() {
-            let child_end = find_separator(key_bytes, sep_bytes, child_start)
-                .min(key_bytes.len());
+            let child_end = find_separator(key_bytes, sep_bytes, child_start).min(key_bytes.len());
             let child = &key[child_start..child_end];
 
             // Optimized numeric check
@@ -4618,7 +4500,11 @@ fn analyze_key_path(key: &str, sep_bytes: &[u8], sep_len: usize, state: &mut FxH
             // Update state with efficient entry handling
             match state.get_mut(parent) {
                 Some(entry) => {
-                    if is_numeric { *entry |= 0b01; } else { *entry |= 0b10; }
+                    if is_numeric {
+                        *entry |= 0b01;
+                    } else {
+                        *entry |= 0b10;
+                    }
                 }
                 None => {
                     let initial_value = if is_numeric { 0b01 } else { 0b10 };
@@ -4666,7 +4552,13 @@ fn find_separator_dual(haystack: &[u8], start: usize, sep1: u8, sep2: u8) -> Opt
 /// Available for future optimizations
 #[allow(dead_code)]
 #[inline]
-fn find_separator_triple(haystack: &[u8], start: usize, sep1: u8, sep2: u8, sep3: u8) -> Option<usize> {
+fn find_separator_triple(
+    haystack: &[u8],
+    start: usize,
+    sep1: u8,
+    sep2: u8,
+    sep3: u8,
+) -> Option<usize> {
     memchr3(sep1, sep2, sep3, &haystack[start..]).map(|pos| start + pos)
 }
 
@@ -4677,6 +4569,57 @@ fn find_separator_triple(haystack: &[u8], start: usize, sep1: u8, sep2: u8, sep3
 #[inline]
 fn find_last_separator(haystack: &[u8], sep: u8) -> Option<usize> {
     memrchr(sep, haystack)
+}
+
+/// SIMD-accelerated copy skipping exactly 4 specified bytes.
+///
+/// Uses memchr3 (3 bytes) + memchr (1 byte) to locate skip positions with AVX2/SSE2/NEON,
+/// then bulk-copies the clean segments between them via extend_from_slice (hardware memcpy).
+/// Faster than byte-by-byte filtering once input exceeds ~16 bytes.
+#[inline]
+fn extend_skipping_4(dst: &mut SmallVec<[u8; 64]>, src: &[u8], s1: u8, s2: u8, s3: u8, s4: u8) {
+    let mut start = 0usize;
+    while start < src.len() {
+        let rest = &src[start..];
+        let next = {
+            let a = memchr3(s1, s2, s3, rest);
+            let b = memchr(s4, rest);
+            match (a, b) {
+                (Some(x), Some(y)) => Some(x.min(y) + start),
+                (Some(x), None) | (None, Some(x)) => Some(x + start),
+                (None, None) => None,
+            }
+        };
+        match next {
+            Some(sep_pos) => {
+                dst.extend_from_slice(&src[start..sep_pos]);
+                start = sep_pos + 1;
+            }
+            None => {
+                dst.extend_from_slice(&src[start..]);
+                break;
+            }
+        }
+    }
+}
+
+/// SIMD-accelerated copy skipping exactly 3 specified bytes.
+#[inline]
+fn extend_skipping_3(dst: &mut SmallVec<[u8; 64]>, src: &[u8], s1: u8, s2: u8, s3: u8) {
+    let mut start = 0usize;
+    while start < src.len() {
+        let rest = &src[start..];
+        match memchr3(s1, s2, s3, rest) {
+            Some(pos) => {
+                dst.extend_from_slice(&src[start..start + pos]);
+                start += pos + 1;
+            }
+            None => {
+                dst.extend_from_slice(&src[start..]);
+                break;
+            }
+        }
+    }
 }
 
 /// TIER 2-3 OPTIMIZATION: Lowercase conversion with fast uppercase detection
@@ -4690,10 +4633,7 @@ fn find_last_separator(haystack: &[u8], sep: u8) -> Option<usize> {
 fn to_lowercase(s: &str) -> Cow<'_, str> {
     let bytes = s.as_bytes();
 
-    // Fast uppercase detection with explicit range check
-    // This pattern vectorizes better than is_ascii_uppercase()
-    // Uppercase ASCII bytes: 65-90 (A-Z)
-    let has_uppercase = bytes.iter().any(|&b| matches!(b, b'A'..=b'Z'));
+    let has_uppercase = bytes.iter().any(|b| b.is_ascii_uppercase());
 
     if has_uppercase {
         Cow::Owned(s.to_lowercase())
@@ -4725,7 +4665,6 @@ fn is_valid_array_index(s: &str) -> bool {
     s.bytes().all(|b| b.is_ascii_digit())
 }
 
-
 /// Set a nested value using pre-analyzed path types to handle conflicts
 fn set_nested_value(
     result: &mut Map<String, Value>,
@@ -4753,7 +4692,13 @@ fn set_nested_value(
     // OPTIMIZATION: Pre-allocate path buffer to avoid repeated allocations
     let mut path_buffer = String::with_capacity(key_path.len());
     set_nested_value_recursive(
-        result, &parts, 0, value, separator, path_types, &mut path_buffer
+        result,
+        &parts,
+        0,
+        value,
+        separator,
+        path_types,
+        &mut path_buffer,
     )
 }
 
@@ -4782,7 +4727,10 @@ fn set_nested_value_recursive(
     }
     path_buffer.push_str(part);
 
-    let should_be_array = path_types.get(path_buffer.as_str()).copied().unwrap_or(false);
+    let should_be_array = path_types
+        .get(path_buffer.as_str())
+        .copied()
+        .unwrap_or(false);
 
     // TIER 6→3 OPTIMIZATION: Avoid String allocation for existing keys
     // Check if key exists first (takes &str), only allocate String if inserting
@@ -4826,7 +4774,10 @@ fn set_nested_value_recursive(
                     // Build next path in buffer for type lookup
                     path_buffer.push_str(separator);
                     path_buffer.push_str(next_part);
-                    let next_should_be_array = path_types.get(path_buffer.as_str()).copied().unwrap_or(false);
+                    let next_should_be_array = path_types
+                        .get(path_buffer.as_str())
+                        .copied()
+                        .unwrap_or(false);
 
                     if arr[array_index].is_null() {
                         arr[array_index] = if next_should_be_array {
@@ -4846,17 +4797,15 @@ fn set_nested_value_recursive(
                             path_types,
                             path_buffer,
                         ),
-                        Value::Array(ref mut nested_arr) => {
-                            set_nested_array_value(
-                                nested_arr,
-                                parts,
-                                index + 2,
-                                value,
-                                separator,
-                                path_types,
-                                path_buffer,
-                            )
-                        }
+                        Value::Array(ref mut nested_arr) => set_nested_array_value(
+                            nested_arr,
+                            parts,
+                            index + 2,
+                            value,
+                            separator,
+                            path_types,
+                            path_buffer,
+                        ),
                         _ => Err(JsonToolsError::invalid_json_structure(format!(
                             "Array element at index {} has incompatible type",
                             array_index
@@ -4914,7 +4863,7 @@ fn set_nested_array_value(
 ) -> Result<(), JsonToolsError> {
     if index >= parts.len() {
         return Err(JsonToolsError::invalid_json_structure(
-            "Invalid path for array"
+            "Invalid path for array",
         ));
     }
 
@@ -4936,7 +4885,10 @@ fn set_nested_array_value(
             }
             path_buffer.push_str(part);
 
-            let next_should_be_array = path_types.get(path_buffer.as_str()).copied().unwrap_or(false);
+            let next_should_be_array = path_types
+                .get(path_buffer.as_str())
+                .copied()
+                .unwrap_or(false);
 
             if arr[array_index].is_null() {
                 arr[array_index] = if next_should_be_array {
@@ -4956,17 +4908,15 @@ fn set_nested_array_value(
                     path_types,
                     path_buffer,
                 ),
-                Value::Array(ref mut nested_arr) => {
-                    set_nested_array_value(
-                        nested_arr,
-                        parts,
-                        index + 1,
-                        value,
-                        separator,
-                        path_types,
-                        path_buffer,
-                    )
-                }
+                Value::Array(ref mut nested_arr) => set_nested_array_value(
+                    nested_arr,
+                    parts,
+                    index + 1,
+                    value,
+                    separator,
+                    path_types,
+                    path_buffer,
+                ),
                 _ => Err(JsonToolsError::invalid_json_structure(format!(
                     "Array element at index {} has incompatible type",
                     array_index
@@ -5041,23 +4991,47 @@ fn filter_nested_value(
         Value::Object(ref mut obj) => {
             // First, recursively filter all nested values
             for (_, v) in obj.iter_mut() {
-                filter_nested_value(v, remove_empty_strings, remove_nulls, remove_empty_objects, remove_empty_arrays);
+                filter_nested_value(
+                    v,
+                    remove_empty_strings,
+                    remove_nulls,
+                    remove_empty_objects,
+                    remove_empty_arrays,
+                );
             }
 
             // Then remove keys that match our filtering criteria
             obj.retain(|_, v| {
-                !should_filter_value(v, remove_empty_strings, remove_nulls, remove_empty_objects, remove_empty_arrays)
+                !should_filter_value(
+                    v,
+                    remove_empty_strings,
+                    remove_nulls,
+                    remove_empty_objects,
+                    remove_empty_arrays,
+                )
             });
         }
         Value::Array(ref mut arr) => {
             // First, recursively filter all nested values
             for item in arr.iter_mut() {
-                filter_nested_value(item, remove_empty_strings, remove_nulls, remove_empty_objects, remove_empty_arrays);
+                filter_nested_value(
+                    item,
+                    remove_empty_strings,
+                    remove_nulls,
+                    remove_empty_objects,
+                    remove_empty_arrays,
+                );
             }
 
             // Then remove array elements that match our filtering criteria
             arr.retain(|v| {
-                !should_filter_value(v, remove_empty_strings, remove_nulls, remove_empty_objects, remove_empty_arrays)
+                !should_filter_value(
+                    v,
+                    remove_empty_strings,
+                    remove_nulls,
+                    remove_empty_objects,
+                    remove_empty_arrays,
+                )
             });
         }
         _ => {
@@ -5077,10 +5051,7 @@ fn filter_nested_value(
 /// after key replacements and transformations. It supports two strategies:
 ///
 /// Only supported strategy: `handle_key_collision` to collect values into arrays for duplicate keys
-fn handle_key_collisions(
-    mut flattened: FlatMap,
-    handle_key_collision: bool,
-) -> FlatMap {
+fn handle_key_collisions(mut flattened: FlatMap, handle_key_collision: bool) -> FlatMap {
     // If option is disabled, return as-is
     if !handle_key_collision {
         return flattened;
@@ -5165,7 +5136,9 @@ fn handle_key_collisions_for_unflatten(
             result.insert(key, values.into_iter().next().unwrap());
         } else {
             // Collision detected: collect values into array, with filtering
-            if let Some((final_key, array_value)) = apply_collision_handling(key, values, Some(&config.filtering)) {
+            if let Some((final_key, array_value)) =
+                apply_collision_handling(key, values, Some(&config.filtering))
+            {
                 result.insert(final_key, array_value);
             }
         }
@@ -5236,21 +5209,23 @@ fn apply_key_replacements_with_collision_handling(
 
     if !patterns.len().is_multiple_of(2) {
         return Err(JsonToolsError::invalid_replacement_pattern(
-            "Patterns must be provided in pairs (find, replace)"
+            "Patterns must be provided in pairs (find, replace)",
         ));
     }
 
     // Pre-compile all regex patterns to avoid repeated compilation
     // Patterns are treated as regex. If compilation fails, fall back to literal matching.
-    let mut compiled_patterns = Vec::with_capacity(patterns.len() / 2);
+    // Store (regex, pattern_literal, replacement) so inner loops never need patterns.chunks(2)
+    let mut compiled_patterns: Vec<(Option<Arc<Regex>>, &str, &str)> =
+        Vec::with_capacity(patterns.len() / 2);
     for chunk in patterns.chunks(2) {
         let pattern = chunk[0];
         let replacement = chunk[1];
 
         // Try to compile as regex
         match get_cached_regex(pattern) {
-            Ok(regex) => compiled_patterns.push((Some(regex), replacement)),
-            Err(_) => compiled_patterns.push((None, replacement)),
+            Ok(regex) => compiled_patterns.push((Some(regex), pattern, replacement)),
+            Err(_) => compiled_patterns.push((None, pattern, replacement)),
         }
     }
 
@@ -5260,19 +5235,15 @@ fn apply_key_replacements_with_collision_handling(
     if !config.collision.handle_collisions {
         // FAST PATH: Check if any key needs replacement (no value cloning)
         let needs_replacement = flattened.keys().any(|key| {
-            for (i, chunk) in patterns.chunks(2).enumerate() {
-                let pattern = &chunk[0];
-                let (compiled_regex, _) = &compiled_patterns[i];
-
-                if let Some(regex) = compiled_regex {
-                    if regex.is_match(key) {
-                        return true;
+            compiled_patterns
+                .iter()
+                .any(|(compiled_regex, pattern, _)| {
+                    if let Some(regex) = compiled_regex {
+                        regex.is_match(key)
+                    } else {
+                        key.contains(*pattern)
                     }
-                } else if key.contains(pattern) {
-                    return true;
-                }
-            }
-            false
+                })
         });
 
         // Early exit if no replacements needed - avoids value cloning entirely
@@ -5281,30 +5252,28 @@ fn apply_key_replacements_with_collision_handling(
         }
 
         // SLOW PATH: Replacements needed, build new map with value cloning
-        let mut new_flattened = FxHashMap::with_capacity_and_hasher(flattened.len(), Default::default());
+        let mut new_flattened =
+            FxHashMap::with_capacity_and_hasher(flattened.len(), Default::default());
 
         for (old_key, value) in flattened {
             let mut new_key = Cow::Borrowed(old_key.as_ref());
 
             // Apply each compiled pattern
-            for (i, chunk) in patterns.chunks(2).enumerate() {
-                let pattern = chunk[0];
-                let (compiled_regex, replacement) = &compiled_patterns[i];
-
+            for (compiled_regex, pattern, replacement) in &compiled_patterns {
                 if let Some(regex) = compiled_regex {
-                    if regex.is_match(&new_key) {
-                        new_key = Cow::Owned(
-                            regex
-                                .replace_all(&new_key, *replacement)
-                                .to_string(),
-                        );
+                    if let Cow::Owned(s) = regex.replace_all(&new_key, *replacement) {
+                        new_key = Cow::Owned(s);
                     }
-                } else if new_key.contains(pattern) {
-                    new_key = Cow::Owned(new_key.replace(pattern, replacement));
+                } else if new_key.contains(*pattern) {
+                    new_key = Cow::Owned(new_key.replace(*pattern, replacement));
                 }
             }
 
-            let key_arc: Arc<str> = new_key.into_owned().into();
+            // Reuse existing Arc if key unchanged (avoids string copy + Arc allocation)
+            let key_arc: Arc<str> = match new_key {
+                Cow::Owned(s) => Arc::from(s),
+                Cow::Borrowed(_) => old_key,
+            };
             new_flattened.insert(key_arc, value);
         }
 
@@ -5315,26 +5284,20 @@ fn apply_key_replacements_with_collision_handling(
     // Instead of 3 separate passes (key_mapping, target_groups, result), we build
     // the result directly in one iteration using the entry API to handle collisions
     let flattened_len = flattened.len();
-    let mut result: FlatMap = FxHashMap::with_capacity_and_hasher(flattened_len, Default::default());
+    let mut result: FlatMap =
+        FxHashMap::with_capacity_and_hasher(flattened_len, Default::default());
 
     for (original_key, value) in flattened {
         let mut new_key = Cow::Borrowed(original_key.as_ref());
 
         // Apply all key replacement patterns using pre-compiled patterns
-        for (i, chunk) in patterns.chunks(2).enumerate() {
-            let pattern = chunk[0];
-            let (compiled_regex, replacement) = &compiled_patterns[i];
-
+        for (compiled_regex, pattern, replacement) in &compiled_patterns {
             if let Some(regex) = compiled_regex {
-                if regex.is_match(&new_key) {
-                    new_key = Cow::Owned(
-                        regex
-                            .replace_all(&new_key, *replacement)
-                            .to_string(),
-                    );
+                if let Cow::Owned(s) = regex.replace_all(&new_key, *replacement) {
+                    new_key = Cow::Owned(s);
                 }
-            } else if new_key.contains(pattern) {
-                new_key = Cow::Owned(new_key.replace(pattern, replacement));
+            } else if new_key.contains(*pattern) {
+                new_key = Cow::Owned(new_key.replace(*pattern, replacement));
             }
         }
 
@@ -5351,8 +5314,11 @@ fn apply_key_replacements_with_collision_handling(
             continue;
         }
 
-        // Use entry API for single-pass collision handling
-        let new_key_arc: Arc<str> = new_key.into_owned().into();
+        // Reuse existing Arc if key unchanged (avoids string copy + Arc allocation)
+        let new_key_arc: Arc<str> = match new_key {
+            Cow::Owned(s) => Arc::from(s),
+            Cow::Borrowed(_) => original_key,
+        };
         match result.entry(new_key_arc) {
             std::collections::hash_map::Entry::Vacant(entry) => {
                 // No collision - insert value directly
@@ -5393,8 +5359,10 @@ fn apply_key_replacements_unflatten_with_collisions(
 
     // First pass: apply replacements and track what each original key maps to
     let flattened_len = flattened_obj.len();
-    let mut key_mapping: FxHashMap<String, String> = FxHashMap::with_capacity_and_hasher(flattened_len, Default::default());
-    let mut original_values: FxHashMap<String, Value> = FxHashMap::with_capacity_and_hasher(flattened_len, Default::default());
+    let mut key_mapping: FxHashMap<String, String> =
+        FxHashMap::with_capacity_and_hasher(flattened_len, Default::default());
+    let mut original_values: FxHashMap<String, Value> =
+        FxHashMap::with_capacity_and_hasher(flattened_len, Default::default());
 
     for (original_key, value) in flattened_obj {
         // Apply all key replacement patterns using Cow to avoid allocation if no replacement
@@ -5406,9 +5374,8 @@ fn apply_key_replacements_unflatten_with_collisions(
             // Try to compile as regex first
             match get_cached_regex(find) {
                 Ok(regex) => {
-                    // Successfully compiled as regex - use regex replacement
-                    if regex.is_match(&new_key) {
-                        new_key = Cow::Owned(regex.replace_all(&new_key, replace).to_string());
+                    if let Cow::Owned(s) = regex.replace_all(&new_key, replace) {
+                        new_key = Cow::Owned(s);
                     }
                 }
                 Err(_) => {
@@ -5430,9 +5397,13 @@ fn apply_key_replacements_unflatten_with_collisions(
 
     // Second pass: group by target key to detect collisions
     // OPTIMIZATION: Consume key_mapping to avoid cloning target_key
-    let mut target_groups: FxHashMap<String, Vec<String>> = FxHashMap::with_capacity_and_hasher(key_mapping.len(), Default::default());
+    let mut target_groups: FxHashMap<String, Vec<String>> =
+        FxHashMap::with_capacity_and_hasher(key_mapping.len(), Default::default());
     for (original_key, target_key) in key_mapping {
-        target_groups.entry(target_key).or_default().push(original_key);
+        target_groups
+            .entry(target_key)
+            .or_default()
+            .push(original_key);
     }
 
     // Third pass: build result with collision handling
@@ -5474,5 +5445,3 @@ fn apply_key_replacements_unflatten_with_collisions(
 
     Ok(result)
 }
-
-

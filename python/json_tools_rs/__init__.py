@@ -2,7 +2,8 @@
 JSON Tools RS - High-performance JSON manipulation library
 
 This package provides Python bindings for the JSON Tools RS library,
-offering high-performance JSON flattening and unflattening with SIMD-accelerated parsing.
+offering high-performance JSON flattening and unflattening with SIMD-accelerated
+parsing and Crossbeam-based parallelism.
 
 The main entry point is the JSONTools class, which provides a unified builder pattern API
 for all JSON manipulation operations with advanced collision handling and filtering.
@@ -12,6 +13,8 @@ Perfect Type Matching - Input type = Output type:
     - dict input → dict output (Python dictionary)
     - list[str] input → list[str] output (list of JSON strings)
     - list[dict] input → list[dict] output (list of Python dictionaries)
+    - DataFrame input → DataFrame output (Pandas, Polars, PyArrow, PySpark)
+    - Series input → Series output (Pandas, Polars, PyArrow)
     - Mixed lists preserve original types
 
 Basic Usage:
@@ -40,7 +43,6 @@ Advanced Features:
     >>> data = {"User_name": "John", "Admin_name": "", "Guest_name": "Bob"}
     >>> result = tools.execute(data)
     >>> print(result)  # {"name": ["John", "Bob"], "guest_name": "Bob"}
-    >>>
 
 Batch Processing:
     >>> # Perfect type preservation in batch processing
@@ -58,8 +60,18 @@ Automatic Type Conversion:
     >>> result = tools.execute(data)
     >>> print(result)  # {'id': 123, 'price': 1234.56, 'active': True}
 
+DataFrame & Series Support:
+    >>> # Pandas DataFrame input → Pandas DataFrame output
+    >>> import pandas as pd
+    >>> df = pd.DataFrame([{"user": {"name": "Alice"}}, {"user": {"name": "Bob"}}])
+    >>> tools = json_tools_rs.JSONTools().flatten()
+    >>> result = tools.execute(df)  # Returns a Pandas DataFrame
+    >>>
+    >>> # Also works with Polars, PyArrow Tables, and PySpark DataFrames
+    >>> # Series input → Series output for Pandas, Polars, and PyArrow
+
 Parallel Processing (Automatic):
-    >>> # Automatic parallel processing for large batches (1000+ items by default)
+    >>> # Automatic parallel processing for large batches (10+ items by default)
     >>> large_batch = [{"data": i} for i in range(2000)]
     >>> tools = json_tools_rs.JSONTools().flatten()
     >>> results = tools.execute(large_batch)  # Automatically uses parallel processing
@@ -74,7 +86,7 @@ Parallel Processing (Automatic):
 
 from .json_tools_rs import JSONTools, JsonToolsError, JsonOutput
 
-__version__ = "0.8.0"
+__version__ = "0.9.0"
 __author__ = "JSON Tools RS Contributors"
 
 __all__ = [

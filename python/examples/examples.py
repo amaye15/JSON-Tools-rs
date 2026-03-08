@@ -3,7 +3,8 @@
 JSON Tools RS Python Advanced Examples
 
 This example demonstrates the unified JSONTools API in Python with advanced features
-including collision handling, filtering, transformations, and batch processing.
+including collision handling, filtering, transformations, batch processing,
+automatic type conversion, normal mode, and DataFrame/Series support.
 """
 
 from typing import Any, Dict
@@ -272,11 +273,86 @@ def main() -> None:
     print("Note: Parallel processing provides significant speedup for large batches")
     print("      and large nested structures without any code changes!")
 
+    # Example 11: Automatic Type Conversion
     print("\n" + "=" * 60)
-    print("✅ All examples completed successfully!")
-    print("🚀 JSONTools provides a complete, unified API for JSON manipulation")
-    print("   with perfect type preservation, advanced collision handling,")
-    print("   and automatic parallel processing for optimal performance!")
+    print("11. Automatic Type Conversion")
+    print("=" * 60)
+
+    raw_data = {
+        "id": "123",
+        "price": "$1,234.56",
+        "discount": "15%",
+        "active": "yes",
+        "verified": "true",
+        "status": "N/A",
+        "name": "Product",
+    }
+    print(f"Input: {raw_data}")
+
+    convert_tools = json_tools_rs.JSONTools().flatten().auto_convert_types(True)
+    converted = convert_tools.execute(raw_data)
+    print(f"Output: {converted}")
+    print("Note: Strings auto-converted to numbers, booleans, and nulls")
+    print("  'id' -> 123, 'price' -> 1234.56, 'discount' -> 15.0")
+    print("  'active' -> True, 'verified' -> True, 'status' -> None")
+
+    # Example 12: Normal Mode (Transform without Flatten/Unflatten)
+    print("\n" + "=" * 60)
+    print("12. Normal Mode (Transform Only)")
+    print("=" * 60)
+
+    data_to_clean = {
+        "User_Name": "alice@example.com",
+        "User_Age": "",
+        "User_Active": "true",
+        "User_Score": None,
+    }
+    print(f"Input: {data_to_clean}")
+
+    normal_tools = (
+        json_tools_rs.JSONTools()
+        .normal()
+        .lowercase_keys(True)
+        .key_replacement("^user_", "")
+        .value_replacement("@example.com", "@company.org")
+        .remove_empty_strings(True)
+        .remove_nulls(True)
+    )
+    cleaned = normal_tools.execute(data_to_clean)
+    print(f"Output: {cleaned}")
+    print("Note: Keys transformed and values cleaned without flattening structure")
+
+    # Example 13: DataFrame Support (requires pandas)
+    print("\n" + "=" * 60)
+    print("13. DataFrame Support")
+    print("=" * 60)
+
+    try:
+        import pandas as pd
+
+        df = pd.DataFrame(
+            [
+                {"user": {"name": "Alice", "age": 30}},
+                {"user": {"name": "Bob", "age": 25}},
+            ]
+        )
+        print(f"Input DataFrame:\n{df}")
+        print(f"Input type: {type(df)}")
+
+        df_tools = json_tools_rs.JSONTools().flatten()
+        result_df = df_tools.execute(df)
+        print(f"\nOutput DataFrame:\n{result_df}")
+        print(f"Output type: {type(result_df)}")
+        print("Note: DataFrame in -> DataFrame out (type preserved)")
+    except ImportError:
+        print("pandas not installed - skipping DataFrame example")
+        print("Install with: pip install pandas")
+
+    print("\n" + "=" * 60)
+    print("All examples completed successfully!")
+    print("JSONTools provides a complete, unified API for JSON manipulation")
+    print("with perfect type preservation, DataFrame/Series support,")
+    print("advanced collision handling, and automatic parallel processing!")
 
 
 if __name__ == "__main__":

@@ -21,8 +21,8 @@ Unlike simple JSON parsers, JSON Tools RS provides a complete toolkit for JSON t
 
 - 🚀 **Unified API**: Single `JSONTools` entry point for flattening, unflattening, or pass-through transforms (`.normal()`)
 - 🔧 **Builder Pattern**: Fluent, chainable API for easy configuration and method chaining
-- ⚡ **High Performance**: SIMD-accelerated JSON parsing with FxHashMap and optimized memory allocations
-- 🚄 **Parallel Processing**: Built-in Rayon-based parallelism for 3-5x speedup on batch operations (automatic, no configuration needed)
+- ⚡ **High Performance**: SIMD-accelerated JSON parsing with FxHashMap, SmallVec stack allocation, and tiered caching
+- 🚄 **Parallel Processing**: Built-in Crossbeam-based parallelism for 3-5x speedup on batch operations and large nested structures
 - 🎯 **Complete Roundtrip**: Flatten JSON and unflatten back to original structure with perfect fidelity
 - 🧹 **Comprehensive Filtering**: Remove empty strings, nulls, empty objects, and empty arrays (works for both flatten and unflatten)
 - 🔄 **Advanced Replacements**: Literal and regex-based key/value replacements using standard Rust regex syntax
@@ -31,6 +31,7 @@ Unlike simple JSON parsers, JSON Tools RS provides a complete toolkit for JSON t
 - 🔀 **Automatic Type Conversion**: Convert strings to numbers, booleans, and nulls with `.auto_convert_types(true)`
 - 📦 **Batch Processing**: Process single JSON or batches; Python also supports dicts and lists of dicts
 - 🐍 **Python Bindings**: Full Python support with perfect type preservation (input type = output type)
+- 📊 **DataFrame/Series Support**: Native support for Pandas, Polars, PyArrow, and PySpark DataFrames and Series in Python
 
 ## Table of Contents
 
@@ -173,6 +174,24 @@ results = tools.execute(batch)
 
 ```
 
+#### DataFrame & Series Support
+
+```python
+import json_tools_rs as jt
+import pandas as pd
+
+# Pandas DataFrame input → Pandas DataFrame output
+df = pd.DataFrame([
+    {"user": {"name": "Alice", "age": 30}},
+    {"user": {"name": "Bob", "age": 25}},
+])
+result = jt.JSONTools().flatten().execute(df)
+print(type(result))  # <class 'pandas.core.frame.DataFrame'>
+
+# Also works with Polars, PyArrow Tables, and PySpark DataFrames
+# Series input → Series output (Pandas, Polars, PyArrow)
+```
+
 ## Quick Reference
 
 ### Method Cheat Sheet
@@ -246,24 +265,28 @@ pip install json-tools-rs
 
 JSON Tools RS uses several techniques to achieve high performance (~2,000+ ops/ms):
 
-* **SIMD-JSON**: Hardware-accelerated parsing.
-* **FxHashMap**: Faster hashing for string keys.
-* **SmallVec & Cow**: Stack allocation for short paths and zero-copy string handling.
-* **First-Byte Filtering**: Rapid rejection of non-convertible strings during type conversion.
-* **Parallelism**: Automatic Rayon-based parallelism for batches and large nested objects.
+* **SIMD-JSON**: Hardware-accelerated parsing via sonic-rs (64-bit) / simd-json (32-bit).
+* **SIMD Byte Search**: memchr/memmem for SIMD-accelerated string operations and pattern matching.
+* **FxHashMap**: Faster hashing for string keys with rustc-hash.
+* **Tiered Caching**: Three-level key deduplication (phf perfect hash → thread-local FxHashMap → global DashMap) and thread-local regex cache.
+* **SmallVec & Cow**: Stack allocation for depth stacks and number buffers; zero-copy string handling.
+* **Arc\<str\> Deduplication**: Shared key storage to minimize allocations in wide/deep JSON.
+* **First-Byte Discriminators**: Rapid rejection of non-convertible strings during type conversion.
+* **Parallelism**: Automatic Crossbeam-based parallelism for batch processing and large nested structures.
 
 ## Changelog
 
-### v0.8.0 (Current)
+### v0.9.0 (Current)
+
+* **Crossbeam Parallelism**: Migrated from Rayon to Crossbeam for finer-grained parallel control.
+* **DataFrame/Series Support**: Native Python support for Pandas, Polars, PyArrow, and PySpark DataFrames and Series.
+* **Performance Optimizations**: Eliminated per-entry HashMap in parallel flatten, added early-exit discriminators for type conversion, SIMD literal fallback for regex patterns, thread-local regex cache half-eviction, expanded SmallVec buffers and separator cache.
+* **Python Binding Optimizations**: `mem::take` for zero-cost builder mutations, O(1) DataFrame/Series reconstruction.
+
+### v0.8.0
 
 * **Python Feature Parity**: Added `auto_convert_types`, `parallel_threshold`, `num_threads`, and `nested_parallel_threshold` to Python bindings.
 * **Enhanced Type Conversion**: Added support for ISO-8601 dates, currency codes (USD, EUR), basis points (bps), and suffixed numbers (K/M/B).
 * **Date Normalization**: Automatic detection and UTC normalization of date strings.
-* **Performance**: Optimized string cleaning and number parsing logic.
-
-### v0.7.0
-
-* **Parallel Configuration**: Added methods to control parallel processing thresholds and thread counts.
-* **Optimized Initialization**: Improved HashMap allocation strategies.
 
 See [CHANGELOG.md](CHANGELOG.md) for full history.

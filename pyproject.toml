@@ -9,13 +9,13 @@ build-backend = "maturin"
 
 [project]
 name = "json-tools-rs"
-description = "High-performance JSON manipulation library with SIMD-accelerated parsing and automatic type conversion"
+description = "High-performance JSON manipulation library with SIMD-accelerated parsing, Crossbeam parallelism, and native DataFrame/Series support"
 readme = "README.md"
 license = {text = "MIT OR Apache-2.0"}
 authors = [
     {name = "JSON Tools RS Contributors"},
 ]
-keywords = ["json", "flatten", "manipulation", "parsing", "rust", "simd", "performance"]
+keywords = ["json", "flatten", "manipulation", "parsing", "rust", "simd", "performance", "dataframe"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
@@ -29,6 +29,7 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Programming Language :: Rust",
     "Topic :: Software Development :: Libraries :: Python Modules",
     "Topic :: Text Processing :: General",

@@ -5,6 +5,38 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] - 2026-03-09
+
+### Added
+- **DataFrame & Series Support** (Python)
+  - Native support for Pandas, Polars, PyArrow, and PySpark DataFrames
+  - Native support for Pandas, Polars, PyArrow, and PySpark Series
+  - Automatic type detection via duck typing (no explicit imports required)
+  - Input type preservation: DataFrame in → DataFrame out, Series in → Series out
+  - Graceful fallback to list of dicts when library reconstruction fails
+- **Crossbeam Parallelism**
+  - Migrated all parallel paths from Rayon to Crossbeam `thread::scope`
+  - Finer-grained control over thread spawning and chunk distribution
+  - Ordered parallel output via `chunks().zip(slots.chunks_mut())` pattern
+
+### Performance Improvements
+- **Rust Core Optimizations**
+  - Eliminated per-entry HashMap in parallel flatten — each thread now flattens directly into a single pre-sized `partial` map with `quick_leaf_estimate()` sizing
+  - Early-exit byte discriminators in `try_parse_number()` — gates 4 specialized parsers behind cheap byte checks (basis points, suffixed, fractions, radix)
+  - SIMD literal fallback in key/value replacements — `str::contains()` replaced with `memmem::find()` for SIMD-accelerated substring search
+  - Thread-local regex cache half-eviction — retains ~50% of entries instead of clearing all 64 on overflow
+  - SmallVec buffer expanded from 32 to 64 bytes in `clean_number_string()` to reduce heap spillover
+  - Separator cache expanded from 6 to 12 static entries (`->`, `__`, `#`, `~`, `@`, `%`)
+- **Python Binding Optimizations**
+  - `mem::replace` → `mem::take` across 13 builder methods (eliminates `JSONTools::new()` default construction)
+  - O(N) → O(1) DataFrame/Series reconstruction (single `into_pyobject` + `clone_ref` instead of per-item clone)
+  - GIL release via `py.detach()` during all compute-intensive operations
+
+### Changed
+- Updated all documentation to reflect Crossbeam migration and new features
+- Fixed stale Rayon references in Python binding docstrings
+- Bumped version to 0.9.0
+
 ## [0.8.0] - 2026-01-01
 
 ### Added
@@ -16,7 +48,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `.nested_parallel_threshold(n)` - Configure nested parallelism
   - 128 comprehensive Python tests covering all features
 - **Enhanced Testing**
-  - 89 Rust unit tests + 20 doc tests
+  - 89 Rust unit tests + 21 doc tests
   - 128 Python binding tests
   - Improved test coverage for all features
 
@@ -29,7 +61,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - **Parallel Processing Configuration**
   - `.parallel_threshold(usize)` - Configure minimum batch size for parallel processing (default: 1000)
-  - `.num_threads(Option<usize>)` - Configure number of threads for parallel processing (default: Rayon default)
+  - `.num_threads(Option<usize>)` - Configure number of threads for parallel processing (default: system CPU count)
   - `.nested_parallel_threshold(usize)` - Configure threshold for nested parallel processing within individual JSON documents (default: 100)
   - Environment variable support: `JSON_TOOLS_PARALLEL_THRESHOLD` and `JSON_TOOLS_NESTED_PARALLEL_THRESHOLD`
 - **Enhanced Testing**
@@ -189,6 +221,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 | Version | Release Date | Key Features | Performance |
 |---------|--------------|--------------|-------------|
+| **0.9.0** | 2026-03-09 | Crossbeam parallelism, DataFrame/Series support | +3-5% Rust, O(1) Python reconstruction |
 | **0.8.0** | 2026-01-01 | Full Python bindings feature parity | Feature release |
 | **0.7.0** | 2025-10-17 | Parallel processing config, optimizations | HashMap improvements |
 | **0.6.0** | 2025-10-13 | Python GIL release, inline hints | +5-13% Python |
@@ -201,6 +234,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ---
 
 ## Migration Guide
+
+### Upgrading from 0.8.0 to 0.9.0
+
+**No breaking changes!** This is a performance and feature enhancement release.
+
+**What's New**:
+- Crossbeam-based parallelism (replaces Rayon) for finer-grained thread control
+- Native DataFrame/Series support in Python (Pandas, Polars, PyArrow, PySpark)
+- 6 Rust core performance optimizations (parallel flatten, type conversion, regex, caching)
+- 3 Python binding optimizations (mem::take, O(1) reconstruction, GIL release)
+
+**Action Required**: None - just update your dependency version. If you were using the library with DataFrames, you can now pass them directly to `.execute()` instead of converting to dicts first.
 
 ### Upgrading from 0.7.0 to 0.8.0
 

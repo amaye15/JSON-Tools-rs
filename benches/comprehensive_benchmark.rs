@@ -1,4 +1,4 @@
-use criterion::{criterion_group, criterion_main, Criterion, BenchmarkId};
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use json_tools_rs::{JSONTools, JsonOutput};
 use std::hint::black_box;
 use std::time::Duration;
@@ -362,7 +362,8 @@ fn large_json() -> &'static str {
 
 /// XLarge JSON (~500KB) - Large dataset with many records
 fn xlarge_json() -> String {
-    let mut json = String::from(r#"{"dataset": {"name": "user_database", "version": "1.0", "records": ["#);
+    let mut json =
+        String::from(r#"{"dataset": {"name": "user_database", "version": "1.0", "records": ["#);
 
     for i in 0..1000 {
         if i > 0 {
@@ -416,19 +417,15 @@ fn bench_baseline(c: &mut Criterion) {
     ];
 
     for (size, json) in test_cases {
-        group.bench_with_input(
-            BenchmarkId::new("flatten", size),
-            &json,
-            |b, json| {
-                b.iter(|| {
-                    let result = JSONTools::new()
-                        .flatten()
-                        .execute(black_box(json.as_str()))
-                        .expect("Flatten failed");
-                    black_box(result);
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("flatten", size), &json, |b, json| {
+            b.iter(|| {
+                let result = JSONTools::new()
+                    .flatten()
+                    .execute(black_box(json.as_str()))
+                    .expect("Flatten failed");
+                black_box(result);
+            });
+        });
 
         // Create flattened version for unflatten benchmark
         let flattened = JSONTools::new()
@@ -461,7 +458,12 @@ fn bench_separator(c: &mut Criterion) {
     let mut group = c.benchmark_group("02_separator");
     group.measurement_time(Duration::from_secs(5));
 
-    let separators = vec![("dot", "."), ("double_colon", "::"), ("underscore", "_"), ("double_underscore", "__")];
+    let separators = vec![
+        ("dot", "."),
+        ("double_colon", "::"),
+        ("underscore", "_"),
+        ("double_underscore", "__"),
+    ];
 
     for (name, sep) in &separators {
         group.bench_with_input(
@@ -496,20 +498,16 @@ fn bench_lowercase_keys(c: &mut Criterion) {
     ];
 
     for (size, json) in test_cases {
-        group.bench_with_input(
-            BenchmarkId::new("enabled", size),
-            &json,
-            |b, json| {
-                b.iter(|| {
-                    let result = JSONTools::new()
-                        .flatten()
-                        .lowercase_keys(true)
-                        .execute(black_box(json.as_str()))
-                        .expect("Flatten failed");
-                    black_box(result);
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("enabled", size), &json, |b, json| {
+            b.iter(|| {
+                let result = JSONTools::new()
+                    .flatten()
+                    .lowercase_keys(true)
+                    .execute(black_box(json.as_str()))
+                    .expect("Flatten failed");
+                black_box(result);
+            });
+        });
     }
 
     group.finish();
@@ -529,38 +527,30 @@ fn bench_key_replacement(c: &mut Criterion) {
 
     for (size, json) in test_cases {
         // Literal replacement
-        group.bench_with_input(
-            BenchmarkId::new("literal", size),
-            &json,
-            |b, json| {
-                b.iter(|| {
-                    let result = JSONTools::new()
-                        .flatten()
-                        .key_replacement("name", "fullName")
-                        .key_replacement("email", "emailAddress")
-                        .execute(black_box(json.as_str()))
-                        .expect("Flatten failed");
-                    black_box(result);
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("literal", size), &json, |b, json| {
+            b.iter(|| {
+                let result = JSONTools::new()
+                    .flatten()
+                    .key_replacement("name", "fullName")
+                    .key_replacement("email", "emailAddress")
+                    .execute(black_box(json.as_str()))
+                    .expect("Flatten failed");
+                black_box(result);
+            });
+        });
 
         // Regex replacement
-        group.bench_with_input(
-            BenchmarkId::new("regex", size),
-            &json,
-            |b, json| {
-                b.iter(|| {
-                    let result = JSONTools::new()
-                        .flatten()
-                        .key_replacement("regex:(first|last)Name", "name")
-                        .key_replacement("regex:_id$", "Id")
-                        .execute(black_box(json.as_str()))
-                        .expect("Flatten failed");
-                    black_box(result);
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("regex", size), &json, |b, json| {
+            b.iter(|| {
+                let result = JSONTools::new()
+                    .flatten()
+                    .key_replacement("regex:(first|last)Name", "name")
+                    .key_replacement("regex:_id$", "Id")
+                    .execute(black_box(json.as_str()))
+                    .expect("Flatten failed");
+                black_box(result);
+            });
+        });
     }
 
     group.finish();
@@ -580,38 +570,30 @@ fn bench_value_replacement(c: &mut Criterion) {
 
     for (size, json) in test_cases {
         // Literal replacement
-        group.bench_with_input(
-            BenchmarkId::new("literal", size),
-            &json,
-            |b, json| {
-                b.iter(|| {
-                    let result = JSONTools::new()
-                        .flatten()
-                        .value_replacement("@example.com", "@company.org")
-                        .value_replacement("USA", "United States")
-                        .execute(black_box(json.as_str()))
-                        .expect("Flatten failed");
-                    black_box(result);
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("literal", size), &json, |b, json| {
+            b.iter(|| {
+                let result = JSONTools::new()
+                    .flatten()
+                    .value_replacement("@example.com", "@company.org")
+                    .value_replacement("USA", "United States")
+                    .execute(black_box(json.as_str()))
+                    .expect("Flatten failed");
+                black_box(result);
+            });
+        });
 
         // Regex replacement
-        group.bench_with_input(
-            BenchmarkId::new("regex", size),
-            &json,
-            |b, json| {
-                b.iter(|| {
-                    let result = JSONTools::new()
-                        .flatten()
-                        .value_replacement("regex:@example\\.com$", "@company.org")
-                        .value_replacement("regex:^\\+1-555-", "+1-800-")
-                        .execute(black_box(json.as_str()))
-                        .expect("Flatten failed");
-                    black_box(result);
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("regex", size), &json, |b, json| {
+            b.iter(|| {
+                let result = JSONTools::new()
+                    .flatten()
+                    .value_replacement("regex:@example\\.com$", "@company.org")
+                    .value_replacement("regex:^\\+1-555-", "+1-800-")
+                    .execute(black_box(json.as_str()))
+                    .expect("Flatten failed");
+                black_box(result);
+            });
+        });
     }
 
     group.finish();
@@ -645,20 +627,16 @@ fn bench_individual_filters(c: &mut Criterion) {
             },
         );
 
-        group.bench_with_input(
-            BenchmarkId::new("remove_nulls", size),
-            &json,
-            |b, json| {
-                b.iter(|| {
-                    let result = JSONTools::new()
-                        .flatten()
-                        .remove_nulls(true)
-                        .execute(black_box(json.as_str()))
-                        .expect("Flatten failed");
-                    black_box(result);
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("remove_nulls", size), &json, |b, json| {
+            b.iter(|| {
+                let result = JSONTools::new()
+                    .flatten()
+                    .remove_nulls(true)
+                    .execute(black_box(json.as_str()))
+                    .expect("Flatten failed");
+                black_box(result);
+            });
+        });
 
         group.bench_with_input(
             BenchmarkId::new("remove_empty_objects", size),
@@ -707,23 +685,19 @@ fn bench_all_filters(c: &mut Criterion) {
     ];
 
     for (size, json) in test_cases {
-        group.bench_with_input(
-            BenchmarkId::new("combined", size),
-            &json,
-            |b, json| {
-                b.iter(|| {
-                    let result = JSONTools::new()
-                        .flatten()
-                        .remove_empty_strings(true)
-                        .remove_nulls(true)
-                        .remove_empty_objects(true)
-                        .remove_empty_arrays(true)
-                        .execute(black_box(json.as_str()))
-                        .expect("Flatten failed");
-                    black_box(result);
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("combined", size), &json, |b, json| {
+            b.iter(|| {
+                let result = JSONTools::new()
+                    .flatten()
+                    .remove_empty_strings(true)
+                    .remove_nulls(true)
+                    .remove_empty_objects(true)
+                    .remove_empty_arrays(true)
+                    .execute(black_box(json.as_str()))
+                    .expect("Flatten failed");
+                black_box(result);
+            });
+        });
     }
 
     group.finish();
@@ -786,34 +760,26 @@ fn bench_auto_type_conversion(c: &mut Criterion) {
     ];
 
     for (size, json) in test_cases {
-        group.bench_with_input(
-            BenchmarkId::new("disabled", size),
-            &json,
-            |b, json| {
-                b.iter(|| {
-                    let result = JSONTools::new()
-                        .flatten()
-                        .execute(black_box(json.as_str()))
-                        .expect("Flatten failed");
-                    black_box(result);
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("disabled", size), &json, |b, json| {
+            b.iter(|| {
+                let result = JSONTools::new()
+                    .flatten()
+                    .execute(black_box(json.as_str()))
+                    .expect("Flatten failed");
+                black_box(result);
+            });
+        });
 
-        group.bench_with_input(
-            BenchmarkId::new("enabled", size),
-            &json,
-            |b, json| {
-                b.iter(|| {
-                    let result = JSONTools::new()
-                        .flatten()
-                        .auto_convert_types(true)
-                        .execute(black_box(json.as_str()))
-                        .expect("Flatten failed");
-                    black_box(result);
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("enabled", size), &json, |b, json| {
+            b.iter(|| {
+                let result = JSONTools::new()
+                    .flatten()
+                    .auto_convert_types(true)
+                    .execute(black_box(json.as_str()))
+                    .expect("Flatten failed");
+                black_box(result);
+            });
+        });
     }
 
     group.finish();
@@ -832,23 +798,19 @@ fn bench_all_key_transformations(c: &mut Criterion) {
     ];
 
     for (size, json) in test_cases {
-        group.bench_with_input(
-            BenchmarkId::new("combined", size),
-            &json,
-            |b, json| {
-                b.iter(|| {
-                    let result = JSONTools::new()
-                        .flatten()
-                        .separator("::")
-                        .lowercase_keys(true)
-                        .key_replacement("regex:_id$", "Id")
-                        .key_replacement("name", "fullName")
-                        .execute(black_box(json.as_str()))
-                        .expect("Flatten failed");
-                    black_box(result);
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("combined", size), &json, |b, json| {
+            b.iter(|| {
+                let result = JSONTools::new()
+                    .flatten()
+                    .separator("::")
+                    .lowercase_keys(true)
+                    .key_replacement("regex:_id$", "Id")
+                    .key_replacement("name", "fullName")
+                    .execute(black_box(json.as_str()))
+                    .expect("Flatten failed");
+                black_box(result);
+            });
+        });
     }
 
     group.finish();
@@ -867,22 +829,18 @@ fn bench_all_value_transformations(c: &mut Criterion) {
     ];
 
     for (size, json) in test_cases {
-        group.bench_with_input(
-            BenchmarkId::new("combined", size),
-            &json,
-            |b, json| {
-                b.iter(|| {
-                    let result = JSONTools::new()
-                        .flatten()
-                        .value_replacement("@example.com", "@company.org")
-                        .value_replacement("regex:^USA$", "United States")
-                        .value_replacement("regex:^\\+1-555-", "+1-800-")
-                        .execute(black_box(json.as_str()))
-                        .expect("Flatten failed");
-                    black_box(result);
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("combined", size), &json, |b, json| {
+            b.iter(|| {
+                let result = JSONTools::new()
+                    .flatten()
+                    .value_replacement("@example.com", "@company.org")
+                    .value_replacement("regex:^USA$", "United States")
+                    .value_replacement("regex:^\\+1-555-", "+1-800-")
+                    .execute(black_box(json.as_str()))
+                    .expect("Flatten failed");
+                black_box(result);
+            });
+        });
     }
 
     group.finish();
@@ -901,31 +859,27 @@ fn bench_comprehensive(c: &mut Criterion) {
     ];
 
     for (size, json) in test_cases {
-        group.bench_with_input(
-            BenchmarkId::new("all_features", size),
-            &json,
-            |b, json| {
-                b.iter(|| {
-                    let result = JSONTools::new()
-                        .flatten()
-                        .separator("::")
-                        .lowercase_keys(true)
-                        .key_replacement("regex:_id$", "Id")
-                        .key_replacement("name", "fullName")
-                        .value_replacement("@example.com", "@company.org")
-                        .value_replacement("regex:^USA$", "United States")
-                        .remove_empty_strings(true)
-                        .remove_nulls(true)
-                        .remove_empty_objects(true)
-                        .remove_empty_arrays(true)
-                        .auto_convert_types(true)
-                        .handle_key_collision(true)
-                        .execute(black_box(json.as_str()))
-                        .expect("Comprehensive flatten failed");
-                    black_box(result);
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("all_features", size), &json, |b, json| {
+            b.iter(|| {
+                let result = JSONTools::new()
+                    .flatten()
+                    .separator("::")
+                    .lowercase_keys(true)
+                    .key_replacement("regex:_id$", "Id")
+                    .key_replacement("name", "fullName")
+                    .value_replacement("@example.com", "@company.org")
+                    .value_replacement("regex:^USA$", "United States")
+                    .remove_empty_strings(true)
+                    .remove_nulls(true)
+                    .remove_empty_objects(true)
+                    .remove_empty_arrays(true)
+                    .auto_convert_types(true)
+                    .handle_key_collision(true)
+                    .execute(black_box(json.as_str()))
+                    .expect("Comprehensive flatten failed");
+                black_box(result);
+            });
+        });
     }
 
     group.finish();
@@ -945,30 +899,26 @@ fn bench_roundtrip(c: &mut Criterion) {
 
     for (size, json) in test_cases {
         // Basic roundtrip
-        group.bench_with_input(
-            BenchmarkId::new("basic", size),
-            &json,
-            |b, json| {
-                b.iter(|| {
-                    let flattened = JSONTools::new()
-                        .flatten()
-                        .execute(black_box(json.as_str()))
-                        .expect("Flatten failed");
+        group.bench_with_input(BenchmarkId::new("basic", size), &json, |b, json| {
+            b.iter(|| {
+                let flattened = JSONTools::new()
+                    .flatten()
+                    .execute(black_box(json.as_str()))
+                    .expect("Flatten failed");
 
-                    let flattened_str = match flattened {
-                        JsonOutput::Single(s) => s,
-                        JsonOutput::Multiple(_) => panic!("Unexpected multiple output"),
-                    };
+                let flattened_str = match flattened {
+                    JsonOutput::Single(s) => s,
+                    JsonOutput::Multiple(_) => panic!("Unexpected multiple output"),
+                };
 
-                    let result = JSONTools::new()
-                        .unflatten()
-                        .execute(black_box(&flattened_str))
-                        .expect("Unflatten failed");
+                let result = JSONTools::new()
+                    .unflatten()
+                    .execute(black_box(&flattened_str))
+                    .expect("Unflatten failed");
 
-                    black_box(result);
-                });
-            },
-        );
+                black_box(result);
+            });
+        });
 
         // Roundtrip with transformations
         group.bench_with_input(
@@ -1018,36 +968,28 @@ fn bench_batch_processing(c: &mut Criterion) {
         let batch: Vec<&str> = (0..size).map(|_| small_json()).collect();
 
         // Sequential (threshold = usize::MAX to disable parallel)
-        group.bench_with_input(
-            BenchmarkId::new("sequential", size),
-            &batch,
-            |b, batch| {
-                b.iter(|| {
-                    let result = JSONTools::new()
-                        .flatten()
-                        .parallel_threshold(usize::MAX)
-                        .execute(black_box(batch.as_slice()))
-                        .expect("Sequential batch failed");
-                    black_box(result);
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("sequential", size), &batch, |b, batch| {
+            b.iter(|| {
+                let result = JSONTools::new()
+                    .flatten()
+                    .parallel_threshold(usize::MAX)
+                    .execute(black_box(batch.as_slice()))
+                    .expect("Sequential batch failed");
+                black_box(result);
+            });
+        });
 
         // Parallel (threshold = 1 to always use parallel)
-        group.bench_with_input(
-            BenchmarkId::new("parallel", size),
-            &batch,
-            |b, batch| {
-                b.iter(|| {
-                    let result = JSONTools::new()
-                        .flatten()
-                        .parallel_threshold(1)
-                        .execute(black_box(batch.as_slice()))
-                        .expect("Parallel batch failed");
-                    black_box(result);
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("parallel", size), &batch, |b, batch| {
+            b.iter(|| {
+                let result = JSONTools::new()
+                    .flatten()
+                    .parallel_threshold(1)
+                    .execute(black_box(batch.as_slice()))
+                    .expect("Parallel batch failed");
+                black_box(result);
+            });
+        });
     }
 
     group.finish();
@@ -1068,20 +1010,16 @@ fn bench_nested_parallelism(c: &mut Criterion) {
     ];
 
     for (name, threshold) in &thresholds {
-        group.bench_with_input(
-            BenchmarkId::new("xlarge", name),
-            &xlarge,
-            |b, json| {
-                b.iter(|| {
-                    let result = JSONTools::new()
-                        .flatten()
-                        .nested_parallel_threshold(*threshold)
-                        .execute(black_box(json))
-                        .expect("Flatten failed");
-                    black_box(result);
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("xlarge", name), &xlarge, |b, json| {
+            b.iter(|| {
+                let result = JSONTools::new()
+                    .flatten()
+                    .nested_parallel_threshold(*threshold)
+                    .execute(black_box(json))
+                    .expect("Flatten failed");
+                black_box(result);
+            });
+        });
     }
 
     group.finish();

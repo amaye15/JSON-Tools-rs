@@ -1,4 +1,4 @@
-use json_tools_rs::{JsonOutput, JSONTools};
+use json_tools_rs::{JSONTools, JsonOutput};
 
 fn main() {
     println!("🚀 JSON Tools RS - Advanced Usage Examples");
@@ -12,7 +12,7 @@ fn main() {
         "admin_profile_name": "Jane",
         "admin_profile_role": "super"
     }"#;
-    
+
     match JSONTools::new()
         .flatten()
         .key_replacement("regex:(user|admin)_profile_", "person_")
@@ -21,7 +21,10 @@ fn main() {
         .execute(complex_json)
     {
         Ok(JsonOutput::Single(result)) => {
-            println!("   Input:  {}", complex_json.replace('\n', "").replace("        ", ""));
+            println!(
+                "   Input:  {}",
+                complex_json.replace('\n', "").replace("        ", "")
+            );
             println!("   Output: {}", result);
             println!("   ✅ Regex patterns applied to both keys and values\n");
         }
@@ -81,7 +84,7 @@ fn main() {
             }
         }
     }"#;
-    
+
     match JSONTools::new()
         .flatten()
         .remove_empty_strings(true)
@@ -91,7 +94,10 @@ fn main() {
         .execute(messy_json)
     {
         Ok(JsonOutput::Single(result)) => {
-            println!("   Input:  {}", messy_json.replace('\n', "").replace("        ", ""));
+            println!(
+                "   Input:  {}",
+                messy_json.replace('\n', "").replace("        ", "")
+            );
             println!("   Output: {}", result);
             println!("   ✅ All empty values filtered out\n");
         }
@@ -106,7 +112,7 @@ fn main() {
         r#"{"user": {"name": "Bob", "role": "user"}}"#,
         r#"{"user": {"name": "Charlie", "role": "guest"}}"#,
     ];
-    
+
     match JSONTools::new()
         .flatten()
         .separator("_")
@@ -114,7 +120,10 @@ fn main() {
         .execute(json_batch.as_slice())
     {
         Ok(JsonOutput::Multiple(results)) => {
-            println!("   Processed {} JSON objects with lowercase keys:", results.len());
+            println!(
+                "   Processed {} JSON objects with lowercase keys:",
+                results.len()
+            );
             for (i, output) in results.iter().enumerate() {
                 println!("   [{}]: {}", i, output);
             }
@@ -149,12 +158,15 @@ fn main() {
             }
         }
     }"#;
-    
+
     match JSONTools::new()
         .flatten()
         .separator("::")
         .lowercase_keys(true)
-        .key_replacement("regex:(api_response|user_data|personal_info|account_settings)::", "")
+        .key_replacement(
+            "regex:(api_response|user_data|personal_info|account_settings)::",
+            "",
+        )
         .key_replacement("_", ".")
         .value_replacement("@example.com", "@company.org")
         .remove_empty_strings(true)
@@ -164,7 +176,10 @@ fn main() {
     {
         Ok(JsonOutput::Single(result)) => {
             println!("   Features: custom separator, lowercase, key normalization, value replacement, filtering");
-            println!("   Input:  [Complex API Response - {} chars]", api_response.len());
+            println!(
+                "   Input:  [Complex API Response - {} chars]",
+                api_response.len()
+            );
             println!("   Output: {}", result);
             println!("   ✅ Complex real-world transformation completed\n");
         }

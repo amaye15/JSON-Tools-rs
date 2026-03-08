@@ -1,4 +1,4 @@
-use criterion::{criterion_group, criterion_main, Criterion, BenchmarkId};
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use json_tools_rs::JSONTools;
 use std::hint::black_box;
 use std::time::Duration;
@@ -45,7 +45,9 @@ mod stress_data {
             }
             json.push_str(&format!(
                 "{{\"id\": {}, \"name\": \"item_{}\", \"value\": {}}}",
-                i, i, i * 10
+                i,
+                i,
+                i * 10
             ));
         }
         json.push_str("]}");
@@ -188,19 +190,15 @@ fn stress_01_deep_nesting(c: &mut Criterion) {
     for depth in depths {
         let json = stress_data::deep_nesting(depth);
 
-        group.bench_with_input(
-            BenchmarkId::new("flatten", depth),
-            &json,
-            |b, json| {
-                b.iter(|| {
-                    let result = JSONTools::new()
-                        .flatten()
-                        .execute(black_box(json.as_str()))
-                        .expect("Failed");
-                    black_box(result);
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("flatten", depth), &json, |b, json| {
+            b.iter(|| {
+                let result = JSONTools::new()
+                    .flatten()
+                    .execute(black_box(json.as_str()))
+                    .expect("Failed");
+                black_box(result);
+            });
+        });
 
         // With transformations
         group.bench_with_input(
@@ -232,19 +230,15 @@ fn stress_02_wide_objects(c: &mut Criterion) {
     for width in widths {
         let json = stress_data::wide_object(width);
 
-        group.bench_with_input(
-            BenchmarkId::new("flatten", width),
-            &json,
-            |b, json| {
-                b.iter(|| {
-                    let result = JSONTools::new()
-                        .flatten()
-                        .execute(black_box(json.as_str()))
-                        .expect("Failed");
-                    black_box(result);
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("flatten", width), &json, |b, json| {
+            b.iter(|| {
+                let result = JSONTools::new()
+                    .flatten()
+                    .execute(black_box(json.as_str()))
+                    .expect("Failed");
+                black_box(result);
+            });
+        });
 
         // With transformations
         group.bench_with_input(
@@ -277,19 +271,15 @@ fn stress_03_large_arrays(c: &mut Criterion) {
     for size in sizes {
         let json = stress_data::large_array(size);
 
-        group.bench_with_input(
-            BenchmarkId::new("flatten", size),
-            &json,
-            |b, json| {
-                b.iter(|| {
-                    let result = JSONTools::new()
-                        .flatten()
-                        .execute(black_box(json.as_str()))
-                        .expect("Failed");
-                    black_box(result);
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("flatten", size), &json, |b, json| {
+            b.iter(|| {
+                let result = JSONTools::new()
+                    .flatten()
+                    .execute(black_box(json.as_str()))
+                    .expect("Failed");
+                black_box(result);
+            });
+        });
 
         // With auto type conversion
         group.bench_with_input(
@@ -365,19 +355,15 @@ fn stress_05_many_small_objects(c: &mut Criterion) {
     for count in counts {
         let json = stress_data::many_small_objects(count);
 
-        group.bench_with_input(
-            BenchmarkId::new("flatten", count),
-            &json,
-            |b, json| {
-                b.iter(|| {
-                    let result = JSONTools::new()
-                        .flatten()
-                        .execute(black_box(json.as_str()))
-                        .expect("Failed");
-                    black_box(result);
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("flatten", count), &json, |b, json| {
+            b.iter(|| {
+                let result = JSONTools::new()
+                    .flatten()
+                    .execute(black_box(json.as_str()))
+                    .expect("Failed");
+                black_box(result);
+            });
+        });
 
         // With parallel processing
         group.bench_with_input(

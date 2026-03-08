@@ -1,4 +1,4 @@
-use json_tools_rs::{JsonOutput, JSONTools};
+use json_tools_rs::{JSONTools, JsonOutput};
 
 fn main() {
     println!("🚀 JSON Tools RS - Educational Examples");
@@ -52,7 +52,11 @@ fn main() {
     println!("4. Key Transformations - Lowercase Keys:");
     println!("   Convert all keys to lowercase during processing");
     let json4 = r#"{"UserName": "John", "UserProfile": {"FirstName": "John"}}"#;
-    match JSONTools::new().flatten().lowercase_keys(true).execute(json4) {
+    match JSONTools::new()
+        .flatten()
+        .lowercase_keys(true)
+        .execute(json4)
+    {
         Ok(JsonOutput::Single(result)) => {
             println!("   Input:  {}", json4);
             println!("   Output: {}", result);
@@ -258,8 +262,13 @@ fn main() {
         .execute(complex_json)
     {
         Ok(JsonOutput::Single(result)) => {
-            println!("    Features: custom separator, lowercase keys, key/value replacements, filtering");
-            println!("    Input:  {}", complex_json.replace('\n', "").replace("        ", ""));
+            println!(
+                "    Features: custom separator, lowercase keys, key/value replacements, filtering"
+            );
+            println!(
+                "    Input:  {}",
+                complex_json.replace('\n', "").replace("        ", "")
+            );
             println!("    Output: {}", result);
             println!("    Result: Comprehensive transformation with multiple features\n");
         }
@@ -280,8 +289,10 @@ fn main() {
                 Ok(JsonOutput::Single(unflattened)) => {
                     println!("    Unflattened: {}", unflattened);
 
-                    let original_parsed: serde_json::Value = serde_json::from_str(original).unwrap();
-                    let result_parsed: serde_json::Value = serde_json::from_str(&unflattened).unwrap();
+                    let original_parsed: serde_json::Value =
+                        serde_json::from_str(original).unwrap();
+                    let result_parsed: serde_json::Value =
+                        serde_json::from_str(&unflattened).unwrap();
                     if original_parsed == result_parsed {
                         println!("    ✅ Roundtrip successful - data preserved!\n");
                     } else {

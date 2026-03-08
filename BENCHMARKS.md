@@ -328,7 +328,7 @@ cargo bench --bench stress_benchmarks
 
 ## Performance Targets
 
-Based on v0.7.0 baseline:
+Based on v0.9.0 baseline (Crossbeam parallelism, optimized caching):
 
 | Operation | Target | Notes |
 |-----------|--------|-------|
@@ -401,19 +401,16 @@ Add to CI pipeline:
 cargo bench --bench stress_benchmarks -- stress_10_parallel_thresholds
 ```
 
-### Generating Flame Graphs
+### Generating Profiles (macOS)
 
 ```bash
-# Requires cargo-flamegraph
-cargo flamegraph --bench isolation_benchmarks -- --bench
+# Using samply (recommended for macOS)
+cargo bench --profile profiling --bench stress_benchmarks --no-run
+samply record --save-only -o /tmp/profile.json -- ./target/profiling/deps/stress_benchmarks-* --bench
+samply load /tmp/profile.json
 ```
 
-### Memory Profiling
-
-```bash
-# Requires valgrind and cargo-valgrind
-cargo valgrind --bench isolation_benchmarks
-```
+Note: `cargo flamegraph` requires full Xcode (not just CLI tools) on macOS. Valgrind does not work on modern macOS.
 
 ---
 

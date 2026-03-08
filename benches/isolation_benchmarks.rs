@@ -1,4 +1,4 @@
-use criterion::{criterion_group, criterion_main, Criterion, BenchmarkId};
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use json_tools_rs::JSONTools;
 use std::hint::black_box;
 use std::time::Duration;
@@ -91,19 +91,15 @@ fn iso_01_baseline_flatten(c: &mut Criterion) {
     ];
 
     for (size, json) in sizes {
-        group.bench_with_input(
-            BenchmarkId::new("flatten", size),
-            &json,
-            |b, json| {
-                b.iter(|| {
-                    let result = JSONTools::new()
-                        .flatten()
-                        .execute(black_box(*json))
-                        .expect("Failed");
-                    black_box(result);
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("flatten", size), &json, |b, json| {
+            b.iter(|| {
+                let result = JSONTools::new()
+                    .flatten()
+                    .execute(black_box(*json))
+                    .expect("Failed");
+                black_box(result);
+            });
+        });
     }
 
     group.finish();
@@ -129,20 +125,16 @@ fn iso_02_separator_only(c: &mut Criterion) {
     let json = test_data::medium_json();
 
     for (name, sep) in separators {
-        group.bench_with_input(
-            BenchmarkId::new("separator", name),
-            &sep,
-            |b, &sep| {
-                b.iter(|| {
-                    let result = JSONTools::new()
-                        .flatten()
-                        .separator(sep)
-                        .execute(black_box(json))
-                        .expect("Failed");
-                    black_box(result);
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("separator", name), &sep, |b, &sep| {
+            b.iter(|| {
+                let result = JSONTools::new()
+                    .flatten()
+                    .separator(sep)
+                    .execute(black_box(json))
+                    .expect("Failed");
+                black_box(result);
+            });
+        });
     }
 
     group.finish();
@@ -163,35 +155,27 @@ fn iso_03_lowercase_only(c: &mut Criterion) {
 
     for (size, json) in sizes {
         // Baseline (no lowercase)
-        group.bench_with_input(
-            BenchmarkId::new("baseline", size),
-            &json,
-            |b, json| {
-                b.iter(|| {
-                    let result = JSONTools::new()
-                        .flatten()
-                        .execute(black_box(*json))
-                        .expect("Failed");
-                    black_box(result);
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("baseline", size), &json, |b, json| {
+            b.iter(|| {
+                let result = JSONTools::new()
+                    .flatten()
+                    .execute(black_box(*json))
+                    .expect("Failed");
+                black_box(result);
+            });
+        });
 
         // With lowercase
-        group.bench_with_input(
-            BenchmarkId::new("lowercase", size),
-            &json,
-            |b, json| {
-                b.iter(|| {
-                    let result = JSONTools::new()
-                        .flatten()
-                        .lowercase_keys(true)
-                        .execute(black_box(*json))
-                        .expect("Failed");
-                    black_box(result);
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("lowercase", size), &json, |b, json| {
+            b.iter(|| {
+                let result = JSONTools::new()
+                    .flatten()
+                    .lowercase_keys(true)
+                    .execute(black_box(*json))
+                    .expect("Failed");
+                black_box(result);
+            });
+        });
     }
 
     group.finish();
@@ -436,35 +420,27 @@ fn iso_07_auto_type_conversion_only(c: &mut Criterion) {
 
     for (size, json) in sizes {
         // Baseline (no conversion)
-        group.bench_with_input(
-            BenchmarkId::new("baseline", size),
-            &json,
-            |b, json| {
-                b.iter(|| {
-                    let result = JSONTools::new()
-                        .flatten()
-                        .execute(black_box(*json))
-                        .expect("Failed");
-                    black_box(result);
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("baseline", size), &json, |b, json| {
+            b.iter(|| {
+                let result = JSONTools::new()
+                    .flatten()
+                    .execute(black_box(*json))
+                    .expect("Failed");
+                black_box(result);
+            });
+        });
 
         // With auto conversion
-        group.bench_with_input(
-            BenchmarkId::new("auto_convert", size),
-            &json,
-            |b, json| {
-                b.iter(|| {
-                    let result = JSONTools::new()
-                        .flatten()
-                        .auto_convert_types(true)
-                        .execute(black_box(*json))
-                        .expect("Failed");
-                    black_box(result);
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("auto_convert", size), &json, |b, json| {
+            b.iter(|| {
+                let result = JSONTools::new()
+                    .flatten()
+                    .auto_convert_types(true)
+                    .execute(black_box(*json))
+                    .expect("Failed");
+                black_box(result);
+            });
+        });
     }
 
     group.finish();

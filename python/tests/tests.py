@@ -2317,7 +2317,7 @@ class TestParallelProcessing:
         assert tools is not None
 
     def test_num_threads_with_none(self):
-        """Test that num_threads accepts None (use Rayon default)"""
+        """Test that num_threads accepts None (use system default)"""
         tools = json_tools_rs.JSONTools().flatten().num_threads(None)
         assert tools is not None
 

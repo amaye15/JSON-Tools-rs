@@ -13,11 +13,11 @@ fn main() {
         .auto_convert_types(true)
         .execute(json)
         .unwrap();
-    
+
     if let JsonOutput::Single(output) = result {
         println!("Input:  {}", json);
         println!("Output: {}\n", output);
-        
+
         let parsed: Value = serde_json::from_str(&output).unwrap();
         assert_eq!(parsed["id"], 123);
         assert_eq!(parsed["price"], 45.67);
@@ -32,11 +32,11 @@ fn main() {
         .auto_convert_types(true)
         .execute(json)
         .unwrap();
-    
+
     if let JsonOutput::Single(output) = result {
         println!("Input:  {}", json);
         println!("Output: {}\n", output);
-        
+
         let parsed: Value = serde_json::from_str(&output).unwrap();
         assert_eq!(parsed["usd"], 1234.56);
         assert_eq!(parsed["eur"], 999.99);
@@ -51,11 +51,11 @@ fn main() {
         .auto_convert_types(true)
         .execute(json)
         .unwrap();
-    
+
     if let JsonOutput::Single(output) = result {
         println!("Input:  {}", json);
         println!("Output: {}\n", output);
-        
+
         let parsed: Value = serde_json::from_str(&output).unwrap();
         assert_eq!(parsed["a"], true);
         assert_eq!(parsed["b"], false);
@@ -70,11 +70,11 @@ fn main() {
         .auto_convert_types(true)
         .execute(json)
         .unwrap();
-    
+
     if let JsonOutput::Single(output) = result {
         println!("Input:  {}", json);
         println!("Output: {}\n", output);
-        
+
         let parsed: Value = serde_json::from_str(&output).unwrap();
         assert_eq!(parsed["id"], 123);
         assert_eq!(parsed["name"], "Alice");
@@ -90,11 +90,11 @@ fn main() {
         .auto_convert_types(true)
         .execute(json)
         .unwrap();
-    
+
     if let JsonOutput::Single(output) = result {
         println!("Input:  {}", json);
         println!("Output: {}\n", output);
-        
+
         let parsed: Value = serde_json::from_str(&output).unwrap();
         assert_eq!(parsed["user.id"], 456);
         assert_eq!(parsed["user.age"], 25);
@@ -104,18 +104,15 @@ fn main() {
     // Test 6: Conversion disabled (default)
     println!("Test 6: Conversion Disabled (default behavior)");
     let json = r#"{"id": "123", "active": "true"}"#;
-    let result = JSONTools::new()
-        .flatten()
-        .execute(json)
-        .unwrap();
-    
+    let result = JSONTools::new().flatten().execute(json).unwrap();
+
     if let JsonOutput::Single(output) = result {
         println!("Input:  {}", json);
         println!("Output: {}\n", output);
-        
+
         let parsed: Value = serde_json::from_str(&output).unwrap();
-        assert_eq!(parsed["id"], "123");  // Still a string
-        assert_eq!(parsed["active"], "true");  // Still a string
+        assert_eq!(parsed["id"], "123"); // Still a string
+        assert_eq!(parsed["active"], "true"); // Still a string
     }
 
     // Test 7: Scientific notation
@@ -218,7 +215,7 @@ fn main() {
         assert_eq!(parsed["price"], 1234.56);
         assert_eq!(parsed["discount"], 15.0);
         assert_eq!(parsed["active"], true);
-        assert_eq!(parsed["verified"], 1);  // Now treated as number, not boolean
+        assert_eq!(parsed["verified"], 1); // Now treated as number, not boolean
         assert_eq!(parsed["premium"], false);
         assert_eq!(parsed["status"], Value::Null);
         assert_eq!(parsed["name"], "Product");
@@ -240,9 +237,9 @@ fn main() {
         println!("Output: {}\n", output);
 
         let parsed: Value = serde_json::from_str(&output).unwrap();
-        assert_eq!(parsed["null_str"], Value::Null);  // null takes priority
-        assert_eq!(parsed["bool_str"], true);         // boolean takes priority over number
-        assert_eq!(parsed["num_str"], 100);           // number conversion last
+        assert_eq!(parsed["null_str"], Value::Null); // null takes priority
+        assert_eq!(parsed["bool_str"], true); // boolean takes priority over number
+        assert_eq!(parsed["num_str"], 100); // number conversion last
     }
 
     println!("==========================================");
@@ -254,4 +251,3 @@ fn main() {
     println!("  • Conversion priority: null → boolean → number");
     println!("  • Note: '1' and '0' are treated as numbers, not booleans");
 }
-

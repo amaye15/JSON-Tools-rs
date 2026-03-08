@@ -1,4 +1,4 @@
-use crate::{JsonOutput, JSONTools};
+use crate::{JSONTools, JsonOutput};
 use serde_json::Value;
 
 /// Helper function to extract single result from JsonOutput
@@ -199,7 +199,12 @@ mod unit_tests {
         assert_eq!(parsed["user.name"], "John");
         assert_eq!(parsed["user.settings.theme"], "dark");
         // Empty objects should be removed, so no user.profile keys should exist
-        let keys: Vec<&str> = parsed.as_object().unwrap().keys().map(|s| s.as_str()).collect();
+        let keys: Vec<&str> = parsed
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(|s| s.as_str())
+            .collect();
         assert!(!keys.iter().any(|k| k.starts_with("user.profile")));
     }
 
@@ -218,7 +223,12 @@ mod unit_tests {
         assert_eq!(parsed["user.items.0"], 1);
         assert_eq!(parsed["user.items.1"], 2);
         // Empty arrays should be removed
-        let keys: Vec<&str> = parsed.as_object().unwrap().keys().map(|s| s.as_str()).collect();
+        let keys: Vec<&str> = parsed
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(|s| s.as_str())
+            .collect();
         assert!(!keys.iter().any(|k| k.starts_with("user.tags")));
     }
 
@@ -252,7 +262,8 @@ mod unit_tests {
 
     #[test]
     fn test_roundtrip_compatibility() {
-        let original = r#"{"user": {"name": "John", "age": 30}, "items": [1, 2, {"nested": "value"}]}"#;
+        let original =
+            r#"{"user": {"name": "John", "age": 30}, "items": [1, 2, {"nested": "value"}]}"#;
 
         // Flatten
         let flattened_result = JSONTools::new().flatten().execute(original).unwrap();
@@ -295,10 +306,7 @@ mod unit_tests {
 
     #[test]
     fn test_multiple_input_unflatten() {
-        let flattened_list = vec![
-            r#"{"user.name": "John"}"#,
-            r#"{"user.name": "Jane"}"#,
-        ];
+        let flattened_list = vec![r#"{"user.name": "John"}"#, r#"{"user.name": "Jane"}"#];
 
         let result = JSONTools::new()
             .unflatten()
@@ -371,7 +379,8 @@ mod unit_tests {
 
     #[test]
     fn test_unflatten_remove_empty_objects() {
-        let flattened = r#"{"user.name": "John", "user.profile": {}, "user.settings.theme": "dark"}"#;
+        let flattened =
+            r#"{"user.name": "John", "user.profile": {}, "user.settings.theme": "dark"}"#;
         let result = JSONTools::new()
             .unflatten()
             .remove_empty_objects(true)
@@ -519,9 +528,18 @@ mod unit_tests {
         // Verify that both operations applied filtering correctly
         assert_eq!(flattened_parsed["profile::name"], "John");
         assert_eq!(flattened_parsed["profile::email"], "john@company.org");
-        assert!(!flattened_parsed.as_object().unwrap().contains_key("profile::bio"));
-        assert!(!flattened_parsed.as_object().unwrap().contains_key("profile::age"));
-        assert!(!flattened_parsed.as_object().unwrap().contains_key("profile::tags"));
+        assert!(!flattened_parsed
+            .as_object()
+            .unwrap()
+            .contains_key("profile::bio"));
+        assert!(!flattened_parsed
+            .as_object()
+            .unwrap()
+            .contains_key("profile::age"));
+        assert!(!flattened_parsed
+            .as_object()
+            .unwrap()
+            .contains_key("profile::tags"));
 
         assert_eq!(unflattened_parsed["profile"]["name"], "John");
         assert_eq!(unflattened_parsed["profile"]["email"], "john@example.com");
@@ -577,8 +595,6 @@ mod unit_tests {
             panic!("Expected array for 'name' key");
         }
     }
-
-
 
     #[test]
     fn test_handle_key_collision_unflatten() {
@@ -813,7 +829,8 @@ mod unit_tests {
 
     #[test]
     fn test_boolean_conversion() {
-        let json = r#"{"a": "true", "b": "TRUE", "c": "True", "d": "false", "e": "FALSE", "f": "False"}"#;
+        let json =
+            r#"{"a": "true", "b": "TRUE", "c": "True", "d": "false", "e": "FALSE", "f": "False"}"#;
         let result = JSONTools::new()
             .flatten()
             .auto_convert_types(true)
@@ -902,10 +919,7 @@ mod unit_tests {
     #[test]
     fn test_conversion_disabled_by_default() {
         let json = r#"{"id": "123", "active": "true"}"#;
-        let result = JSONTools::new()
-            .flatten()
-            .execute(json)
-            .unwrap();
+        let result = JSONTools::new().flatten().execute(json).unwrap();
         let flattened = extract_single(result);
         let parsed: Value = serde_json::from_str(&flattened).unwrap();
 
@@ -985,7 +999,11 @@ mod memory_profiling_tests {
             _ => panic!("Expected Multiple output"),
         };
 
-        assert_eq!(seq_results.len(), par_results.len(), "Result counts should match");
+        assert_eq!(
+            seq_results.len(),
+            par_results.len(),
+            "Result counts should match"
+        );
         for (i, (seq, par)) in seq_results.iter().zip(par_results.iter()).enumerate() {
             assert_eq!(seq, par, "Result {} should be identical", i);
         }
@@ -995,7 +1013,11 @@ mod memory_profiling_tests {
         let avg_size = total_size / seq_results.len();
 
         println!("Average result size: {} bytes", avg_size);
-        println!("Total results size: {} bytes ({:.2} KB)", total_size, total_size as f64 / 1024.0);
+        println!(
+            "Total results size: {} bytes ({:.2} KB)",
+            total_size,
+            total_size as f64 / 1024.0
+        );
 
         // Each flattened JSON should be reasonable (< 1KB for this test data)
         assert!(avg_size < 1000, "Average result size is unexpectedly large");
@@ -1012,7 +1034,9 @@ mod memory_profiling_tests {
                 .map(|i| {
                     format!(
                         r#"{{"id": {}, "data": "Item {}", "value": {}}}"#,
-                        i, i, i * 100
+                        i,
+                        i,
+                        i * 100
                     )
                 })
                 .collect();
@@ -1027,11 +1051,17 @@ mod memory_profiling_tests {
 
             // Measure output size as proxy for memory usage
             if let crate::JsonOutput::Multiple(results) = result {
-                let total_bytes: usize = results.iter().map(|s| s.len() + std::mem::size_of::<String>()).sum();
+                let total_bytes: usize = results
+                    .iter()
+                    .map(|s| s.len() + std::mem::size_of::<String>())
+                    .sum();
                 let per_item = total_bytes / size;
                 bytes_per_item.push(per_item);
 
-                println!("Batch size {}: {} bytes total, {} bytes per item", size, total_bytes, per_item);
+                println!(
+                    "Batch size {}: {} bytes total, {} bytes per item",
+                    size, total_bytes, per_item
+                );
             }
         }
 
@@ -1057,9 +1087,7 @@ mod memory_profiling_tests {
         let size = 1500; // Triggers chunked processing
 
         let json_docs: Vec<String> = (0..size)
-            .map(|i| {
-                format!(r#"{{"id": {}, "value": {}}}"#, i, i * 10)
-            })
+            .map(|i| format!(r#"{{"id": {}, "value": {}}}"#, i, i * 10))
             .collect();
 
         let json_refs: Vec<&str> = json_docs.iter().map(|s| s.as_str()).collect();
@@ -1074,10 +1102,16 @@ mod memory_profiling_tests {
         if let crate::JsonOutput::Multiple(results) = result {
             assert_eq!(results.len(), size, "Should process all items");
 
-            let total_bytes: usize = results.iter().map(|s| s.len() + std::mem::size_of::<String>()).sum();
+            let total_bytes: usize = results
+                .iter()
+                .map(|s| s.len() + std::mem::size_of::<String>())
+                .sum();
             let per_item = total_bytes / size;
 
-            println!("Chunked processing (1500 items): {} bytes total, {} bytes per item", total_bytes, per_item);
+            println!(
+                "Chunked processing (1500 items): {} bytes total, {} bytes per item",
+                total_bytes, per_item
+            );
 
             // Validate: per-item memory should be reasonable (< 1KB per item for this simple JSON)
             assert!(
@@ -1109,8 +1143,16 @@ mod memory_profiling_tests {
 
             // Each result should be a valid JSON string
             for (i, result_str) in results.iter().enumerate() {
-                assert!(result_str.contains("id"), "Result {} should contain 'id' field", i);
-                assert!(result_str.contains("data"), "Result {} should contain 'data' field", i);
+                assert!(
+                    result_str.contains("id"),
+                    "Result {} should contain 'id' field",
+                    i
+                );
+                assert!(
+                    result_str.contains("data"),
+                    "Result {} should contain 'data' field",
+                    i
+                );
             }
 
             println!("Successfully processed and validated 100 items");
@@ -1125,7 +1167,9 @@ mod memory_profiling_tests {
             .map(|i| {
                 format!(
                     r#"{{"id": {}, "nested": {{"value": {}, "name": "Item {}"}}}}"#,
-                    i, i * 10, i
+                    i,
+                    i * 10,
+                    i
                 )
             })
             .collect();
@@ -1232,10 +1276,10 @@ mod nested_parallelism_tests {
         };
 
         // Parse both results to compare as JSON objects (order-independent)
-        let sequential_value: serde_json::Value = serde_json::from_str(&sequential_json)
-            .expect("Failed to parse sequential result");
-        let parallel_value: serde_json::Value = serde_json::from_str(&parallel_json)
-            .expect("Failed to parse parallel result");
+        let sequential_value: serde_json::Value =
+            serde_json::from_str(&sequential_json).expect("Failed to parse sequential result");
+        let parallel_value: serde_json::Value =
+            serde_json::from_str(&parallel_json).expect("Failed to parse parallel result");
 
         assert_eq!(
             sequential_value, parallel_value,
@@ -1252,7 +1296,10 @@ mod nested_parallelism_tests {
             if i > 0 {
                 json.push(',');
             }
-            json.push_str(&format!(r#""key_{}": {{"nested": "value_{}", "id": {}}}"#, i, i, i));
+            json.push_str(&format!(
+                r#""key_{}": {{"nested": "value_{}", "id": {}}}"#,
+                i, i, i
+            ));
         }
         json.push('}');
 
@@ -1296,7 +1343,10 @@ mod nested_parallelism_tests {
             if i > 0 {
                 json.push(',');
             }
-            json.push_str(&format!(r#"{{"id": {}, "value": "item_{}", "nested": {{"data": "test_{}"}} }}"#, i, i, i));
+            json.push_str(&format!(
+                r#"{{"id": {}, "value": "item_{}", "nested": {{"data": "test_{}"}} }}"#,
+                i, i, i
+            ));
         }
         json.push(']');
 
@@ -1424,9 +1474,9 @@ mod nested_parallelism_tests {
 
 #[cfg(test)]
 mod parallel_regex_cache_tests {
+    use super::extract_single;
     use crate::{JSONTools, JsonOutput};
     use serde_json::Value;
-    use super::extract_single;
 
     /// Test that parallel processing with regex replacements works correctly
     #[test]
@@ -1457,20 +1507,30 @@ mod parallel_regex_cache_tests {
             assert_eq!(results.len(), 100);
 
             for (i, result_str) in results.iter().enumerate() {
-                let value: serde_json::Value = serde_json::from_str(result_str)
-                    .expect("Failed to parse result");
+                let value: serde_json::Value =
+                    serde_json::from_str(result_str).expect("Failed to parse result");
 
                 // Check that key replacements worked
-                assert!(value.as_object().unwrap().contains_key("id"), "Should have 'id' key");
-                assert!(value.as_object().unwrap().contains_key("name"), "Should have 'name' key");
-                assert!(value.as_object().unwrap().contains_key("email"), "Should have 'email' key");
+                assert!(
+                    value.as_object().unwrap().contains_key("id"),
+                    "Should have 'id' key"
+                );
+                assert!(
+                    value.as_object().unwrap().contains_key("name"),
+                    "Should have 'name' key"
+                );
+                assert!(
+                    value.as_object().unwrap().contains_key("email"),
+                    "Should have 'email' key"
+                );
 
                 // Check that value replacements worked
                 let email = value["email"].as_str().unwrap();
                 assert!(
                     email.contains("@company.org"),
                     "Email should be replaced: {} (item {})",
-                    email, i
+                    email,
+                    i
                 );
             }
         } else {
@@ -1529,7 +1589,13 @@ mod parallel_regex_cache_tests {
         // This test verifies that thread-local regex caches don't interfere with each other
         let json_docs: Vec<String> = (0..200)
             .map(|i| {
-                format!(r#"{{"field_{}_name": "value{}", "data_{}_id": {}}}"#, i % 10, i, i % 5, i)
+                format!(
+                    r#"{{"field_{}_name": "value{}", "data_{}_id": {}}}"#,
+                    i % 10,
+                    i,
+                    i % 5,
+                    i
+                )
             })
             .collect();
 
@@ -1555,7 +1621,8 @@ mod parallel_regex_cache_tests {
 
                 // Check that replacements were applied
                 assert!(
-                    obj.keys().any(|k| k.starts_with("f_") || k.starts_with("d_")),
+                    obj.keys()
+                        .any(|k| k.starts_with("f_") || k.starts_with("d_")),
                     "Keys should have replacements applied"
                 );
             }
@@ -1566,9 +1633,7 @@ mod parallel_regex_cache_tests {
     #[test]
     fn test_adaptive_threshold_behavior() {
         // Small batch (< threshold) - should use sequential
-        let small_batch: Vec<String> = (0..5)
-            .map(|i| format!(r#"{{"user_id": {}}}"#, i))
-            .collect();
+        let small_batch: Vec<String> = (0..5).map(|i| format!(r#"{{"user_id": {}}}"#, i)).collect();
         let small_refs: Vec<&str> = small_batch.iter().map(|s| s.as_str()).collect();
 
         let small_result = JSONTools::new()
@@ -1601,9 +1666,7 @@ mod parallel_regex_cache_tests {
     fn test_environment_variable_threshold() {
         std::env::set_var("JSON_TOOLS_PARALLEL_THRESHOLD", "5");
 
-        let json_docs: Vec<String> = (0..10)
-            .map(|i| format!(r#"{{"id": {}}}"#, i))
-            .collect();
+        let json_docs: Vec<String> = (0..10).map(|i| format!(r#"{{"id": {}}}"#, i)).collect();
         let json_refs: Vec<&str> = json_docs.iter().map(|s| s.as_str()).collect();
 
         // Should use parallel processing because batch size (10) > threshold (5)
@@ -1755,7 +1818,7 @@ mod parallel_regex_cache_tests {
         assert_eq!(parsed["bool_no"], false);
         assert_eq!(parsed["null_str"], Value::Null);
         assert_eq!(parsed["regular_string"], "hello");
-        assert_eq!(parsed["empty"], "");  // Empty strings stay as strings
+        assert_eq!(parsed["empty"], ""); // Empty strings stay as strings
         assert_eq!(parsed["actual_null"], Value::Null);
         assert_eq!(parsed["currency"], 1234.56);
     }
@@ -1781,9 +1844,9 @@ mod parallel_regex_cache_tests {
         let parsed: Value = serde_json::from_str(&flattened).unwrap();
 
         // Verify conversion priority
-        assert_eq!(parsed["null_variant"], Value::Null);  // Null string takes priority
-        assert_eq!(parsed["bool_variant"], true);         // Boolean conversion
-        assert_eq!(parsed["number_variant"], 123);        // Number conversion
+        assert_eq!(parsed["null_variant"], Value::Null); // Null string takes priority
+        assert_eq!(parsed["bool_variant"], true); // Boolean conversion
+        assert_eq!(parsed["number_variant"], 123); // Number conversion
 
         // "1" and "0" are now treated as numbers, not booleans
         assert_eq!(parsed["one_digit"], 1);
@@ -1921,10 +1984,10 @@ mod parallel_regex_cache_tests {
         let flattened1 = extract_single(result1);
         let parsed1: Value = serde_json::from_str(&flattened1).unwrap();
         assert_eq!(parsed1["actual_null"], Value::Null);
-        assert_eq!(parsed1["string_null"], Value::Null);  // Converted from "null"
-        assert_eq!(parsed1["string_na"], Value::Null);     // Converted from "N/A"
-        assert_eq!(parsed1["string_nil"], Value::Null);    // Converted from "nil"
-        assert_eq!(parsed1["string_none"], Value::Null);   // Converted from "none"
+        assert_eq!(parsed1["string_null"], Value::Null); // Converted from "null"
+        assert_eq!(parsed1["string_na"], Value::Null); // Converted from "N/A"
+        assert_eq!(parsed1["string_nil"], Value::Null); // Converted from "nil"
+        assert_eq!(parsed1["string_none"], Value::Null); // Converted from "none"
         assert_eq!(parsed1["regular_string"], "hello");
         assert_eq!(parsed1["number"], 42);
         assert_eq!(parsed1["boolean"], true);
@@ -1938,14 +2001,14 @@ mod parallel_regex_cache_tests {
 
         let flattened2 = extract_single(result2);
         let parsed2: Value = serde_json::from_str(&flattened2).unwrap();
-        assert!(parsed2.get("actual_null").is_none());  // Removed
-        assert_eq!(parsed2["string_null"], "null");     // Kept as string (not converted)
-        assert_eq!(parsed2["string_na"], "N/A");        // Kept as string (not converted)
-        assert_eq!(parsed2["string_nil"], "nil");       // Kept as string (not converted)
-        assert_eq!(parsed2["string_none"], "none");     // Kept as string (not converted)
+        assert!(parsed2.get("actual_null").is_none()); // Removed
+        assert_eq!(parsed2["string_null"], "null"); // Kept as string (not converted)
+        assert_eq!(parsed2["string_na"], "N/A"); // Kept as string (not converted)
+        assert_eq!(parsed2["string_nil"], "nil"); // Kept as string (not converted)
+        assert_eq!(parsed2["string_none"], "none"); // Kept as string (not converted)
         assert_eq!(parsed2["regular_string"], "hello");
-        assert_eq!(parsed2["number"], "42");            // Not converted
-        assert_eq!(parsed2["boolean"], "true");         // Not converted
+        assert_eq!(parsed2["number"], "42"); // Not converted
+        assert_eq!(parsed2["boolean"], "true"); // Not converted
 
         // Scenario 3: Both together - converts string nulls THEN removes all nulls
         let result3 = JSONTools::new()
@@ -1957,17 +2020,17 @@ mod parallel_regex_cache_tests {
 
         let flattened3 = extract_single(result3);
         let parsed3: Value = serde_json::from_str(&flattened3).unwrap();
-        assert!(parsed3.get("actual_null").is_none());   // Removed
-        assert!(parsed3.get("string_null").is_none());   // Converted to null, then removed
-        assert!(parsed3.get("string_na").is_none());     // Converted to null, then removed
-        assert!(parsed3.get("string_nil").is_none());    // Converted to null, then removed
-        assert!(parsed3.get("string_none").is_none());   // Converted to null, then removed
-        assert_eq!(parsed3["regular_string"], "hello");  // Kept
-        assert_eq!(parsed3["number"], 42);               // Converted and kept
-        assert_eq!(parsed3["boolean"], true);            // Converted and kept
+        assert!(parsed3.get("actual_null").is_none()); // Removed
+        assert!(parsed3.get("string_null").is_none()); // Converted to null, then removed
+        assert!(parsed3.get("string_na").is_none()); // Converted to null, then removed
+        assert!(parsed3.get("string_nil").is_none()); // Converted to null, then removed
+        assert!(parsed3.get("string_none").is_none()); // Converted to null, then removed
+        assert_eq!(parsed3["regular_string"], "hello"); // Kept
+        assert_eq!(parsed3["number"], 42); // Converted and kept
+        assert_eq!(parsed3["boolean"], true); // Converted and kept
 
         // Verify that only non-null values remain when both are enabled
-        assert_eq!(parsed3.as_object().unwrap().len(), 3);  // Only 3 keys remain
+        assert_eq!(parsed3.as_object().unwrap().len(), 3); // Only 3 keys remain
     }
 
     #[test]
@@ -2053,10 +2116,10 @@ mod parallel_regex_cache_tests {
 
         assert_eq!(parsed["hex_lower"], 255.0);
         assert_eq!(parsed["hex_upper"], 255.0);
-        assert_eq!(parsed["hex_large"], 6699.0);  // 0x1A2B = 6699
-        assert_eq!(parsed["binary"], 10.0);       // 0b1010 = 10
+        assert_eq!(parsed["hex_large"], 6699.0); // 0x1A2B = 6699
+        assert_eq!(parsed["binary"], 10.0); // 0b1010 = 10
         assert_eq!(parsed["binary_upper"], 15.0); // 0B1111 = 15
-        assert_eq!(parsed["octal"], 511.0);       // 0o777 = 511
+        assert_eq!(parsed["octal"], 511.0); // 0o777 = 511
         assert_eq!(parsed["octal_upper"], 493.0); // 0O755 = 493
         assert_eq!(parsed["negative_hex"], -16.0); // -0x10 = -16
     }
@@ -2081,10 +2144,10 @@ mod parallel_regex_cache_tests {
         let parsed: Value = serde_json::from_str(&flattened).unwrap();
 
         // Basis points: 1bp = 0.0001 (1/100th of a percent)
-        assert_eq!(parsed["bp_suffix"], 0.0025);   // 25bp = 0.0025
-        assert_eq!(parsed["bps_suffix"], 0.005);   // 50bps = 0.005
-        assert_eq!(parsed["bp_space"], 0.01);      // 100bp = 0.01
-        assert_eq!(parsed["bps_space"], 0.0075);   // 75bps = 0.0075
+        assert_eq!(parsed["bp_suffix"], 0.0025); // 25bp = 0.0025
+        assert_eq!(parsed["bps_suffix"], 0.005); // 50bps = 0.005
+        assert_eq!(parsed["bp_space"], 0.01); // 100bp = 0.01
+        assert_eq!(parsed["bps_space"], 0.0075); // 75bps = 0.0075
     }
 
     #[test]
@@ -2105,9 +2168,9 @@ mod parallel_regex_cache_tests {
         let parsed: Value = serde_json::from_str(&flattened).unwrap();
 
         // Permille: 1‰ = 0.001 (per thousand)
-        assert_eq!(parsed["permille"], 0.005);  // 5‰ = 0.005
-        // Per ten-thousand: 1‱ = 0.0001
-        assert_eq!(parsed["per_ten_thousand"], 0.0025);  // 25‱ = 0.0025
+        assert_eq!(parsed["permille"], 0.005); // 5‰ = 0.005
+                                               // Per ten-thousand: 1‱ = 0.0001
+        assert_eq!(parsed["per_ten_thousand"], 0.0025); // 25‱ = 0.0025
     }
 
     #[test]
@@ -2129,10 +2192,10 @@ mod parallel_regex_cache_tests {
         let flattened = extract_single(result);
         let parsed: Value = serde_json::from_str(&flattened).unwrap();
 
-        assert_eq!(parsed["one_lakh"], 100000.0);     // 1,00,000 = 100,000
-        assert_eq!(parsed["ten_lakh"], 1000000.0);    // 10,00,000 = 1,000,000
-        assert_eq!(parsed["one_crore"], 10000000.0);  // 1,00,00,000 = 10,000,000
-        assert_eq!(parsed["mixed"], 1234567.0);       // 12,34,567 = 1,234,567
+        assert_eq!(parsed["one_lakh"], 100000.0); // 1,00,000 = 100,000
+        assert_eq!(parsed["ten_lakh"], 1000000.0); // 10,00,000 = 1,000,000
+        assert_eq!(parsed["one_crore"], 10000000.0); // 1,00,00,000 = 10,000,000
+        assert_eq!(parsed["mixed"], 1234567.0); // 12,34,567 = 1,234,567
     }
 
     #[test]
@@ -2307,7 +2370,7 @@ mod parallel_regex_cache_tests {
 
         // Ordinal dates normalized to YYYY-MM-DD
         assert_eq!(parsed["jan_15"], "2024-01-15");
-        assert_eq!(parsed["dec_31"], "2024-12-31");  // 2024 is leap year
+        assert_eq!(parsed["dec_31"], "2024-12-31"); // 2024 is leap year
         assert_eq!(parsed["leap_year"], "2024-02-29"); // Day 60 in leap year
     }
 
@@ -2331,7 +2394,7 @@ mod parallel_regex_cache_tests {
         // Week dates normalized to YYYY-MM-DD
         // Week 3 of 2024: Jan 15-21
         assert_eq!(parsed["week_with_day"], "2024-01-15"); // Monday
-        assert_eq!(parsed["week_friday"], "2024-01-19");   // Friday
+        assert_eq!(parsed["week_friday"], "2024-01-19"); // Friday
     }
 
     #[test]
@@ -2382,10 +2445,10 @@ mod parallel_regex_cache_tests {
         let parsed: Value = serde_json::from_str(&flattened).unwrap();
 
         // All should normalize to UTC
-        assert_eq!(parsed["colon_offset"], "2024-01-15T05:00:00Z");  // +05:30
-        assert_eq!(parsed["no_colon_offset"], "2024-01-15T05:00:00Z");  // +0530
-        assert_eq!(parsed["hour_only_offset"], "2024-01-15T05:30:00Z");  // +05:00
-        assert_eq!(parsed["negative_offset"], "2024-01-15T18:30:00Z");  // -08:00
+        assert_eq!(parsed["colon_offset"], "2024-01-15T05:00:00Z"); // +05:30
+        assert_eq!(parsed["no_colon_offset"], "2024-01-15T05:00:00Z"); // +0530
+        assert_eq!(parsed["hour_only_offset"], "2024-01-15T05:30:00Z"); // +05:00
+        assert_eq!(parsed["negative_offset"], "2024-01-15T18:30:00Z"); // -08:00
         assert_eq!(parsed["zulu"], "2024-01-15T10:30:00Z");
     }
 
