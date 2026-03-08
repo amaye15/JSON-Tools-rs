@@ -57,6 +57,9 @@ venv.bak/
 ehthumbs.db
 Thumbs.db
 
+# mdBook output
+/book/
+
 # Temporary files
 *.tmp
 *.temp

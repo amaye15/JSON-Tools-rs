@@ -1,0 +1,19 @@
+[book]
+title = "JSON Tools RS"
+authors = ["JSON Tools RS Contributors"]
+description = "High-performance JSON manipulation library with SIMD-accelerated parsing"
+src = "docs/src"
+language = "en"
+
+[build]
+build-dir = "book"
+
+[output.html]
+git-repository-url = "https://github.com/amaye15/JSON-Tools-rs"
+edit-url-template = "https://github.com/amaye15/JSON-Tools-rs/edit/master/{path}"
+site-url = "/JSON-Tools-rs/"
+default-theme = "light"
+preferred-dark-theme = "navy"
+
+[output.html.search]
+enable = true
