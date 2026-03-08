@@ -27,7 +27,7 @@ serde_json = "1.0.141"
 pyo3 = { version = "0.27.2", features = ["extension-module"], optional = true }
 thiserror = "2.0.12"
 rustc-hash = "2.0.0"
-fast-float = "0.2"
+fast-float2 = "0.2"
 crossbeam = "0.8"
 memchr = "2.7"  # SIMD-optimized byte searching
 smallvec = "1.13"  # Stack-allocated vectors for small buffers

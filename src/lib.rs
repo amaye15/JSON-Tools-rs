@@ -3403,27 +3403,27 @@ fn try_parse_number(trimmed: &str) -> Option<f64> {
 
     // Fast path: try direct parse first (handles basic numbers and scientific notation)
     // This catches ~90% of cases with minimal overhead
-    if let Ok(num) = fast_float::parse(trimmed) {
+    if let Ok(num) = fast_float2::parse(trimmed) {
         return Some(num);
     }
 
     // Handle percentage strings (e.g., "50%" → 50.0)
     if let Some(stripped) = trimmed.strip_suffix('%') {
-        if let Ok(num) = fast_float::parse(stripped) {
+        if let Ok(num) = fast_float2::parse(stripped) {
             return Some(num);
         }
     }
 
     // Handle permille (‰) - per thousand
     if let Some(stripped) = trimmed.strip_suffix('‰') {
-        if let Ok(num) = fast_float::parse::<f64, _>(stripped) {
+        if let Ok(num) = fast_float2::parse::<f64, _>(stripped) {
             return Some(num / 1000.0);
         }
     }
 
     // Handle per ten-thousand (‱) - basis points symbol
     if let Some(stripped) = trimmed.strip_suffix('‱') {
-        if let Ok(num) = fast_float::parse::<f64, _>(stripped) {
+        if let Ok(num) = fast_float2::parse::<f64, _>(stripped) {
             return Some(num / 10000.0);
         }
     }
@@ -3474,7 +3474,7 @@ fn try_parse_number(trimmed: &str) -> Option<f64> {
 
     // Slow path: clean common number formats and try again
     let cleaned = clean_number_string(trimmed);
-    fast_float::parse(cleaned.as_ref()).ok()
+    fast_float2::parse(cleaned.as_ref()).ok()
 }
 
 /// Parse basis points: 25bp, 25bps, 25 bp, 25 bps → 0.0025
@@ -3484,14 +3484,14 @@ fn try_parse_basis_points(s: &str) -> Option<f64> {
 
     // Try "25bps" or "25bp" (no space)
     if let Some(num_str) = s.strip_suffix("bps").or_else(|| s.strip_suffix("bp")) {
-        if let Ok(num) = fast_float::parse::<f64, _>(num_str.trim()) {
+        if let Ok(num) = fast_float2::parse::<f64, _>(num_str.trim()) {
             return Some(num / 10000.0);
         }
     }
 
     // Try "25 bps" or "25 bp" (with space)
     if let Some(num_str) = s.strip_suffix(" bps").or_else(|| s.strip_suffix(" bp")) {
-        if let Ok(num) = fast_float::parse::<f64, _>(num_str.trim()) {
+        if let Ok(num) = fast_float2::parse::<f64, _>(num_str.trim()) {
             return Some(num / 10000.0);
         }
     }
@@ -3520,7 +3520,7 @@ fn try_parse_suffixed_number(s: &str) -> Option<f64> {
 
     // Parse the number part (everything except the last character)
     let num_str = &s[..s.len() - 1];
-    if let Ok(num) = fast_float::parse::<f64, _>(num_str.trim()) {
+    if let Ok(num) = fast_float2::parse::<f64, _>(num_str.trim()) {
         return Some(num * multiplier);
     }
 
@@ -3545,7 +3545,7 @@ fn try_parse_fraction(s: &str) -> Option<f64> {
         let fraction_part = s[space_pos + 1..].trim();
 
         if let (Ok(whole), Some(frac_value)) = (
-            fast_float::parse::<f64, _>(whole_part),
+            fast_float2::parse::<f64, _>(whole_part),
             parse_simple_fraction(fraction_part),
         ) {
             // Handle negative mixed fractions: -1 1/2 = -1.5, not -0.5
@@ -3569,8 +3569,8 @@ fn parse_simple_fraction(s: &str) -> Option<f64> {
         return None;
     }
 
-    let numerator: f64 = fast_float::parse(parts[0].trim()).ok()?;
-    let denominator: f64 = fast_float::parse(parts[1].trim()).ok()?;
+    let numerator: f64 = fast_float2::parse(parts[0].trim()).ok()?;
+    let denominator: f64 = fast_float2::parse(parts[1].trim()).ok()?;
 
     // Avoid division by zero
     if denominator == 0.0 {
