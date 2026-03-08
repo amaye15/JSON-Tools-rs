@@ -7,6 +7,7 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/amaye15/json-tools-rs"
 keywords = ["json", "flatten", "manipulation", "simd"]
 categories = ["data-structures", "parsing"]
+publish = false
 
 [lib]
 name = "json_tools_rs"
