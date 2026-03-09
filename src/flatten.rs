@@ -24,9 +24,9 @@ use crate::types::FlatMap;
 #[derive(Clone)]
 pub(crate) struct SeparatorCache {
     pub(crate) separator: Cow<'static, str>, // Cow for efficient memory usage
-    is_single_char: bool,                     // True if separator is a single character
-    single_char: Option<char>,                // The character if single-char separator
-    pub(crate) length: usize,                 // Pre-computed length
+    is_single_char: bool,                    // True if separator is a single character
+    single_char: Option<char>,               // The character if single-char separator
+    pub(crate) length: usize,                // Pre-computed length
 }
 
 impl SeparatorCache {
@@ -85,7 +85,11 @@ impl SeparatorCache {
     }
 
     #[inline]
-    pub(crate) fn reserve_capacity_for_append(&self, buffer: &mut String, additional_content_len: usize) {
+    pub(crate) fn reserve_capacity_for_append(
+        &self,
+        buffer: &mut String,
+        additional_content_len: usize,
+    ) {
         // Pre-calculate total capacity needed to avoid multiple reallocations
         let needed_capacity = buffer.len() + self.length + additional_content_len;
         if buffer.capacity() < needed_capacity {
@@ -510,7 +514,11 @@ fn initialize_flattened_map(value: &Value) -> FlatMap {
 /// Perform the core flattening operation
 /// OPTIMIZATION: Uses thread-local StringBuilder cache to avoid allocations
 #[inline]
-pub(crate) fn perform_flattening(value: &Value, separator: &str, nested_threshold: usize) -> FlatMap {
+pub(crate) fn perform_flattening(
+    value: &Value,
+    separator: &str,
+    nested_threshold: usize,
+) -> FlatMap {
     let mut flattened = initialize_flattened_map(value);
 
     // Use thread-local builder cache for common separators (10-20% faster)
@@ -540,7 +548,10 @@ pub(crate) fn perform_flattening(value: &Value, separator: &str, nested_threshol
 
 /// Core flattening logic for a single JSON string
 #[inline]
-pub(crate) fn process_single_json(json: &str, config: &ProcessingConfig) -> Result<String, JsonToolsError> {
+pub(crate) fn process_single_json(
+    json: &str,
+    config: &ProcessingConfig,
+) -> Result<String, JsonToolsError> {
     // Parse JSON using optimized SIMD parsing
     let mut value = json_parser::parse_json(json)?;
 

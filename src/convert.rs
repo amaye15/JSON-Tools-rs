@@ -668,7 +668,12 @@ pub(crate) fn clean_number_string(s: &str) -> Cow<'_, str> {
 
     // Remove single-character currency symbols from start
     without_currency = without_currency
-        .trim_start_matches(&['$', '\u{20ac}', '\u{00a3}', '\u{00a5}', '\u{20b9}', '\u{20bd}', '\u{20a9}', '\u{20ba}'][..])
+        .trim_start_matches(
+            &[
+                '$', '\u{20ac}', '\u{00a3}', '\u{00a5}', '\u{20b9}', '\u{20bd}', '\u{20a9}',
+                '\u{20ba}',
+            ][..],
+        )
         .trim();
 
     // Remove currency codes (USD, EUR, GBP, etc.) - 3 letter codes at start
@@ -686,7 +691,12 @@ pub(crate) fn clean_number_string(s: &str) -> Cow<'_, str> {
 
     // Remove trailing currency indicators and credit/debit markers
     without_currency = without_currency
-        .trim_end_matches(&['$', '\u{20ac}', '\u{00a3}', '\u{00a5}', '\u{20b9}', '\u{20bd}', '\u{20a9}', '\u{20ba}'][..])
+        .trim_end_matches(
+            &[
+                '$', '\u{20ac}', '\u{00a3}', '\u{00a5}', '\u{20b9}', '\u{20bd}', '\u{20a9}',
+                '\u{20ba}',
+            ][..],
+        )
         .trim_end_matches("CR") // Credit
         .trim_end_matches("DR") // Debit
         .trim_end_matches("cr")
@@ -1044,7 +1054,14 @@ pub(crate) fn apply_type_conversion_recursive(value: &mut Value) {
 /// then bulk-copies the clean segments between them via extend_from_slice (hardware memcpy).
 /// Faster than byte-by-byte filtering once input exceeds ~16 bytes.
 #[inline]
-pub(crate) fn extend_skipping_4(dst: &mut SmallVec<[u8; 64]>, src: &[u8], s1: u8, s2: u8, s3: u8, s4: u8) {
+pub(crate) fn extend_skipping_4(
+    dst: &mut SmallVec<[u8; 64]>,
+    src: &[u8],
+    s1: u8,
+    s2: u8,
+    s3: u8,
+    s4: u8,
+) {
     let mut start = 0usize;
     while start < src.len() {
         let rest = &src[start..];

@@ -424,16 +424,16 @@
 // MODULE DECLARATIONS
 // ================================================================================================
 
-pub(crate) mod json_parser;
-mod types;
-mod error;
-mod config;
-pub(crate) mod cache;
-pub(crate) mod convert;
-pub(crate) mod transform;
-pub(crate) mod flatten;
-pub(crate) mod unflatten;
 mod builder;
+pub(crate) mod cache;
+mod config;
+pub(crate) mod convert;
+mod error;
+pub(crate) mod flatten;
+pub(crate) mod json_parser;
+pub(crate) mod transform;
+mod types;
+pub(crate) mod unflatten;
 
 #[cfg(feature = "python")]
 mod python;
@@ -446,6 +446,6 @@ mod tests;
 // ================================================================================================
 
 pub use builder::JSONTools;
-pub use types::{JsonInput, JsonOutput};
+pub use config::{CollisionConfig, FilteringConfig, ProcessingConfig, ReplacementConfig};
 pub use error::JsonToolsError;
-pub use config::{ProcessingConfig, FilteringConfig, CollisionConfig, ReplacementConfig};
+pub use types::{JsonInput, JsonOutput};

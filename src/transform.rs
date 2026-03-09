@@ -542,7 +542,9 @@ pub(crate) fn apply_value_replacements(
 /// The intermediate HashMap<&str, &Value> allocation is removed (saves ~500 cycles for large maps)
 /// Note: This works because both Arc<str> and FxHashMap implement Serialize
 #[inline]
-pub(crate) fn serialize_flattened(flattened: &FlatMap) -> Result<String, crate::json_parser::JsonError> {
+pub(crate) fn serialize_flattened(
+    flattened: &FlatMap,
+) -> Result<String, crate::json_parser::JsonError> {
     // Direct serialization - no intermediate HashMap needed
     // Arc<str> implements Serialize via Deref to str
     // FxHashMap implements Serialize just like std HashMap
