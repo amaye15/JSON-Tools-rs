@@ -33,6 +33,7 @@ JSON Tools RS is designed for developers who need to:
 - **Batch Processing** -- Single or batch JSON, dicts, lists, DataFrames, and Series
 - **Python Bindings** -- Full Python support with perfect type preservation
 - **DataFrame/Series Support** -- Pandas, Polars, PyArrow, and PySpark
+- **Modular Architecture** -- 10 focused modules for maintainability with zero-overhead abstraction
 
 ## Quick Example
 

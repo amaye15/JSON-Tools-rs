@@ -2,6 +2,7 @@
 
 A high-performance Rust library for advanced JSON manipulation with SIMD-accelerated parsing, providing unified flattening and unflattening operations through a clean builder pattern API.
 
+[![PyPI](https://img.shields.io/pypi/v/json-tools-rs.svg)](https://pypi.org/project/json-tools-rs/)
 [![Crates.io](https://img.shields.io/crates/v/json-tools-rs.svg)](https://crates.io/crates/json-tools-rs)
 [![Documentation](https://docs.rs/json-tools-rs/badge.svg)](https://docs.rs/json-tools-rs)
 [![Book](https://img.shields.io/badge/book-GitHub%20Pages-blue)](https://amaye15.github.io/JSON-Tools-rs/)
@@ -43,6 +44,7 @@ Unlike simple JSON parsers, JSON Tools RS provides a complete toolkit for JSON t
   - [Python Examples](#python---unified-jsontools-api)
 - [Quick Reference](#quick-reference)
 - [Installation](#installation)
+- [Architecture](#architecture)
 - [Performance](#performance)
 - [API Reference](#api-reference)
 - [Contributing](#contributing)
@@ -262,6 +264,36 @@ pip install json-tools-rs
 
 ```
 
+## Architecture
+
+The codebase is organized into focused, single-responsibility modules:
+
+```
+src/
+├── lib.rs            Facade: mod declarations + pub use re-exports
+├── json_parser.rs    Conditional SIMD parser (sonic-rs on 64-bit, simd-json on 32-bit)
+├── types.rs          Core types: JsonInput, JsonOutput, FlatMap
+├── error.rs          Error types with codes E001-E008
+├── config.rs         Configuration structs and operation modes
+├── cache.rs          Tiered caching: regex, key deduplication, phf perfect hash
+├── convert.rs        Type conversion: numbers, dates, booleans, nulls (SIMD-optimized)
+├── transform.rs      Filtering, key/value replacements, collision handling
+├── flatten.rs        Flattening algorithm with Crossbeam parallelism
+├── unflatten.rs      Unflattening with SIMD separator detection
+├── builder.rs        Public JSONTools builder API and execute() entry point
+├── python.rs         Python bindings via PyO3
+├── tests.rs          89 unit tests
+└── main.rs           CLI examples
+```
+
+The processing pipeline:
+1. **Parse** -- SIMD-accelerated JSON parsing (`json_parser`)
+2. **Flatten/Unflatten** -- Recursive traversal with Arc\<str\> key dedup (`flatten`/`unflatten`)
+3. **Transform** -- Lowercase, replacements (cached regex), collision handling (`transform`)
+4. **Filter** -- Remove empty strings, nulls, empty objects/arrays (`transform`)
+5. **Convert** -- Type conversion with first-byte discriminators (`convert`)
+6. **Serialize** -- Output to JSON string or native Python types
+
 ## Performance
 
 JSON Tools RS uses several techniques to achieve high performance (~2,000+ ops/ms):
@@ -281,7 +313,8 @@ JSON Tools RS uses several techniques to achieve high performance (~2,000+ ops/m
 
 * **Crossbeam Parallelism**: Migrated from Rayon to Crossbeam for finer-grained parallel control.
 * **DataFrame/Series Support**: Native Python support for Pandas, Polars, PyArrow, and PySpark DataFrames and Series.
-* **Performance Optimizations**: Eliminated per-entry HashMap in parallel flatten, added early-exit discriminators for type conversion, SIMD literal fallback for regex patterns, thread-local regex cache half-eviction, expanded SmallVec buffers and separator cache.
+* **Modular Architecture**: Refactored into 10 focused modules for maintainability (zero API changes).
+* **Performance Optimizations**: Eliminated per-entry HashMap in parallel flatten, early-exit discriminators, SIMD literal fallback, thread-local regex cache half-eviction, vectorized `clean_number_string()`.
 * **Python Binding Optimizations**: `mem::take` for zero-cost builder mutations, O(1) DataFrame/Series reconstruction.
 
 ### v0.8.0

@@ -5,6 +5,7 @@
 ### Added
 - **DataFrame & Series Support** (Python): Native support for Pandas, Polars, PyArrow, and PySpark DataFrames and Series with perfect type preservation.
 - **Crossbeam Parallelism**: Migrated from Rayon to Crossbeam for finer-grained parallel control with scoped threads.
+- **Modular Architecture**: Refactored monolithic `lib.rs` into 10 focused modules (`json_parser`, `types`, `error`, `config`, `cache`, `convert`, `transform`, `flatten`, `unflatten`, `builder`) with zero public API changes.
 
 ### Performance Improvements
 

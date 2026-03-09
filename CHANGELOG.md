@@ -33,7 +33,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - GIL release via `py.detach()` during all compute-intensive operations
 
 ### Changed
-- Updated all documentation to reflect Crossbeam migration and new features
+- **Modular Architecture**: Refactored monolithic `src/lib.rs` (5,447 lines) into 10 focused modules for maintainability
+  - `json_parser.rs` -- Conditional SIMD parser (sonic-rs / simd-json)
+  - `types.rs` -- Core types (`JsonInput`, `JsonOutput`, `FlatMap`)
+  - `error.rs` -- Error types with machine-readable codes (E001-E008)
+  - `config.rs` -- Configuration structs and operation modes
+  - `cache.rs` -- Tiered caching (regex, key deduplication, phf)
+  - `convert.rs` -- Type conversion (numbers, dates, booleans, nulls)
+  - `transform.rs` -- Filtering, replacements, collision handling
+  - `flatten.rs` -- Flattening algorithm with Crossbeam parallelism
+  - `unflatten.rs` -- Unflattening with SIMD separator detection
+  - `builder.rs` -- Public `JSONTools` builder API
+  - `lib.rs` now serves as a thin facade with `mod` declarations and `pub use` re-exports
+  - Zero public API changes -- all existing import paths preserved
+  - Performance-neutral -- Rust modules are compile-time organization only
+- Updated all documentation to reflect Crossbeam migration, modular architecture, and new features
 - Fixed stale Rayon references in Python binding docstrings
 - Bumped version to 0.9.0
 
@@ -221,7 +235,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 | Version | Release Date | Key Features | Performance |
 |---------|--------------|--------------|-------------|
-| **0.9.0** | 2026-03-09 | Crossbeam parallelism, DataFrame/Series support | +3-5% Rust, O(1) Python reconstruction |
+| **0.9.0** | 2026-03-09 | Crossbeam parallelism, DataFrame/Series, modular architecture | +3-5% Rust, O(1) Python reconstruction |
 | **0.8.0** | 2026-01-01 | Full Python bindings feature parity | Feature release |
 | **0.7.0** | 2025-10-17 | Parallel processing config, optimizations | HashMap improvements |
 | **0.6.0** | 2025-10-13 | Python GIL release, inline hints | +5-13% Python |
@@ -242,6 +256,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 **What's New**:
 - Crossbeam-based parallelism (replaces Rayon) for finer-grained thread control
 - Native DataFrame/Series support in Python (Pandas, Polars, PyArrow, PySpark)
+- Modular architecture: `lib.rs` refactored into 10 focused modules (zero API changes)
 - 6 Rust core performance optimizations (parallel flatten, type conversion, regex, caching)
 - 3 Python binding optimizations (mem::take, O(1) reconstruction, GIL release)
 

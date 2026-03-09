@@ -70,11 +70,30 @@ samply load /tmp/profile.json
 
 ## Architecture
 
+The codebase is organized into focused, single-responsibility modules:
+
+```
+src/
+├── lib.rs            Facade: mod declarations + pub use re-exports
+├── json_parser.rs    Conditional SIMD parser (sonic-rs / simd-json)
+├── types.rs          Core types: JsonInput, JsonOutput, FlatMap
+├── error.rs          Error types with codes E001-E008
+├── config.rs         Configuration structs and operation modes
+├── cache.rs          Tiered caching: regex, key deduplication, phf
+├── convert.rs        Type conversion: numbers, dates, booleans, nulls
+├── transform.rs      Filtering, key/value replacements, collision handling
+├── flatten.rs        Flattening algorithm with Crossbeam parallelism
+├── unflatten.rs      Unflattening with SIMD separator detection
+├── builder.rs        Public JSONTools builder API and execute()
+├── python.rs         Python bindings via PyO3
+└── tests.rs          89 unit tests + 21 doc tests
+```
+
 The processing pipeline:
 
-1. **Parse** -- SIMD-accelerated JSON parsing (sonic-rs / simd-json)
-2. **Flatten/Unflatten** -- Recursive traversal with Arc\<str\> key dedup
-3. **Transform** -- Lowercase, replacements (cached regex), collision handling
-4. **Filter** -- Remove empty strings, nulls, empty objects/arrays
-5. **Convert** -- Type conversion with first-byte discriminators
+1. **Parse** -- SIMD-accelerated JSON parsing (`json_parser`)
+2. **Flatten/Unflatten** -- Recursive traversal with Arc\<str\> key dedup (`flatten`/`unflatten`)
+3. **Transform** -- Lowercase, replacements (cached regex), collision handling (`transform`)
+4. **Filter** -- Remove empty strings, nulls, empty objects/arrays (`transform`)
+5. **Convert** -- Type conversion with first-byte discriminators (`convert`)
 6. **Serialize** -- Output to JSON string or native Python types

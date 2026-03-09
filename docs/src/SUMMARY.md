@@ -23,6 +23,7 @@
 
 - [Rust API](./reference/rust-api.md)
 - [Python API](./reference/python-api.md)
+- [Architecture](./reference/architecture.md)
 - [Error Codes](./reference/error-codes.md)
 
 # Resources

@@ -59,6 +59,7 @@ Thumbs.db
 
 # mdBook output
 /book/
+docs/book/
 
 # Temporary files
 *.tmp
