@@ -29,4 +29,5 @@
 # Resources
 
 - [Performance & Benchmarks](./resources/performance.md)
+- [Troubleshooting](./resources/troubleshooting.md)
 - [Changelog](./resources/changelog.md)

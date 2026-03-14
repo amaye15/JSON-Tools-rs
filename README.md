@@ -46,7 +46,6 @@ Unlike simple JSON parsers, JSON Tools RS provides a complete toolkit for JSON t
 - [Installation](#installation)
 - [Architecture](#architecture)
 - [Performance](#performance)
-- [API Reference](#api-reference)
 - [Contributing](#contributing)
 - [License](#license)
 - [Changelog](#changelog)
@@ -282,7 +281,7 @@ src/
 ├── unflatten.rs      Unflattening with SIMD separator detection
 ├── builder.rs        Public JSONTools builder API and execute() entry point
 ├── python.rs         Python bindings via PyO3
-├── tests.rs          89 unit tests
+├── tests.rs          99 unit tests
 └── main.rs           CLI examples
 ```
 
@@ -295,6 +294,19 @@ The processing pipeline:
 6. **Serialize** -- Output to JSON string or native Python types
 
 ## Performance
+
+### Benchmark Results
+
+| Benchmark | Time | Description |
+|-----------|------|-------------|
+| Deep nesting (100 levels) | 8.3 µs | Deeply nested JSON objects |
+| Wide objects (1,000 keys) | ~337 µs | Flat objects with many keys |
+| Large arrays (5,000 items) | ~2.11 ms | Arrays with many elements |
+| Parallel batch (10,000 items) | ~2.61 ms | Batch processing with Crossbeam |
+
+*Measured on Apple Silicon. Results may vary by platform and data shape.*
+
+### Optimization Techniques
 
 JSON Tools RS uses several techniques to achieve high performance (~2,000+ ops/ms):
 

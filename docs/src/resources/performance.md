@@ -16,8 +16,22 @@ JSON Tools RS achieves ~2,000+ ops/ms through multiple optimization layers.
 | **Crossbeam Parallelism** | Scoped thread pools for batch and nested parallelism |
 | **Zero-Copy (Cow)** | Avoid allocations when strings don't need modification |
 | **itoa** | Fast integer-to-string formatting |
+| **mimalloc** | High-performance global allocator (~5-10% speedup) |
 
-## Performance Targets (v0.9.0)
+## Benchmark Results
+
+Measured on Apple Silicon. Results from the stress benchmark suite targeting edge cases and large inputs.
+
+### Stress Benchmarks
+
+| Benchmark | Result | Description |
+|-----------|--------|-------------|
+| Deep nesting (100 levels) | **8.3 us** | Deeply nested objects, 100 levels deep |
+| Wide objects (1,000 keys) | **~337 us** | Single object with 1,000 top-level keys |
+| Large arrays (5,000 items) | **~2.11 ms** | Array containing 5,000 elements |
+| Parallel batch (10,000 items) | **~2.61 ms** | Batch processing with Crossbeam parallelism |
+
+### Throughput Targets (v0.9.0)
 
 | Operation | Target |
 |-----------|--------|
@@ -27,6 +41,99 @@ JSON Tools RS achieves ~2,000+ ops/ms through multiple optimization layers.
 | Batch (10 items) | >2,500 ops/ms |
 | Batch (100 items) | >3,000 ops/ms |
 | Roundtrip | >1,000 cycles/ms |
+
+## Performance Tuning
+
+Three threshold parameters control when parallelism activates. Tuning them for your workload can significantly affect throughput.
+
+### `parallel_threshold` (default: 100)
+
+Controls when batch processing (multiple JSON documents) switches from sequential to parallel execution.
+
+**When to lower (e.g., 20-50):**
+- Each document is large or complex (deep nesting, many keys)
+- CPU cores are available and not contended
+- You are processing 50-100 items and want parallel speedup
+
+**When to raise (e.g., 200-500):**
+- Each document is small (a few keys, shallow nesting)
+- Thread-spawning overhead dominates processing time
+- Running inside a container with limited CPU
+
+```python
+# For large documents, parallel even at small batch sizes
+tools = jt.JSONTools().flatten().parallel_threshold(20)
+
+# For tiny documents, avoid parallelism overhead
+tools = jt.JSONTools().flatten().parallel_threshold(500)
+```
+
+```rust
+let tools = JSONTools::new()
+    .flatten()
+    .parallel_threshold(50);
+```
+
+### `nested_parallel_threshold` (default: 100)
+
+Controls when a single JSON document's top-level keys/array items are processed in parallel (intra-document parallelism). This is independent of batch parallelism.
+
+**When to lower (e.g., 50):**
+- Individual documents have very wide objects (500+ keys) with deep sub-trees
+- Processing includes expensive transformations (regex replacements, type conversion)
+
+**When to raise (e.g., 500-1000) or effectively disable:**
+- Documents are moderately sized (under 100 keys)
+- Sub-trees are shallow (1-2 levels), so per-key work is minimal
+- You want deterministic (sequential) output ordering
+
+```python
+# Large documents with heavy per-key work
+tools = jt.JSONTools().flatten().nested_parallel_threshold(50)
+
+# Disable nested parallelism entirely
+tools = jt.JSONTools().flatten().nested_parallel_threshold(999_999)
+```
+
+### `num_threads` (default: CPU count)
+
+Controls the number of worker threads for parallel processing.
+
+**When to set explicitly:**
+- Running alongside other CPU-intensive workloads -- limit threads to avoid contention
+- In a container or VM with a CPU quota -- match thread count to available cores
+- Benchmarking -- fix thread count for reproducible results
+
+```python
+tools = jt.JSONTools().flatten().num_threads(4)
+```
+
+```rust
+let tools = JSONTools::new()
+    .flatten()
+    .num_threads(Some(4));
+```
+
+### Environment Variable Overrides
+
+All threshold defaults can be overridden without code changes via environment variables. These are read once at process startup (via `LazyLock`).
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `JSON_TOOLS_PARALLEL_THRESHOLD` | `100` | Minimum batch size for parallel processing |
+| `JSON_TOOLS_NESTED_PARALLEL_THRESHOLD` | `100` | Minimum keys/items for nested parallelism |
+| `JSON_TOOLS_NUM_THREADS` | (CPU count) | Thread count for parallel processing |
+| `JSON_TOOLS_MAX_ARRAY_INDEX` | `100000` | Maximum array index during unflattening |
+
+```bash
+# Example: tune for a workload of many small documents
+export JSON_TOOLS_PARALLEL_THRESHOLD=200
+export JSON_TOOLS_NUM_THREADS=8
+
+python my_pipeline.py
+```
+
+Environment variable values are parsed as `usize`. Invalid values (non-numeric, negative) silently fall back to the default.
 
 ## Running Benchmarks
 
@@ -86,7 +193,7 @@ src/
 ├── unflatten.rs      Unflattening with SIMD separator detection
 ├── builder.rs        Public JSONTools builder API and execute()
 ├── python.rs         Python bindings via PyO3
-└── tests.rs          89 unit tests + 21 doc tests
+└── tests.rs          99 unit tests
 ```
 
 The processing pipeline:

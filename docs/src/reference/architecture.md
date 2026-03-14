@@ -18,7 +18,7 @@ src/
 ├── unflatten.rs      Unflattening with SIMD separator detection
 ├── builder.rs        Public JSONTools builder API and execute()
 ├── python.rs         Python bindings via PyO3
-├── tests.rs          89 unit tests + 21 doc tests
+├── tests.rs          99 unit tests
 └── main.rs           CLI examples
 ```
 

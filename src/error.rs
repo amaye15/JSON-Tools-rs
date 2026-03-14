@@ -96,7 +96,7 @@ impl JsonToolsError {
     }
 
     /// Create a JSON parse error with helpful suggestions
-    #[cold] // Optimization #19: Mark error paths as cold
+    #[cold] // Error paths are rarely taken; keep out of hot code
     #[inline(never)]
     pub fn json_parse_error(source: json_parser::JsonError) -> Self {
         let suggestion = "Verify your JSON syntax using a JSON validator. Common issues include: missing quotes around keys or values, trailing commas, unescaped characters, incomplete JSON (missing closing braces or brackets), or invalid escape sequences.";
@@ -109,7 +109,7 @@ impl JsonToolsError {
     }
 
     /// Create a regex error with helpful suggestions
-    #[cold] // Optimization #19: Mark error paths as cold
+    #[cold] // Error paths are rarely taken; keep out of hot code
     #[inline(never)]
     pub fn regex_error(source: regex::Error) -> Self {
         let suggestion = match source {
@@ -128,7 +128,7 @@ impl JsonToolsError {
     }
 
     /// Create an invalid replacement pattern error
-    #[cold] // Optimization #19: Mark error paths as cold
+    #[cold] // Error paths are rarely taken; keep out of hot code
     #[inline(never)]
     pub fn invalid_replacement_pattern(message: impl Into<String>) -> Self {
         let msg = message.into();
@@ -147,7 +147,7 @@ impl JsonToolsError {
     }
 
     /// Create an invalid JSON structure error
-    #[cold] // Optimization #19: Mark error paths as cold
+    #[cold] // Error paths are rarely taken; keep out of hot code
     #[inline(never)]
     pub fn invalid_json_structure(message: impl Into<String>) -> Self {
         let msg = message.into();
@@ -166,7 +166,7 @@ impl JsonToolsError {
     }
 
     /// Create a configuration error
-    #[cold] // Optimization #12: Mark error paths as cold
+    #[cold] // Error paths are rarely taken; keep out of hot code
     #[inline(never)]
     pub fn configuration_error(message: impl Into<String>) -> Self {
         JsonToolsError::ConfigurationError {
@@ -176,7 +176,7 @@ impl JsonToolsError {
     }
 
     /// Create a batch processing error
-    #[cold] // Optimization #12: Mark error paths as cold
+    #[cold] // Error paths are rarely taken; keep out of hot code
     #[inline(never)]
     pub fn batch_processing_error(index: usize, source: JsonToolsError) -> Self {
         JsonToolsError::BatchProcessingError {
@@ -188,7 +188,7 @@ impl JsonToolsError {
     }
 
     /// Create an input validation error
-    #[cold] // Optimization #12: Mark error paths as cold
+    #[cold] // Error paths are rarely taken; keep out of hot code
     #[inline(never)]
     pub fn input_validation_error(message: impl Into<String>) -> Self {
         let msg = message.into();
@@ -207,7 +207,7 @@ impl JsonToolsError {
     }
 
     /// Create a serialization error
-    #[cold] // Optimization #12: Mark error paths as cold
+    #[cold] // Error paths are rarely taken; keep out of hot code
     #[inline(never)]
     pub fn serialization_error(source: json_parser::JsonError) -> Self {
         JsonToolsError::SerializationError {
@@ -229,5 +229,13 @@ impl From<json_parser::JsonError> for JsonToolsError {
 impl From<regex::Error> for JsonToolsError {
     fn from(error: regex::Error) -> Self {
         JsonToolsError::regex_error(error)
+    }
+}
+
+// Automatic conversion from pyo3::PyErr (needed for closures mixing PyResult and JsonToolsError)
+#[cfg(feature = "python")]
+impl From<pyo3::PyErr> for JsonToolsError {
+    fn from(err: pyo3::PyErr) -> Self {
+        JsonToolsError::configuration_error(format!("Python error: {err}"))
     }
 }

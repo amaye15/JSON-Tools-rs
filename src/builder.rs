@@ -1,8 +1,15 @@
+//! Builder API and execution engine for JSONTools.
+//!
+//! Provides the fluent builder interface (`JSONTools::new().flatten().execute()`)
+//! and orchestrates flattening, unflattening, transformations, and parallel
+//! batch processing.
+
 use smallvec::SmallVec;
-use std::borrow::Cow;
 
 use crate::config::{
     CollisionConfig, FilteringConfig, OperationMode, ProcessingConfig, ReplacementConfig,
+    DEFAULT_MAX_ARRAY_INDEX, DEFAULT_NESTED_PARALLEL_THRESHOLD, DEFAULT_NUM_THREADS,
+    DEFAULT_PARALLEL_THRESHOLD,
 };
 use crate::error::JsonToolsError;
 use crate::flatten::process_single_json;
@@ -19,12 +26,12 @@ impl ProcessingConfig {
     pub fn from_json_tools(tools: &JSONTools) -> Self {
         Self {
             separator: tools.separator.clone(),
-            lowercase_keys: tools.lower_case_keys,
+            lowercase_keys: tools.lowercase_keys,
             filtering: FilteringConfig {
                 remove_empty_strings: tools.remove_empty_string_values,
                 remove_nulls: tools.remove_null_values,
-                remove_empty_objects: tools.remove_empty_dict,
-                remove_empty_arrays: tools.remove_empty_list,
+                remove_empty_objects: tools.remove_empty_objects,
+                remove_empty_arrays: tools.remove_empty_arrays,
             },
             collision: CollisionConfig {
                 handle_collisions: tools.handle_key_collision,
@@ -37,6 +44,7 @@ impl ProcessingConfig {
             parallel_threshold: tools.parallel_threshold,
             num_threads: tools.num_threads,
             nested_parallel_threshold: tools.nested_parallel_threshold,
+            max_array_index: tools.max_array_index,
         }
     }
 }
@@ -49,11 +57,6 @@ impl ProcessingConfig {
 ///
 /// This is the unified interface for all JSON manipulation operations.
 /// It provides a single entry point for all JSON manipulation operations with a consistent builder pattern.
-///
-/// Fields are ordered by size for better memory alignment and cache locality:
-/// - Large fields (24 bytes each): Vec, String
-/// - Medium fields (2 bytes): Option<OperationMode>
-/// - Small fields (1 byte each): bool flags
 #[derive(Debug, Clone)]
 pub struct JSONTools {
     // SmallVec fields (stack-allocated for 0-2 replacements, common case)
@@ -67,12 +70,14 @@ pub struct JSONTools {
     separator: String,
 
     // Medium fields (8 bytes on 64-bit systems)
-    /// Minimum batch size to use parallel processing (default: 10)
+    /// Minimum batch size to use parallel processing (default: 100)
     parallel_threshold: usize,
     /// Number of threads for parallel processing (None = use system default)
     num_threads: Option<usize>,
     /// Minimum object/array size for nested parallel processing within a single JSON document
     nested_parallel_threshold: usize,
+    /// Maximum array index allowed during unflattening (DoS protection)
+    max_array_index: usize,
 
     // Medium fields (2 bytes)
     /// Current operation mode (flatten or unflatten)
@@ -84,11 +89,11 @@ pub struct JSONTools {
     /// Remove keys with null values
     remove_null_values: bool,
     /// Remove keys with empty object values
-    remove_empty_dict: bool,
+    remove_empty_objects: bool,
     /// Remove keys with empty array values
-    remove_empty_list: bool,
+    remove_empty_arrays: bool,
     /// Convert all keys to lowercase
-    lower_case_keys: bool,
+    lowercase_keys: bool,
     /// Handle key collisions by collecting values into arrays
     handle_key_collision: bool,
     /// Automatically convert string values to numbers and booleans
@@ -102,25 +107,18 @@ impl Default for JSONTools {
             key_replacements: SmallVec::new(),
             value_replacements: SmallVec::new(),
             separator: ".".to_string(),
-            // Medium fields
-            parallel_threshold: std::env::var("JSON_TOOLS_PARALLEL_THRESHOLD")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(100),
-            num_threads: std::env::var("JSON_TOOLS_NUM_THREADS")
-                .ok()
-                .and_then(|v| v.parse().ok()),
-            nested_parallel_threshold: std::env::var("JSON_TOOLS_NESTED_PARALLEL_THRESHOLD")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(100),
+            // Medium fields — use shared LazyLock statics from config module
+            parallel_threshold: *DEFAULT_PARALLEL_THRESHOLD,
+            num_threads: *DEFAULT_NUM_THREADS,
+            nested_parallel_threshold: *DEFAULT_NESTED_PARALLEL_THRESHOLD,
+            max_array_index: *DEFAULT_MAX_ARRAY_INDEX,
             mode: None,
             // Small fields
             remove_empty_string_values: false,
             remove_null_values: false,
-            remove_empty_dict: false,
-            remove_empty_list: false,
-            lower_case_keys: false,
+            remove_empty_objects: false,
+            remove_empty_arrays: false,
+            lowercase_keys: false,
             handle_key_collision: false,
             auto_convert_types: false,
         }
@@ -145,26 +143,50 @@ impl JSONTools {
         self
     }
 
-    /// Set the operation mode to normal (no flatten/unflatten)
+    /// Set the operation mode to normal (apply transformations without flatten/unflatten)
+    ///
+    /// In normal mode, key/value replacements, filtering, and type conversion are applied
+    /// recursively to the JSON structure without flattening or unflattening it.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use json_tools_rs::{JSONTools, JsonOutput};
+    ///
+    /// let json = r#"{"Name": "John", "Age": "30", "Active": "true"}"#;
+    /// let result = JSONTools::new()
+    ///     .normal()
+    ///     .lowercase_keys(true)
+    ///     .auto_convert_types(true)
+    ///     .execute(json).unwrap();
+    ///
+    /// match result {
+    ///     JsonOutput::Single(output) => {
+    ///         assert!(output.contains(r#""name""#));
+    ///         assert!(output.contains(r#":30"#) || output.contains(r#": 30"#));
+    ///     }
+    ///     _ => unreachable!(),
+    /// }
+    /// ```
     pub fn normal(mut self) -> Self {
         self.mode = Some(OperationMode::Normal);
         self
     }
 
     /// Set the separator used for nested keys (default: ".")
-    pub fn separator<S: Into<Cow<'static, str>>>(mut self, separator: S) -> Self {
-        let sep_cow = separator.into();
-        // Only allocate if we need to own the string
-        self.separator = match sep_cow {
-            Cow::Borrowed(s) => s.to_string(),
-            Cow::Owned(s) => s,
-        };
+    ///
+    /// # Panics
+    /// Panics if `separator` is empty.
+    pub fn separator(mut self, separator: impl Into<String>) -> Self {
+        let sep = separator.into();
+        assert!(!sep.is_empty(), "Separator cannot be empty");
+        self.separator = sep;
         self
     }
 
     /// Convert all keys to lowercase
     pub fn lowercase_keys(mut self, value: bool) -> Self {
-        self.lower_case_keys = value;
+        self.lowercase_keys = value;
         self
     }
 
@@ -192,25 +214,8 @@ impl JSONTools {
     ///     .key_replacement("user_", "person_")
     ///     .execute(json).unwrap();
     /// ```
-    pub fn key_replacement<S1: Into<Cow<'static, str>>, S2: Into<Cow<'static, str>>>(
-        mut self,
-        find: S1,
-        replace: S2,
-    ) -> Self {
-        let find_cow = find.into();
-        let replace_cow = replace.into();
-
-        // Only allocate when necessary
-        let find_string = match find_cow {
-            Cow::Borrowed(s) => s.to_string(),
-            Cow::Owned(s) => s,
-        };
-        let replace_string = match replace_cow {
-            Cow::Borrowed(s) => s.to_string(),
-            Cow::Owned(s) => s,
-        };
-
-        self.key_replacements.push((find_string, replace_string));
+    pub fn key_replacement(mut self, find: impl Into<String>, replace: impl Into<String>) -> Self {
+        self.key_replacements.push((find.into(), replace.into()));
         self
     }
 
@@ -238,25 +243,12 @@ impl JSONTools {
     ///     .value_replacement("@example.com", "@company.org")
     ///     .execute(json).unwrap();
     /// ```
-    pub fn value_replacement<S1: Into<Cow<'static, str>>, S2: Into<Cow<'static, str>>>(
+    pub fn value_replacement(
         mut self,
-        find: S1,
-        replace: S2,
+        find: impl Into<String>,
+        replace: impl Into<String>,
     ) -> Self {
-        let find_cow = find.into();
-        let replace_cow = replace.into();
-
-        // Only allocate when necessary
-        let find_string = match find_cow {
-            Cow::Borrowed(s) => s.to_string(),
-            Cow::Owned(s) => s,
-        };
-        let replace_string = match replace_cow {
-            Cow::Borrowed(s) => s.to_string(),
-            Cow::Owned(s) => s,
-        };
-
-        self.value_replacements.push((find_string, replace_string));
+        self.value_replacements.push((find.into(), replace.into()));
         self
     }
 
@@ -286,7 +278,7 @@ impl JSONTools {
     /// - In flatten mode: removes flattened keys that have empty object values
     /// - In unflatten mode: removes keys from the unflattened JSON structure that have empty object values
     pub fn remove_empty_objects(mut self, value: bool) -> Self {
-        self.remove_empty_dict = value;
+        self.remove_empty_objects = value;
         self
     }
 
@@ -296,7 +288,7 @@ impl JSONTools {
     /// - In flatten mode: removes flattened keys that have empty array values
     /// - In unflatten mode: removes keys from the unflattened JSON structure that have empty array values
     pub fn remove_empty_arrays(mut self, value: bool) -> Self {
-        self.remove_empty_list = value;
+        self.remove_empty_arrays = value;
         self
     }
 
@@ -351,7 +343,7 @@ impl JSONTools {
     /// parallel processing. Batches smaller than this threshold will be processed sequentially
     /// to avoid the overhead of thread spawning.
     ///
-    /// Default: 10 items (can be overridden with JSON_TOOLS_PARALLEL_THRESHOLD environment variable)
+    /// Default: 100 items (can be overridden with JSON_TOOLS_PARALLEL_THRESHOLD environment variable)
     ///
     /// # Arguments
     ///
@@ -420,6 +412,18 @@ impl JSONTools {
         self
     }
 
+    /// Set the maximum array index allowed during unflattening
+    ///
+    /// This prevents denial-of-service attacks where a malicious flattened key like
+    /// `"items.999999999"` would cause allocation of a massive array. Keys with array
+    /// indices exceeding this limit will produce an error during unflattening.
+    ///
+    /// Default: 100,000 (can be overridden with JSON_TOOLS_MAX_ARRAY_INDEX environment variable)
+    pub fn max_array_index(mut self, max: usize) -> Self {
+        self.max_array_index = max;
+        self
+    }
+
     /// Execute the configured operation on the provided JSON input
     ///
     /// This method performs the selected operation based on the mode set by calling
@@ -444,6 +448,18 @@ impl JSONTools {
                 "Operation mode not set. Call .flatten(), .unflatten(), or .normal() before .execute()"
             )
         })?;
+
+        if self.separator.is_empty() {
+            return Err(JsonToolsError::configuration_error(
+                "Separator cannot be empty. Use .separator(\".\") or another non-empty string",
+            ));
+        }
+
+        if let Some(0) = self.num_threads {
+            return Err(JsonToolsError::configuration_error(
+                "num_threads must be at least 1. Use None for system default",
+            ));
+        }
 
         let input = json_input.into();
         match mode {
@@ -470,105 +486,75 @@ impl JSONTools {
                 Ok(JsonOutput::Single(result))
             }
             JsonInput::Multiple(json_list) => {
-                // Use parallel processing if batch size meets threshold
-                if json_list.len() >= config.parallel_threshold {
-                    let n_threads = std::thread::available_parallelism()
-                        .map(|p| p.get())
-                        .unwrap_or(4)
-                        .min(json_list.len());
-                    let chunk_size = json_list.len().div_ceil(n_threads);
-
-                    // Pre-allocate result slots; each thread writes to its own non-overlapping slice,
-                    // preserving input order without sorting or channels.
-                    let mut slots: Vec<Option<Result<String, JsonToolsError>>> =
-                        (0..json_list.len()).map(|_| None).collect();
-
-                    // &F is Copy (shared ref), so each closure iteration captures its own ptr
-                    let proc = &processor;
-                    crossbeam::thread::scope(|s| {
-                        for (chunk_idx, (inputs, outputs)) in json_list
-                            .chunks(chunk_size)
-                            .zip(slots.chunks_mut(chunk_size))
-                            .enumerate()
-                        {
-                            let base = chunk_idx * chunk_size;
-                            s.spawn(move |_| {
-                                for (i, (json, slot)) in
-                                    inputs.iter().zip(outputs.iter_mut()).enumerate()
-                                {
-                                    *slot = Some(proc(json, config).map_err(|e| {
-                                        JsonToolsError::batch_processing_error(base + i, e)
-                                    }));
-                                }
-                            });
-                        }
-                    })
-                    .expect("batch processing thread panicked");
-
-                    let results: Result<Vec<_>, _> =
-                        slots.into_iter().map(|s| s.unwrap()).collect();
-                    return Ok(JsonOutput::Multiple(results?));
-                }
-
-                // Sequential processing (default or below threshold)
-                let mut results = Vec::with_capacity(json_list.len());
-                for (index, json) in json_list.iter().enumerate() {
-                    match processor(json, config) {
-                        Ok(result) => results.push(result),
-                        Err(e) => return Err(JsonToolsError::batch_processing_error(index, e)),
-                    }
-                }
+                let results = Self::process_batch(json_list, config, &processor)?;
                 Ok(JsonOutput::Multiple(results))
             }
             JsonInput::MultipleOwned(vecs) => {
-                // Use parallel processing if batch size meets threshold
-                if vecs.len() >= config.parallel_threshold {
-                    let n_threads = std::thread::available_parallelism()
-                        .map(|p| p.get())
-                        .unwrap_or(4)
-                        .min(vecs.len());
-                    let chunk_size = vecs.len().div_ceil(n_threads);
-
-                    let mut slots: Vec<Option<Result<String, JsonToolsError>>> =
-                        (0..vecs.len()).map(|_| None).collect();
-
-                    let proc = &processor;
-                    crossbeam::thread::scope(|s| {
-                        for (chunk_idx, (inputs, outputs)) in vecs
-                            .chunks(chunk_size)
-                            .zip(slots.chunks_mut(chunk_size))
-                            .enumerate()
-                        {
-                            let base = chunk_idx * chunk_size;
-                            s.spawn(move |_| {
-                                for (i, (json_cow, slot)) in
-                                    inputs.iter().zip(outputs.iter_mut()).enumerate()
-                                {
-                                    *slot = Some(proc(json_cow.as_ref(), config).map_err(|e| {
-                                        JsonToolsError::batch_processing_error(base + i, e)
-                                    }));
-                                }
-                            });
-                        }
-                    })
-                    .expect("batch processing thread panicked");
-
-                    let results: Result<Vec<_>, _> =
-                        slots.into_iter().map(|s| s.unwrap()).collect();
-                    return Ok(JsonOutput::Multiple(results?));
-                }
-
-                // Sequential processing (default or below threshold)
-                let mut results = Vec::with_capacity(vecs.len());
-                for (index, json_cow) in vecs.iter().enumerate() {
-                    match processor(json_cow.as_ref(), config) {
-                        Ok(result) => results.push(result),
-                        Err(e) => return Err(JsonToolsError::batch_processing_error(index, e)),
-                    }
-                }
+                let results = Self::process_batch(&vecs, config, &processor)?;
                 Ok(JsonOutput::Multiple(results))
             }
         }
+    }
+
+    /// Process a batch of items (parallel or sequential) using a shared processor function.
+    /// Items must implement AsRef<str> + Sync, covering both &str slices and Cow<str> vecs.
+    fn process_batch<I, F>(
+        items: &[I],
+        config: &ProcessingConfig,
+        processor: &F,
+    ) -> Result<Vec<String>, JsonToolsError>
+    where
+        I: AsRef<str> + Sync,
+        F: Fn(&str, &ProcessingConfig) -> Result<String, JsonToolsError> + Sync + Send,
+    {
+        if items.len() >= config.parallel_threshold {
+            let n_threads = std::thread::available_parallelism()
+                .map(|p| p.get())
+                .unwrap_or(4)
+                .min(items.len());
+            let chunk_size = items.len().div_ceil(n_threads);
+
+            // Pre-allocate result slots; each thread writes to its own non-overlapping slice,
+            // preserving input order without sorting or channels.
+            let mut slots: Vec<Option<Result<String, JsonToolsError>>> =
+                (0..items.len()).map(|_| None).collect();
+
+            crossbeam::thread::scope(|s| {
+                for (chunk_idx, (inputs, outputs)) in items
+                    .chunks(chunk_size)
+                    .zip(slots.chunks_mut(chunk_size))
+                    .enumerate()
+                {
+                    let base = chunk_idx * chunk_size;
+                    s.spawn(move |_| {
+                        for (i, (item, slot)) in inputs.iter().zip(outputs.iter_mut()).enumerate() {
+                            *slot =
+                                Some(processor(item.as_ref(), config).map_err(|e| {
+                                    JsonToolsError::batch_processing_error(base + i, e)
+                                }));
+                        }
+                    });
+                }
+            })
+            .map_err(|_| {
+                JsonToolsError::invalid_json_structure(
+                    "A worker thread panicked during batch processing",
+                )
+            })?;
+
+            let results: Result<Vec<_>, _> = slots.into_iter().map(|s| s.unwrap()).collect();
+            return results;
+        }
+
+        // Sequential processing (default or below threshold)
+        let mut results = Vec::with_capacity(items.len());
+        for (index, item) in items.iter().enumerate() {
+            match processor(item.as_ref(), config) {
+                Ok(result) => results.push(result),
+                Err(e) => return Err(JsonToolsError::batch_processing_error(index, e)),
+            }
+        }
+        Ok(results)
     }
 
     fn execute_flatten<'a>(&self, input: JsonInput<'a>) -> Result<JsonOutput, JsonToolsError> {

@@ -4,7 +4,7 @@ JSON Tools RS uses Crossbeam-based parallelism to automatically speed up batch o
 
 ## Automatic Parallelism
 
-Batch processing (10+ items by default) automatically uses parallel execution:
+Batch processing (100+ items by default) automatically uses parallel execution:
 
 ```rust
 let batch: Vec<&str> = large_json_collection;
@@ -76,10 +76,20 @@ results = tools.execute(large_batch)
 
 ## Environment Variables
 
-You can also control the parallel threshold via environment variable:
+All parallelism settings can be overridden via environment variables (applied at construction time):
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `JSON_TOOLS_PARALLEL_THRESHOLD` | `100` | Minimum batch size to trigger parallel processing |
+| `JSON_TOOLS_NESTED_PARALLEL_THRESHOLD` | `100` | Minimum object/array size for nested parallelism |
+| `JSON_TOOLS_NUM_THREADS` | CPU count | Number of threads for parallel processing |
+| `JSON_TOOLS_MAX_ARRAY_INDEX` | `100000` | Maximum array index during unflattening (DoS protection) |
 
 ```bash
-export JSON_TOOLS_PARALLEL_THRESHOLD=100
+export JSON_TOOLS_PARALLEL_THRESHOLD=50
+export JSON_TOOLS_NESTED_PARALLEL_THRESHOLD=200
+export JSON_TOOLS_NUM_THREADS=4
+export JSON_TOOLS_MAX_ARRAY_INDEX=500000
 ```
 
-This sets the default batch threshold without code changes.
+Environment variables take effect when `JSONTools::new()` is called. Builder method calls (e.g., `.parallel_threshold(n)`) override them.

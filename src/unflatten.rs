@@ -1,250 +1,417 @@
-use memchr::{memchr, memchr2, memchr3, memmem, memrchr};
+//! JSON unflattening engine using tape-based streaming.
+//!
+//! Reconstructs nested JSON structures from flat key-value maps using the same
+//! tape scanner as flatten. Values remain as zero-copy byte ranges into the
+//! original input via `ValueRef`, avoiding `serde_json::Value` allocation.
+//!
+//! Pipeline: `scan_and_fixup → extract entries → build UnflatNode tree → serialize directly`
+
+use std::borrow::Cow;
+
+use memchr::{memchr, memmem};
 use rustc_hash::FxHashMap;
-use serde_json::{Map, Value};
 use smallvec::SmallVec;
 
-use crate::config::ProcessingConfig;
-use crate::convert::apply_type_conversion_recursive;
+use crate::config::{FilteringConfig, ProcessingConfig};
+use crate::convert::try_convert_string_to_json_bytes;
 use crate::error::JsonToolsError;
-use crate::json_parser;
-use crate::transform::{
-    apply_key_replacements_for_unflatten, apply_key_replacements_unflatten_with_collisions,
-    apply_lowercase_keys_for_unflatten, apply_value_replacement_patterns,
-    apply_value_replacements_for_unflatten, filter_nested_value,
-    handle_key_collisions_for_unflatten,
+use crate::flatten::{
+    apply_value_replacement_cow, escape_json_string, scan_and_fixup, skip_tape_value,
+    tape_content_str, tape_entry, tape_quoted_str, tape_scalar_bytes, unescape_json_string,
+    write_json_escaped_key, EntryKind, TapeEntry, ValueRef,
 };
+use crate::json_parser;
+use crate::transform::{apply_key_replacement_patterns, apply_value_replacement_patterns};
 
 // ================================================================================================
-// Root-Level Primitive Handling
+// UnflatNode — Lightweight Tree with Zero-Copy Leaves
 // ================================================================================================
 
-/// Handle root-level primitive values and empty containers for unflattening
-#[inline]
-fn handle_root_level_primitives_unflatten(
-    value: &Value,
-    value_replacements: &[(String, String)],
-) -> Result<Option<String>, JsonToolsError> {
-    match value {
-        Value::String(_) | Value::Number(_) | Value::Bool(_) | Value::Null => {
-            // For root-level primitives, apply value replacements if any, then return
-            let mut single_value = value.clone();
-            if !value_replacements.is_empty() {
-                apply_value_replacement_patterns(&mut single_value, value_replacements)?;
-            }
-
-            Ok(Some(json_parser::to_string(&single_value)?))
-        }
-        Value::Object(obj) if obj.is_empty() => {
-            // Empty object should remain empty object
-            Ok(Some("{}".to_string()))
-        }
-        Value::Array(_) => {
-            // Arrays at root level are not valid flattened JSON - convert to empty object
-            Ok(Some("{}".to_string()))
-        }
-        _ => {
-            // Continue with normal unflattening for objects with content
-            Ok(None)
-        }
-    }
-}
-
-/// Extract flattened object from parsed JSON value
-#[inline]
-fn extract_flattened_object(flattened: Value) -> Result<Map<String, Value>, JsonToolsError> {
-    match flattened {
-        Value::Object(obj) => Ok(obj),
-        _ => Err(JsonToolsError::invalid_json_structure(
-            "Expected object for unflattening",
-        )),
-    }
+/// Lightweight tree node for unflattened JSON. Leaf values stay as zero-copy
+/// byte ranges from the original input via `ValueRef`.
+enum UnflatNode<'a> {
+    /// Leaf value — raw bytes from input or owned transformed value
+    Leaf(ValueRef<'a>),
+    /// Null placeholder for array gaps
+    Null,
+    /// Object node — keys sorted at serialization time for deterministic output
+    Object(FxHashMap<String, UnflatNode<'a>>),
+    /// Array with indexed elements
+    Array(Vec<UnflatNode<'a>>),
 }
 
 // ================================================================================================
-// Transformation Pipeline for Unflatten
+// Core Entry Point
 // ================================================================================================
 
-/// Apply all transformations (key replacements, value replacements, lowercase) for unflattening
-/// Optimized to avoid unnecessary clone by consuming the input
-/// MEDIUM-HOT PATH: Inline for better performance
-#[inline]
-fn apply_transformations_unflatten(
-    flattened_obj: Map<String, Value>,
-    config: &ProcessingConfig,
-) -> Result<Map<String, Value>, JsonToolsError> {
-    // Consume the input instead of cloning
-    let mut processed_obj = flattened_obj;
-
-    // Apply key replacements with collision detection if provided
-    if config.replacements.has_key_replacements() {
-        // Use optimized version when collision handling is disabled for better performance
-        if !config.collision.handle_collisions {
-            // Pass ownership to avoid cloning all values
-            processed_obj = apply_key_replacements_for_unflatten(
-                processed_obj,
-                &config.replacements.key_replacements,
-            )?;
-        } else {
-            processed_obj =
-                apply_key_replacements_unflatten_with_collisions(processed_obj, config)?;
-        }
-    }
-
-    // Apply value replacements
-    if config.replacements.has_value_replacements() {
-        apply_value_replacements_for_unflatten(
-            &mut processed_obj,
-            &config.replacements.value_replacements,
-        )?;
-    }
-
-    // Apply lowercase conversion if specified
-    if config.lowercase_keys {
-        processed_obj = apply_lowercase_keys_for_unflatten(processed_obj);
-
-        // If collision handling is enabled but no key replacements were applied,
-        // we need to check for collisions after lowercase conversion
-        if config.collision.handle_collisions && !config.replacements.has_key_replacements() {
-            processed_obj = handle_key_collisions_for_unflatten(processed_obj, config);
-        }
-    } else if config.collision.handle_collisions && !config.replacements.has_key_replacements() {
-        // If collision handling is enabled but no transformations were applied,
-        // we still need to check for collisions (though this would be rare)
-        processed_obj = handle_key_collisions_for_unflatten(processed_obj, config);
-    }
-
-    Ok(processed_obj)
-}
-
-/// Perform unflattening and apply filtering to the result
-#[inline]
-fn perform_unflattening_and_filtering(
-    processed_obj: Map<String, Value>,
-    separator: &str,
-    remove_empty_string_values: bool,
-    remove_null_values: bool,
-    remove_empty_dict: bool,
-    remove_empty_list: bool,
-) -> Result<Value, JsonToolsError> {
-    // Perform the actual unflattening (takes ownership to avoid cloning values)
-    let mut unflattened = unflatten_object(processed_obj, separator)?;
-
-    // Apply filtering to the unflattened result
-    if remove_empty_string_values || remove_null_values || remove_empty_dict || remove_empty_list {
-        filter_nested_value(
-            &mut unflattened,
-            remove_empty_string_values,
-            remove_null_values,
-            remove_empty_dict,
-            remove_empty_list,
-        );
-    }
-
-    Ok(unflattened)
-}
-
-// ================================================================================================
-// Core Unflatten Processing Entry Point
-// ================================================================================================
-
-/// Core unflattening logic for a single JSON string
+/// Core unflattening logic for a single JSON string.
+/// Entry point called by `builder.rs`.
 #[inline]
 pub(crate) fn process_single_json_for_unflatten(
     json: &str,
     config: &ProcessingConfig,
 ) -> Result<String, JsonToolsError> {
-    // Parse JSON using optimized SIMD parsing
-    let mut flattened = json_parser::parse_json(json)?;
+    let input = json.as_bytes();
 
-    // Apply type conversion FIRST (before other transformations)
-    if config.auto_convert_types {
-        apply_type_conversion_recursive(&mut flattened);
+    // Reject inputs exceeding u32 addressable range (4 GiB)
+    if input.len() > u32::MAX as usize {
+        return Err(JsonToolsError::input_validation_error(
+            "Input exceeds 4 GiB limit",
+        ));
     }
 
-    // Handle root-level primitives and empty containers
-    if let Some(result) =
-        handle_root_level_primitives_unflatten(&flattened, &config.replacements.value_replacements)?
-    {
-        return Ok(result);
+    // Skip leading whitespace
+    let start = skip_whitespace(input, 0);
+    if start >= input.len() {
+        return Ok("{}".to_string());
     }
 
-    // Extract the flattened object
-    let flattened_obj = extract_flattened_object(flattened)?;
+    let first = unsafe { *input.get_unchecked(start) };
 
-    // Apply key and value transformations
-    let processed_obj = apply_transformations_unflatten(flattened_obj, config)?;
+    // Handle root-level primitives (not objects or arrays)
+    if first != b'{' && first != b'[' {
+        let mut value = json_parser::parse_json(json)?;
+        if !config.replacements.value_replacements.is_empty() {
+            apply_value_replacement_patterns(&mut value, &config.replacements.value_replacements)?;
+        }
+        return json_parser::to_string(&value).map_err(JsonToolsError::serialization_error);
+    }
 
-    // Perform the actual unflattening and apply filtering
-    // Pass ownership to avoid cloning values during unflatten
-    let unflattened = perform_unflattening_and_filtering(
-        processed_obj,
-        &config.separator,
-        config.filtering.remove_empty_strings,
-        config.filtering.remove_nulls,
-        config.filtering.remove_empty_objects,
-        config.filtering.remove_empty_arrays,
-    )?;
+    // Handle root arrays — not valid flattened JSON
+    if first == b'[' {
+        return Ok("{}".to_string());
+    }
 
-    // Serialize the result
-    Ok(json_parser::to_string(&unflattened)?)
+    // Handle empty object: {}
+    let after_open = skip_whitespace(input, start + 1);
+    if after_open < input.len() {
+        let close = unsafe { *input.get_unchecked(after_open) };
+        if close == b'}' {
+            return Ok("{}".to_string());
+        }
+    }
+
+    // Phase 1: Single-pass tape scan
+    let tape = scan_and_fixup(input)?;
+
+    // Phase 2: Extract flat entries with inline transforms
+    let mut entries = extract_flat_entries(input, &tape, config)?;
+
+    // Phase 3: Collision handling
+    if config.collision.has_collision_handling() || has_duplicate_keys(&entries) {
+        entries = handle_entry_collisions(entries, config.collision.has_collision_handling());
+    }
+
+    // Phase 4: Build UnflatNode tree
+    let tree = build_unflatten_tree(entries, &config.separator, config.max_array_index)?;
+
+    // Phase 5: Serialize with integrated filtering
+    Ok(serialize_unflatten_tree(&tree, &config.filtering))
 }
 
 // ================================================================================================
-// Unflatten Algorithm
+// Entry Extraction from Tape
 // ================================================================================================
 
-/// Core unflattening algorithm that reconstructs nested JSON from flattened keys
-fn unflatten_object(obj: Map<String, Value>, separator: &str) -> Result<Value, JsonToolsError> {
-    // OPTIMIZATION #21: Removed O(N log N) sorting - process entries directly
-    // The set_nested_value_with_types function uses entry().or_insert_with() to create
-    // intermediate nodes on demand, so sorting is not required for correctness.
-    // This reduces complexity from O(N log N) to O(N) for the iteration phase.
-
-    let mut result = Map::with_capacity(obj.len() / 2); // Estimate final size
-
-    // Pre-analyze path types before consuming the map
-    let path_types = analyze_path_types(&obj, separator);
-
-    // Process entries directly without sorting - O(N) instead of O(N log N)
-    // The recursive helper creates intermediate structures on demand
-    for (key, value) in obj {
-        set_nested_value(&mut result, &key, value, separator, &path_types)?;
+/// Walk the top-level tape object and extract key-value pairs with inline transforms.
+fn extract_flat_entries<'a>(
+    input: &'a [u8],
+    tape: &[TapeEntry],
+    config: &ProcessingConfig,
+) -> Result<Vec<(String, ValueRef<'a>)>, JsonToolsError> {
+    if tape.is_empty() {
+        return Ok(Vec::new());
     }
 
-    Ok(Value::Object(result))
+    // Root must be ObjectStart
+    if tape[0].kind() != EntryKind::ObjectStart {
+        return Err(JsonToolsError::invalid_json_structure(
+            "Expected object for unflattening",
+        ));
+    }
+
+    let end_idx = tape[0].aux() as usize;
+    let mut entries = Vec::with_capacity(end_idx / 4); // heuristic
+    let mut cursor = 1; // skip root ObjectStart
+
+    while cursor < end_idx {
+        let entry = tape_entry(tape, cursor);
+
+        if entry.kind() != EntryKind::StringStart {
+            cursor += 1;
+            continue;
+        }
+
+        // Extract key
+        let key_str = tape_content_str(input, entry);
+
+        let mut key = if entry.string_has_escapes() {
+            unescape_json_string(key_str).into_owned()
+        } else {
+            key_str.to_string()
+        };
+
+        // Apply lowercase
+        if config.lowercase_keys {
+            key.make_ascii_lowercase();
+        }
+
+        // Apply key replacements
+        if config.replacements.has_key_replacements() {
+            if let Ok(Some(new_key)) =
+                apply_key_replacement_patterns(&key, &config.replacements.key_replacements)
+            {
+                key = new_key;
+            }
+        }
+
+        // Skip key + colon
+        cursor += 1;
+        if cursor < end_idx && tape[cursor].kind() == EntryKind::Colon {
+            cursor += 1;
+        }
+
+        // Extract value
+        if cursor >= end_idx {
+            break;
+        }
+
+        let val_entry = tape_entry(tape, cursor);
+        let value = extract_value(input, tape, val_entry, config);
+        cursor = advance_past_value(tape, cursor);
+
+        entries.push((key, value));
+    }
+
+    Ok(entries)
+}
+
+/// Extract a ValueRef from a tape entry, applying value transforms inline.
+#[inline]
+fn extract_value<'a>(
+    input: &'a [u8],
+    tape: &[TapeEntry],
+    entry: TapeEntry,
+    config: &ProcessingConfig,
+) -> ValueRef<'a> {
+    match entry.kind() {
+        EntryKind::StringStart => {
+            let content_str = tape_content_str(input, entry);
+
+            // Type conversion: "123" → 123, "true" → true
+            if config.auto_convert_types {
+                let unescaped = if entry.string_has_escapes() {
+                    unescape_json_string(content_str)
+                } else {
+                    Cow::Borrowed(content_str)
+                };
+
+                if let Some(converted) = try_convert_string_to_json_bytes(unescaped.as_ref()) {
+                    return ValueRef::Owned(converted.into_owned());
+                }
+            }
+
+            // Value replacements
+            if config.replacements.has_value_replacements() {
+                let unescaped = if entry.string_has_escapes() {
+                    unescape_json_string(content_str)
+                } else {
+                    Cow::Borrowed(content_str)
+                };
+
+                if let Some(replaced) = apply_value_replacement_cow(
+                    unescaped.as_ref(),
+                    &config.replacements.value_replacements,
+                ) {
+                    let escaped = escape_json_string(&replaced);
+                    return ValueRef::Owned(format!("\"{}\"", escaped));
+                }
+            }
+
+            // Zero-copy: raw bytes including quotes
+            ValueRef::Raw(tape_quoted_str(input, entry).as_bytes())
+        }
+        EntryKind::ScalarStart => {
+            let raw = tape_scalar_bytes(input, entry);
+            let trimmed = crate::flatten::trim_ascii(raw);
+            ValueRef::Raw(trimmed)
+        }
+        EntryKind::ObjectStart | EntryKind::ArrayStart => {
+            // Nested container value — copy full byte range from input
+            let start_offset = entry.offset();
+            let end_tape_idx = entry.aux() as usize;
+            let end_entry = tape[end_tape_idx];
+            let end_offset = end_entry.offset() + 1; // include closing bracket
+            debug_assert!(end_offset <= input.len());
+            let raw = unsafe { input.get_unchecked(start_offset..end_offset) };
+            ValueRef::Raw(raw)
+        }
+        _ => ValueRef::Raw(b"null"),
+    }
+}
+
+/// Advance cursor past a value in the tape.
+#[inline(always)]
+fn advance_past_value(tape: &[TapeEntry], idx: usize) -> usize {
+    skip_tape_value(tape, idx)
+}
+
+// ================================================================================================
+// Collision Handling
+// ================================================================================================
+
+/// Check if any duplicate keys exist (fast path to skip collision handling).
+#[inline]
+fn has_duplicate_keys(entries: &[(String, ValueRef<'_>)]) -> bool {
+    if entries.len() <= 1 {
+        return false;
+    }
+    let mut seen: FxHashMap<&str, ()> =
+        FxHashMap::with_capacity_and_hasher(entries.len(), Default::default());
+    for (key, _) in entries {
+        if seen.insert(key.as_str(), ()).is_some() {
+            return true;
+        }
+    }
+    false
+}
+
+/// Handle duplicate keys: merge into arrays (if enabled) or last-wins.
+fn handle_entry_collisions<'a>(
+    entries: Vec<(String, ValueRef<'a>)>,
+    merge_collisions: bool,
+) -> Vec<(String, ValueRef<'a>)> {
+    let n = entries.len();
+
+    // First pass: build index map using borrowed keys (avoids cloning every key)
+    let mut key_indices: FxHashMap<&str, SmallVec<[usize; 1]>> =
+        FxHashMap::with_capacity_and_hasher(n, Default::default());
+    let mut ordered_keys: Vec<usize> = Vec::with_capacity(n);
+
+    for (i, (key, _)) in entries.iter().enumerate() {
+        key_indices
+            .entry(key.as_str())
+            .and_modify(|v| v.push(i))
+            .or_insert_with(|| {
+                ordered_keys.push(i);
+                SmallVec::from_elem(i, 1)
+            });
+    }
+
+    // Fast path: no collisions
+    if ordered_keys.len() == entries.len() {
+        return entries;
+    }
+
+    // Single pass: iterate ordered_keys, consume from key_indices, build result directly.
+    // Uses a consumed bitset instead of Vec<Option<T>> to avoid wrapping overhead.
+    let mut consumed = vec![false; n];
+    let mut result = Vec::with_capacity(ordered_keys.len());
+
+    for &first_idx in &ordered_keys {
+        let key = entries[first_idx].0.as_str();
+        let indices = key_indices.remove(key).unwrap_or_default();
+
+        if indices.len() == 1 {
+            consumed[first_idx] = true;
+            // Deferred: entry will be moved after loop
+        } else if merge_collisions {
+            // Merge values into a JSON array
+            let estimated_len: usize = indices
+                .iter()
+                .map(|&idx| {
+                    let (_, ref v) = entries[idx];
+                    (match v {
+                        ValueRef::Raw(b) => b.len(),
+                        ValueRef::Owned(s) => s.len(),
+                    }) + 1 // comma
+                })
+                .sum::<usize>()
+                + 2; // brackets
+            let mut array_json = String::with_capacity(estimated_len);
+            array_json.push('[');
+            for (j, &idx) in indices.iter().enumerate() {
+                if j > 0 {
+                    array_json.push(',');
+                }
+                let (_, ref value) = entries[idx];
+                match value {
+                    ValueRef::Raw(bytes) => {
+                        array_json.push_str(unsafe { std::str::from_utf8_unchecked(bytes) });
+                    }
+                    ValueRef::Owned(s) => {
+                        array_json.push_str(s);
+                    }
+                }
+                consumed[idx] = true;
+            }
+            array_json.push(']');
+            // Temporarily push with empty key; will fix below
+            result.push((first_idx, Some(ValueRef::Owned(array_json))));
+            continue;
+        } else {
+            // Last wins
+            let last_idx = *indices
+                .last()
+                .expect("collision indices non-empty: at least one index per key");
+            for &idx in &indices {
+                consumed[idx] = true;
+            }
+            result.push((last_idx, None)); // None means use value from entries[last_idx]
+            continue;
+        }
+        result.push((first_idx, None));
+    }
+
+    // Now move entries out (single drain, avoids per-element Option wrapping)
+    let mut entries = entries;
+    result
+        .into_iter()
+        .map(|(idx, override_value)| {
+            let (key, original_value) = std::mem::replace(
+                &mut entries[idx],
+                (String::new(), ValueRef::Raw(b"null")),
+            );
+            let value = override_value.unwrap_or(original_value);
+            (key, value)
+        })
+        .collect()
 }
 
 // ================================================================================================
 // Path Analysis
 // ================================================================================================
 
-/// Analyze all flattened keys to determine whether each path should be an array or object
-/// Analyze path types to determine if segments should be arrays or objects
-fn analyze_path_types(obj: &Map<String, Value>, separator: &str) -> FxHashMap<String, bool> {
-    // Use a more efficient approach with pre-allocated capacity and optimized string operations
-    let estimated_paths = obj.len() * 2; // Rough estimate of path count
+/// Pre-analyze all flattened keys to build a path-type map for array vs object disambiguation.
+fn analyze_path_types(
+    entries: &[(String, ValueRef<'_>)],
+    separator: &str,
+) -> FxHashMap<String, bool> {
+    let estimated_paths = entries.len() * 2;
     let mut state: FxHashMap<String, u8> =
         FxHashMap::with_capacity_and_hasher(estimated_paths, Default::default());
 
-    // Pre-compile separator for faster matching
     let sep_bytes = separator.as_bytes();
     let sep_len = separator.len();
 
-    for key in obj.keys() {
+    for (key, _) in entries {
         analyze_key_path(key, sep_bytes, sep_len, &mut state);
     }
 
-    // Convert bitmask state to final decision with pre-allocated result
-    let mut result: FxHashMap<String, bool> =
-        FxHashMap::with_capacity_and_hasher(state.len(), Default::default());
-    for (k, mask) in state.into_iter() {
-        let is_array = (mask & 0b10 == 0) && (mask & 0b01 != 0);
-        result.insert(k, is_array);
-    }
-    result
+    state
+        .into_iter()
+        .map(|(k, mask)| {
+            let is_array = (mask & 0b10 == 0) && (mask & 0b01 != 0);
+            (k, is_array)
+        })
+        .collect()
 }
 
-/// Optimized key path analysis with efficient string operations
+/// Analyze a single key's path segments and record child-type info per parent prefix.
+///
+/// Bitmask per parent: bit 0 (0b01) = has numeric child, bit 1 (0b10) = has non-numeric child.
+/// A parent with only numeric children (mask == 0b01) is treated as an array;
+/// mixed or non-numeric only (mask & 0b10 != 0) is treated as an object.
 #[inline]
 fn analyze_key_path(
     key: &str,
@@ -255,40 +422,30 @@ fn analyze_key_path(
     let key_bytes = key.as_bytes();
     let mut search_start = 0;
 
-    // Use Boyer-Moore-like approach for separator finding
     while search_start < key_bytes.len() {
-        // Find next separator using optimized byte search
-        let next_sep = find_separator(key_bytes, sep_bytes, search_start);
+        let next_sep = match find_separator(key_bytes, sep_bytes, search_start) {
+            Some(pos) => pos,
+            None => break,
+        };
 
-        if next_sep == key_bytes.len() {
-            break; // No more separators
-        }
-
-        // Extract parent path efficiently
         let parent = &key[..next_sep];
 
-        // Look ahead to classify child
         let child_start = next_sep + sep_len;
         if child_start < key_bytes.len() {
-            let child_end = find_separator(key_bytes, sep_bytes, child_start).min(key_bytes.len());
+            let child_end =
+                find_separator(key_bytes, sep_bytes, child_start).unwrap_or(key_bytes.len());
             let child = &key[child_start..child_end];
 
-            // Optimized numeric check
-            let is_numeric = is_valid_array_index(child);
-
-            // Update state with efficient entry handling
-            match state.get_mut(parent) {
-                Some(entry) => {
-                    if is_numeric {
-                        *entry |= 0b01;
-                    } else {
-                        *entry |= 0b10;
-                    }
-                }
-                None => {
-                    let initial_value = if is_numeric { 0b01 } else { 0b10 };
-                    state.insert(parent.to_string(), initial_value);
-                }
+            let bit: u8 = if is_valid_array_index(child) {
+                0b01
+            } else {
+                0b10
+            };
+            // Avoid to_string() allocation when key already exists (common for shared parent paths)
+            if let Some(existing) = state.get_mut(parent) {
+                *existing |= bit;
+            } else {
+                state.insert(parent.to_string(), bit);
             }
         }
 
@@ -301,57 +458,13 @@ fn analyze_key_path(
 // ================================================================================================
 
 /// SIMD-optimized separator finding using memchr crate
-///
-/// Uses hardware-accelerated SIMD instructions (SSE2/AVX2/NEON) for byte searching
-/// Provides 3-10x speedup over naive byte-by-byte search
 #[inline]
-pub(crate) fn find_separator(haystack: &[u8], needle: &[u8], start: usize) -> usize {
+pub(crate) fn find_separator(haystack: &[u8], needle: &[u8], start: usize) -> Option<usize> {
     if needle.len() == 1 {
-        // Single byte separator - use memchr's SIMD-optimized byte search
-        // This uses SSE2/AVX2 on x86 and NEON on ARM for 3-10x speedup
-        memchr(needle[0], &haystack[start..])
-            .map(|pos| start + pos)
-            .unwrap_or(haystack.len())
+        memchr(needle[0], &haystack[start..]).map(|pos| start + pos)
     } else {
-        // Multi-byte separator - use memmem's SIMD-optimized substring search
-        // Uses Two-Way algorithm with SIMD acceleration
-        memmem::find(&haystack[start..], needle)
-            .map(|pos| start + pos)
-            .unwrap_or(haystack.len())
+        memmem::find(&haystack[start..], needle).map(|pos| start + pos)
     }
-}
-
-/// Find first occurrence of any of two separators (SIMD-optimized with memchr2)
-/// Up to 2x faster than checking each separator individually
-/// Available for future optimizations (e.g., finding '.', '_' or '-' in keys)
-#[allow(dead_code)]
-#[inline]
-fn find_separator_dual(haystack: &[u8], start: usize, sep1: u8, sep2: u8) -> Option<usize> {
-    memchr2(sep1, sep2, &haystack[start..]).map(|pos| start + pos)
-}
-
-/// Find first occurrence of any of three separators (SIMD-optimized with memchr3)
-/// Up to 3x faster than checking each separator individually
-/// Available for future optimizations
-#[allow(dead_code)]
-#[inline]
-fn find_separator_triple(
-    haystack: &[u8],
-    start: usize,
-    sep1: u8,
-    sep2: u8,
-    sep3: u8,
-) -> Option<usize> {
-    memchr3(sep1, sep2, sep3, &haystack[start..]).map(|pos| start + pos)
-}
-
-/// Find last occurrence of separator (reverse search, SIMD-optimized with memrchr)
-/// Useful for path operations and key manipulation
-/// Available for future optimizations (e.g., finding parent paths)
-#[allow(dead_code)]
-#[inline]
-fn find_last_separator(haystack: &[u8], sep: u8) -> Option<usize> {
-    memrchr(sep, haystack)
 }
 
 // ================================================================================================
@@ -359,43 +472,64 @@ fn find_last_separator(haystack: &[u8], sep: u8) -> Option<usize> {
 // ================================================================================================
 
 /// Optimized check for valid array index
-/// OPTIMIZATION #13: Force inline for hot path
 #[inline(always)]
 fn is_valid_array_index(s: &str) -> bool {
     if s.is_empty() {
         return false;
     }
 
-    // Fast path for single digit
     if s.len() == 1 {
         return s.as_bytes()[0].is_ascii_digit();
     }
 
-    // Check for leading zero (invalid except for "0")
     if s.starts_with('0') {
         return s == "0";
     }
 
-    // Check if all characters are digits (vectorizable)
     s.bytes().all(|b| b.is_ascii_digit())
 }
 
 // ================================================================================================
-// Recursive Nested Value Setting
+// Build UnflatNode Tree
 // ================================================================================================
 
-/// Set a nested value using pre-analyzed path types to handle conflicts
-fn set_nested_value(
-    result: &mut Map<String, Value>,
+/// Build an UnflatNode tree from extracted flat entries.
+fn build_unflatten_tree<'a>(
+    entries: Vec<(String, ValueRef<'a>)>,
+    separator: &str,
+    max_array_index: usize,
+) -> Result<UnflatNode<'a>, JsonToolsError> {
+    if entries.is_empty() {
+        return Ok(UnflatNode::Object(FxHashMap::default()));
+    }
+
+    let path_types = analyze_path_types(&entries, separator);
+    let mut root = FxHashMap::default();
+
+    for (key, value) in entries {
+        set_nested_value(
+            &mut root,
+            &key,
+            value,
+            separator,
+            &path_types,
+            max_array_index,
+        )?;
+    }
+
+    Ok(UnflatNode::Object(root))
+}
+
+/// Entry point for recursively setting a value at a nested path.
+fn set_nested_value<'a>(
+    result: &mut FxHashMap<String, UnflatNode<'a>>,
     key_path: &str,
-    value: Value,
+    value: ValueRef<'a>,
     separator: &str,
     path_types: &FxHashMap<String, bool>,
+    max_array_index: usize,
 ) -> Result<(), JsonToolsError> {
-    // TIER 6->2 OPTIMIZATION: Use SmallVec for path splits
-    // Most JSON paths have <16 segments, so this stays on stack (Tier 2)
-    // Saves 100-300 cycles per unflatten call by avoiding heap allocation
-    type PathSegments<'a> = SmallVec<[&'a str; 16]>;
+    type PathSegments<'b> = SmallVec<[&'b str; 16]>;
     let parts: PathSegments = key_path.split(separator).collect();
 
     if parts.is_empty() {
@@ -403,12 +537,10 @@ fn set_nested_value(
     }
 
     if parts.len() == 1 {
-        // Simple key, just insert
-        result.insert(parts[0].to_string(), value);
+        result.insert(parts[0].to_string(), UnflatNode::Leaf(value));
         return Ok(());
     }
 
-    // OPTIMIZATION: Pre-allocate path buffer to avoid repeated allocations
     let mut path_buffer = String::with_capacity(key_path.len());
     set_nested_value_recursive(
         result,
@@ -418,28 +550,29 @@ fn set_nested_value(
         separator,
         path_types,
         &mut path_buffer,
+        max_array_index,
     )
 }
 
-/// Optimized recursive helper that reuses a path buffer to avoid allocations
-fn set_nested_value_recursive(
-    current: &mut Map<String, Value>,
+/// Recursive helper that reuses a path buffer to avoid allocations.
+#[allow(clippy::too_many_arguments)]
+fn set_nested_value_recursive<'a>(
+    current: &mut FxHashMap<String, UnflatNode<'a>>,
     parts: &[&str],
     index: usize,
-    value: Value,
+    value: ValueRef<'a>,
     separator: &str,
     path_types: &FxHashMap<String, bool>,
     path_buffer: &mut String,
+    max_array_index: usize,
 ) -> Result<(), JsonToolsError> {
     let part = parts[index];
 
     if index == parts.len() - 1 {
-        // Last part, insert the value
-        current.insert(part.to_string(), value);
+        current.insert(part.to_string(), UnflatNode::Leaf(value));
         return Ok(());
     }
 
-    // Build the current path in the buffer
     let buffer_start_len = path_buffer.len();
     if buffer_start_len > 0 {
         path_buffer.push_str(separator);
@@ -451,23 +584,19 @@ fn set_nested_value_recursive(
         .copied()
         .unwrap_or(false);
 
-    // TIER 6->3 OPTIMIZATION: Avoid String allocation for existing keys
-    // Check if key exists first (takes &str), only allocate String if inserting
-    // Saves 50-100 cycles per existing key (common in repeated unflatten operations)
-    let entry = if let Some(existing) = current.get_mut(part) {
-        existing
-    } else {
-        current.entry(part.to_string()).or_insert_with(|| {
-            if should_be_array {
-                Value::Array(vec![])
-            } else {
-                Value::Object(Map::new())
-            }
-        })
-    };
+    // Avoid to_string() allocation when key already exists (common for shared path prefixes)
+    if !current.contains_key(part) {
+        let node = if should_be_array {
+            UnflatNode::Array(vec![])
+        } else {
+            UnflatNode::Object(FxHashMap::default())
+        };
+        current.insert(part.to_string(), node);
+    }
+    let entry = current.get_mut(part).unwrap();
 
     let result = match entry {
-        Value::Object(ref mut obj) => set_nested_value_recursive(
+        UnflatNode::Object(ref mut obj) => set_nested_value_recursive(
             obj,
             parts,
             index + 1,
@@ -475,22 +604,27 @@ fn set_nested_value_recursive(
             separator,
             path_types,
             path_buffer,
+            max_array_index,
         ),
-        Value::Array(ref mut arr) => {
-            // Handle array indexing
+        UnflatNode::Array(ref mut arr) => {
             let next_part = parts[index + 1];
             if let Ok(array_index) = next_part.parse::<usize>() {
-                // Ensure array is large enough
+                if array_index > max_array_index {
+                    return Err(JsonToolsError::input_validation_error(format!(
+                        "Array index {} exceeds maximum allowed index ({}). \
+                         Use max_array_index() to increase the limit.",
+                        array_index, max_array_index
+                    )));
+                }
+
                 while arr.len() <= array_index {
-                    arr.push(Value::Null);
+                    arr.push(UnflatNode::Null);
                 }
 
                 if index + 2 == parts.len() {
-                    // Last part, set the value
-                    arr[array_index] = value;
+                    arr[array_index] = UnflatNode::Leaf(value);
                     Ok(())
                 } else {
-                    // Build next path in buffer for type lookup
                     path_buffer.push_str(separator);
                     path_buffer.push_str(next_part);
                     let next_should_be_array = path_types
@@ -498,16 +632,16 @@ fn set_nested_value_recursive(
                         .copied()
                         .unwrap_or(false);
 
-                    if arr[array_index].is_null() {
+                    if matches!(arr[array_index], UnflatNode::Null) {
                         arr[array_index] = if next_should_be_array {
-                            Value::Array(vec![])
+                            UnflatNode::Array(vec![])
                         } else {
-                            Value::Object(Map::new())
+                            UnflatNode::Object(FxHashMap::default())
                         };
                     }
 
                     match &mut arr[array_index] {
-                        Value::Object(ref mut obj) => set_nested_value_recursive(
+                        UnflatNode::Object(ref mut obj) => set_nested_value_recursive(
                             obj,
                             parts,
                             index + 2,
@@ -515,8 +649,9 @@ fn set_nested_value_recursive(
                             separator,
                             path_types,
                             path_buffer,
+                            max_array_index,
                         ),
-                        Value::Array(ref mut nested_arr) => set_nested_array_value(
+                        UnflatNode::Array(ref mut nested_arr) => set_nested_array_value(
                             nested_arr,
                             parts,
                             index + 2,
@@ -524,6 +659,7 @@ fn set_nested_value_recursive(
                             separator,
                             path_types,
                             path_buffer,
+                            max_array_index,
                         ),
                         _ => Err(JsonToolsError::invalid_json_structure(format!(
                             "Array element at index {} has incompatible type",
@@ -532,19 +668,19 @@ fn set_nested_value_recursive(
                     }
                 }
             } else {
-                // Non-numeric key in array context - treat as object key
-                // Convert array to object
-                let mut obj = Map::new();
-                for (i, item) in arr.iter().enumerate() {
-                    if !item.is_null() {
-                        obj.insert(i.to_string(), item.clone());
+                // Non-numeric key in array context — convert array to object
+                let mut obj = FxHashMap::default();
+                let mut itoa_buf = itoa::Buffer::new();
+                for (i, item) in arr.iter_mut().enumerate() {
+                    if !matches!(item, UnflatNode::Null) {
+                        let taken = std::mem::replace(item, UnflatNode::Null);
+                        obj.insert(itoa_buf.format(i).to_owned(), taken);
                     }
                 }
-                obj.insert(next_part.to_string(), Value::Null); // Placeholder
-                *entry = Value::Object(obj);
+                obj.insert(next_part.to_string(), UnflatNode::Null);
+                *entry = UnflatNode::Object(obj);
 
-                // Now continue as object
-                if let Value::Object(ref mut obj) = entry {
+                if let UnflatNode::Object(ref mut obj) = entry {
                     set_nested_value_recursive(
                         obj,
                         parts,
@@ -553,6 +689,7 @@ fn set_nested_value_recursive(
                         separator,
                         path_types,
                         path_buffer,
+                        max_array_index,
                     )
                 } else {
                     unreachable!()
@@ -565,20 +702,21 @@ fn set_nested_value_recursive(
         ))),
     };
 
-    // Restore buffer to its state before this call
     path_buffer.truncate(buffer_start_len);
     result
 }
 
-/// Optimized recursive helper for setting nested values in arrays with type awareness
-fn set_nested_array_value(
-    arr: &mut Vec<Value>,
+/// Recursive helper for setting nested values in arrays.
+#[allow(clippy::too_many_arguments)]
+fn set_nested_array_value<'a>(
+    arr: &mut Vec<UnflatNode<'a>>,
     parts: &[&str],
     index: usize,
-    value: Value,
+    value: ValueRef<'a>,
     separator: &str,
     path_types: &FxHashMap<String, bool>,
     path_buffer: &mut String,
+    max_array_index: usize,
 ) -> Result<(), JsonToolsError> {
     if index >= parts.len() {
         return Err(JsonToolsError::invalid_json_structure(
@@ -589,15 +727,22 @@ fn set_nested_array_value(
     let part = parts[index];
 
     if let Ok(array_index) = part.parse::<usize>() {
+        if array_index > max_array_index {
+            return Err(JsonToolsError::input_validation_error(format!(
+                "Array index {} exceeds maximum allowed index ({}). \
+                 Use max_array_index() to increase the limit.",
+                array_index, max_array_index
+            )));
+        }
+
         while arr.len() <= array_index {
-            arr.push(Value::Null);
+            arr.push(UnflatNode::Null);
         }
 
         if index == parts.len() - 1 {
-            arr[array_index] = value;
+            arr[array_index] = UnflatNode::Leaf(value);
             Ok(())
         } else {
-            // Build path in buffer for type lookup
             let buffer_start_len = path_buffer.len();
             if buffer_start_len > 0 {
                 path_buffer.push_str(separator);
@@ -609,16 +754,16 @@ fn set_nested_array_value(
                 .copied()
                 .unwrap_or(false);
 
-            if arr[array_index].is_null() {
+            if matches!(arr[array_index], UnflatNode::Null) {
                 arr[array_index] = if next_should_be_array {
-                    Value::Array(vec![])
+                    UnflatNode::Array(vec![])
                 } else {
-                    Value::Object(Map::new())
+                    UnflatNode::Object(FxHashMap::default())
                 };
             }
 
             let result = match &mut arr[array_index] {
-                Value::Object(ref mut obj) => set_nested_value_recursive(
+                UnflatNode::Object(ref mut obj) => set_nested_value_recursive(
                     obj,
                     parts,
                     index + 1,
@@ -626,8 +771,9 @@ fn set_nested_array_value(
                     separator,
                     path_types,
                     path_buffer,
+                    max_array_index,
                 ),
-                Value::Array(ref mut nested_arr) => set_nested_array_value(
+                UnflatNode::Array(ref mut nested_arr) => set_nested_array_value(
                     nested_arr,
                     parts,
                     index + 1,
@@ -635,6 +781,7 @@ fn set_nested_array_value(
                     separator,
                     path_types,
                     path_buffer,
+                    max_array_index,
                 ),
                 _ => Err(JsonToolsError::invalid_json_structure(format!(
                     "Array element at index {} has incompatible type",
@@ -642,7 +789,6 @@ fn set_nested_array_value(
                 ))),
             };
 
-            // Restore buffer to its state before this call
             path_buffer.truncate(buffer_start_len);
             result
         }
@@ -652,4 +798,153 @@ fn set_nested_array_value(
             part
         )))
     }
+}
+
+// ================================================================================================
+// Direct Serialization with Integrated Filtering
+// ================================================================================================
+
+/// Serialize an UnflatNode tree directly to a JSON string with integrated filtering.
+fn serialize_unflatten_tree(root: &UnflatNode<'_>, filtering: &FilteringConfig) -> String {
+    // Estimate output size
+    let mut output = String::with_capacity(256);
+    serialize_node(root, &mut output, filtering);
+    output
+}
+
+/// Check if a leaf value should be filtered out based on filtering config.
+#[inline]
+fn should_filter_leaf(s: &str, filtering: &FilteringConfig) -> bool {
+    (filtering.remove_nulls && s == "null")
+        || (filtering.remove_empty_strings && s == "\"\"")
+        || (filtering.remove_empty_objects && s == "{}")
+        || (filtering.remove_empty_arrays && s == "[]")
+}
+
+/// Recursive serialization. Returns true if the node produced output (not filtered).
+fn serialize_node(node: &UnflatNode<'_>, output: &mut String, filtering: &FilteringConfig) -> bool {
+    match node {
+        UnflatNode::Leaf(vr) => {
+            let s = vr.as_str();
+            if should_filter_leaf(s, filtering) {
+                return false;
+            }
+            output.push_str(s);
+            true
+        }
+        UnflatNode::Null => {
+            if filtering.remove_nulls {
+                return false;
+            }
+            output.push_str("null");
+            true
+        }
+        UnflatNode::Object(map) => {
+            if map.is_empty() {
+                if filtering.remove_empty_objects {
+                    return false;
+                }
+                output.push_str("{}");
+                return true;
+            }
+
+            let saved = output.len();
+            output.push('{');
+            let mut first = true;
+
+            // Sort keys for deterministic output (replaces BTreeMap's implicit ordering)
+            let mut keys: Vec<&String> = map.keys().collect();
+            keys.sort_unstable();
+
+            for key in keys {
+                let child = &map[key];
+                let child_saved = output.len();
+                if !first {
+                    output.push(',');
+                }
+                output.push('"');
+                write_json_escaped_key(output, key);
+                output.push_str("\":");
+
+                if !serialize_node(child, output, filtering) {
+                    output.truncate(child_saved);
+                } else {
+                    first = false;
+                }
+            }
+
+            if first {
+                // All children were filtered out
+                if filtering.remove_empty_objects {
+                    output.truncate(saved);
+                    return false;
+                }
+                // Write empty object
+                output.truncate(saved);
+                output.push_str("{}");
+                return true;
+            }
+
+            output.push('}');
+            true
+        }
+        UnflatNode::Array(vec) => {
+            if vec.is_empty() {
+                if filtering.remove_empty_arrays {
+                    return false;
+                }
+                output.push_str("[]");
+                return true;
+            }
+
+            let saved = output.len();
+            output.push('[');
+            let mut first = true;
+
+            for child in vec {
+                let child_saved = output.len();
+                if !first {
+                    output.push(',');
+                }
+
+                if !serialize_node(child, output, filtering) {
+                    output.truncate(child_saved);
+                } else {
+                    first = false;
+                }
+            }
+
+            if first {
+                // All children were filtered out
+                if filtering.remove_empty_arrays {
+                    output.truncate(saved);
+                    return false;
+                }
+                output.truncate(saved);
+                output.push_str("[]");
+                return true;
+            }
+
+            output.push(']');
+            true
+        }
+    }
+}
+
+// ================================================================================================
+// Utility
+// ================================================================================================
+
+/// Skip whitespace bytes starting from `pos`.
+#[inline(always)]
+fn skip_whitespace(input: &[u8], mut pos: usize) -> usize {
+    let len = input.len();
+    while pos < len {
+        let b = unsafe { *input.get_unchecked(pos) };
+        if b > 0x20 || (b != b' ' && b != b'\t' && b != b'\n' && b != b'\r') {
+            break;
+        }
+        pos += 1;
+    }
+    pos
 }

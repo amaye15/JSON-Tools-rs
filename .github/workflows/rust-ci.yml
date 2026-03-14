@@ -5,6 +5,8 @@ on:
     branches: [main, master]
   pull_request:
     branches: [main, master]
+  schedule:
+    - cron: '0 4 * * 1'  # Weekly Monday at 4am UTC
   workflow_dispatch:
 
 concurrency:
@@ -27,6 +29,14 @@ jobs:
         run: cargo install cargo-audit --locked
       - name: Run cargo audit
         run: cargo audit
+        continue-on-error: false
+
+  supply-chain:
+    name: Supply Chain (cargo-deny)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
 
   lint:
     name: Lint
@@ -43,7 +53,21 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
       - name: Run clippy
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --all-targets --all-features -- -D warnings -D clippy::correctness -D clippy::perf -D clippy::suspicious
+
+  msrv:
+    name: MSRV Check (1.80)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: "1.80"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: msrv
+      - name: Check MSRV
+        run: cargo check --all-features
 
   test:
     name: Test
@@ -60,6 +84,8 @@ jobs:
         run: cargo build --verbose
       - name: Run tests
         run: cargo test --verbose
+      - name: Run doctests
+        run: cargo test --doc --verbose
       - name: Run examples
         run: |
           cargo run --example basic_usage
@@ -67,6 +93,23 @@ jobs:
           cargo run --example test_type_conversion
       - name: Build documentation
         run: cargo doc --no-deps
+
+  miri:
+    name: Miri (Undefined Behavior Detection)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: nightly
+          components: miri
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: miri
+      - name: Run Miri
+        run: cargo miri test
+        env:
+          MIRIFLAGS: -Zmiri-disable-isolation
 
   cross-platform:
     name: Build (${{ matrix.target }})
@@ -106,3 +149,115 @@ jobs:
       - name: Test
         if: matrix.can_test
         run: cargo test --verbose --target ${{ matrix.target }}
+
+  coverage:
+    name: Code Coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: coverage
+      - name: Install cargo-tarpaulin
+        run: cargo install cargo-tarpaulin --locked
+      - name: Run coverage
+        run: cargo tarpaulin --verbose --workspace --timeout 120 --out xml --fail-under 80
+      - name: Upload to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: cobertura.xml
+          fail_ci_if_error: false
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
+  python-lint:
+    name: Python Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: pip install black isort mypy
+      - name: Check black formatting
+        run: black --check python/
+      - name: Check isort ordering
+        run: isort --check-only python/
+      - name: Run mypy type checking
+        run: mypy python/json_tools_rs/__init__.py python/json_tools_rs/__init__.pyi --ignore-missing-imports
+
+  python-test:
+    name: Python Tests (${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: python-${{ matrix.python-version }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install maturin and build
+        run: |
+          pip install maturin pytest
+          maturin develop --features python
+      - name: Run Python tests
+        run: pytest python/tests/tests.py -v
+
+  benchmark:
+    name: Benchmark
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: bench
+      - name: Run benchmarks
+        run: cargo bench --bench comprehensive_benchmark -- --output-format bencher | tee output.txt
+      - name: Store benchmark result
+        uses: benchmark-action/github-action-benchmark@v1
+        with:
+          tool: 'cargo'
+          output-file-path: output.txt
+          alert-threshold: '105%'
+          comment-on-alert: true
+          fail-on-alert: true
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          auto-push: false
+
+  nightly:
+    name: Nightly Rust Check
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: nightly
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: nightly
+      - name: Build with nightly
+        run: cargo build --verbose
+        continue-on-error: true
+      - name: Test with nightly
+        run: cargo test --verbose
+        continue-on-error: true
+      - name: Clippy with nightly
+        run: cargo clippy --all-targets -- -D warnings
+        continue-on-error: true

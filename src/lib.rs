@@ -13,6 +13,12 @@
 //! - **Batch Processing**: Handle single JSON strings or arrays of JSON strings
 //! - **Comprehensive Error Handling**: Detailed error messages for debugging
 //!
+//! ## Notes
+//!
+//! - **Root-level empty arrays**: Flattening an empty array (`[]`) produces `"{}"` (an empty
+//!   object), because flattening always yields key-value pairs. Zero elements means zero
+//!   key-value pairs, which is represented as an empty object.
+//!
 //! ## Quick Start with Unified API
 //!
 //! ### Flattening JSON
@@ -317,7 +323,7 @@
 //! ```
 //!
 //!
-//! ## 12. Collision Handling - Collect Values into Arrays
+//! ## 11. Collision Handling - Collect Values into Arrays
 //!
 //! ```rust
 //! use json_tools_rs::{JSONTools, JsonOutput};
@@ -340,7 +346,7 @@
 //! }
 //! ```
 //!
-//! ## 13. Comprehensive Integration Example
+//! ## 12. Comprehensive Integration Example
 //!
 //! ```rust
 //! use json_tools_rs::{JSONTools, JsonOutput};
@@ -419,6 +425,12 @@
 //! }
 //! ```
 //!
+
+// Use mimalloc for ~5-10% performance improvement on allocation-heavy workloads.
+// Gated behind cfg(not(feature = "python")) because Python manages its own allocator.
+#[cfg(not(feature = "python"))]
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 // ================================================================================================
 // MODULE DECLARATIONS

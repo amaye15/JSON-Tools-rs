@@ -2,6 +2,7 @@
 name = "json-tools-rs"
 version = "0.9.0"
 edition = "2021"
+rust-version = "1.80"
 description = "A high-performance Rust library for advanced JSON manipulation with SIMD-accelerated parsing, Crossbeam parallelism, and Python bindings with DataFrame/Series support"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/amaye15/json-tools-rs"
@@ -37,6 +38,7 @@ pythonize = { version = "0.27.0", optional = true }
 chrono = { version = "0.4.42", default-features = false, features = ["std", "clock"] }
 dashmap = "6.1.0"
 itoa = "1.0"            # Fast integer-to-string conversion (replaces write!/fmt overhead)
+mimalloc = { version = "0.1", default-features = false }  # High-performance allocator (~5-10% speedup)
 
 [target.'cfg(target_pointer_width = "64")'.dependencies]
 # sonic-rs is fastest but only works on 64-bit architectures
@@ -47,7 +49,7 @@ sonic-rs = "0.5.6"
 simd-json = "0.17.0"
 
 [features]
-default = []  # Add python to default features
+default = []  # Python bindings are opt-in via --features python
 python = ["pyo3", "dep:pythonize"]
 
 test-assets-performance = []

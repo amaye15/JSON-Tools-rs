@@ -957,6 +957,85 @@ mod unit_tests {
         assert_eq!(parsed["user"]["id"], 999);
         assert_eq!(parsed["user"]["enabled"], true);
     }
+
+    #[test]
+    fn test_normal_mode_collision_handling() {
+        // Key replacement that creates duplicate keys, verifying array merging
+        let json = r#"{"user_name": "Alice", "admin_name": "Bob"}"#;
+        let result = JSONTools::new()
+            .normal()
+            .key_replacement("user_", "")
+            .key_replacement("admin_", "")
+            .handle_key_collision(true)
+            .execute(json)
+            .unwrap();
+        let processed = extract_single(result);
+        let parsed: Value = serde_json::from_str(&processed).unwrap();
+
+        // Both keys become "name", should be merged into array
+        assert!(parsed["name"].is_array());
+        let names: Vec<&str> = parsed["name"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        assert!(names.contains(&"Alice"));
+        assert!(names.contains(&"Bob"));
+    }
+
+    #[test]
+    fn test_normal_mode_deep_nesting_with_filtering() {
+        // Build 50+ levels of nesting with a mix of filterable and retained values
+        let inner = r#"{"a":{"b":{"keep":"hello","remove":"","null_val":null}}}"#;
+        let mut json = inner.to_string();
+        for i in 0..50 {
+            json = format!(r#"{{"level{}": {}}}"#, i, json);
+        }
+
+        let result = JSONTools::new()
+            .normal()
+            .remove_empty_strings(true)
+            .remove_nulls(true)
+            .execute(&json)
+            .unwrap();
+        let processed = extract_single(result);
+        let parsed: Value = serde_json::from_str(&processed).unwrap();
+
+        // Navigate to the deepest level
+        let mut current = &parsed;
+        for i in (0..50).rev() {
+            let key = format!("level{}", i);
+            assert!(current[&key].is_object(), "missing level{}", i);
+            current = &current[&key];
+        }
+        // "keep" should survive, "remove" and "null_val" should be filtered
+        assert_eq!(current["a"]["b"]["keep"], "hello");
+        assert_eq!(current["a"]["b"]["remove"], Value::Null); // filtered = absent = Null in serde
+        assert_eq!(current["a"]["b"]["null_val"], Value::Null); // filtered
+    }
+
+    #[test]
+    fn test_normal_mode_unicode_keys_with_lowercase() {
+        // Normal mode slow walker uses .to_lowercase() (full Unicode lowercasing)
+        let json = r#"{"Ñoño": 1, "ÜBER": 2, "Hello": 3, "café": 4}"#;
+        let result = JSONTools::new()
+            .normal()
+            .lowercase_keys(true)
+            .execute(json)
+            .unwrap();
+        let processed = extract_single(result);
+        let parsed: Value = serde_json::from_str(&processed).unwrap();
+
+        // ASCII uppercase converted: "Hello" -> "hello"
+        assert_eq!(parsed["hello"], 3);
+        // Full Unicode lowercasing: Ñ -> ñ
+        assert_eq!(parsed["ñoño"], 1);
+        // Full Unicode lowercasing: Ü -> ü
+        assert_eq!(parsed["über"], 2);
+        // Already lowercase stays unchanged
+        assert_eq!(parsed["café"], 4);
+    }
 }
 
 // ===== MEMORY PROFILING TESTS =====
@@ -2472,5 +2551,245 @@ mod parallel_regex_cache_tests {
         // Normalized with :00 seconds added
         assert_eq!(parsed["no_seconds"], "2024-01-15T10:30:00Z");
         assert_eq!(parsed["no_seconds_z"], "2024-01-15T10:30:00Z");
+    }
+}
+
+// ==========================================
+// JsonOutput try_into tests
+// ==========================================
+
+#[cfg(test)]
+mod json_output_tests {
+    use crate::JsonOutput;
+
+    #[test]
+    fn test_try_into_single_ok() {
+        let output = JsonOutput::Single(r#"{"a":1}"#.to_string());
+        assert_eq!(output.try_into_single().unwrap(), r#"{"a":1}"#);
+    }
+
+    #[test]
+    fn test_try_into_single_err() {
+        let output = JsonOutput::Multiple(vec![r#"{"a":1}"#.to_string()]);
+        assert!(output.try_into_single().is_err());
+    }
+
+    #[test]
+    fn test_try_into_multiple_ok() {
+        let output = JsonOutput::Multiple(vec![r#"{"a":1}"#.to_string()]);
+        assert_eq!(output.try_into_multiple().unwrap(), vec![r#"{"a":1}"#]);
+    }
+
+    #[test]
+    fn test_try_into_multiple_err() {
+        let output = JsonOutput::Single(r#"{"a":1}"#.to_string());
+        assert!(output.try_into_multiple().is_err());
+    }
+}
+
+// ==========================================
+// max_array_index DoS protection tests
+// ==========================================
+
+#[cfg(test)]
+mod max_array_index_tests {
+    use crate::JSONTools;
+
+    #[test]
+    fn test_max_array_index_rejects_huge_index() {
+        let json = r#"{"items.999999999": "value"}"#;
+        let result = JSONTools::new().unflatten().execute(json);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("exceeds maximum"));
+    }
+
+    #[test]
+    fn test_max_array_index_accepts_small_index() {
+        let json = r#"{"items.5": "value"}"#;
+        let result = JSONTools::new().unflatten().execute(json);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_max_array_index_custom_limit() {
+        let json = r#"{"items.11": "value"}"#;
+        // Custom limit of 10 should reject index 11
+        let result = JSONTools::new()
+            .unflatten()
+            .max_array_index(10)
+            .execute(json);
+        assert!(result.is_err());
+
+        // But index 9 should be fine
+        let json_ok = r#"{"items.9": "value"}"#;
+        let result_ok = JSONTools::new()
+            .unflatten()
+            .max_array_index(10)
+            .execute(json_ok);
+        assert!(result_ok.is_ok());
+    }
+}
+
+// ==========================================
+// Validation, edge case, and normal mode tests
+// ==========================================
+
+#[cfg(test)]
+mod validation_and_edge_case_tests {
+    use crate::tests::extract_single;
+    use crate::JSONTools;
+    use serde_json::Value;
+
+    #[test]
+    #[should_panic(expected = "Separator cannot be empty")]
+    fn test_empty_separator_panics() {
+        let _ = JSONTools::new().flatten().separator("");
+    }
+
+    #[test]
+    fn test_num_threads_zero_returns_error() {
+        let result = JSONTools::new()
+            .flatten()
+            .num_threads(Some(0))
+            .execute(r#"{"a": 1}"#);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("num_threads must be at least 1"));
+    }
+
+    #[test]
+    fn test_execute_without_mode_returns_error() {
+        let result = JSONTools::new().execute(r#"{"a": 1}"#);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("Operation mode not set"));
+    }
+
+    #[test]
+    fn test_max_array_index_enforcement() {
+        // Very large index should be rejected with default limit
+        let json = r#"{"items.999999999": "value"}"#;
+        let result = JSONTools::new().unflatten().execute(json);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_unicode_keys_flatten() {
+        let json = r#"{"用户": {"名前": "太郎", "émoji": "🎉"}}"#;
+        let result = JSONTools::new().flatten().execute(json).unwrap();
+        let flattened = extract_single(result);
+        let parsed: Value = serde_json::from_str(&flattened).unwrap();
+
+        assert_eq!(parsed["用户.名前"], "太郎");
+        assert_eq!(parsed["用户.émoji"], "🎉");
+    }
+
+    #[test]
+    fn test_unicode_keys_roundtrip() {
+        let json = r#"{"café": {"naïve": "résumé"}, "日本語": {"キー": "値"}}"#;
+        let flattened = JSONTools::new().flatten().execute(json).unwrap();
+        let flat_str = extract_single(flattened);
+        let unflattened = JSONTools::new().unflatten().execute(flat_str.as_str()).unwrap();
+        let result = extract_single(unflattened);
+        let parsed: Value = serde_json::from_str(&result).unwrap();
+
+        assert_eq!(parsed["café"]["naïve"], "résumé");
+        assert_eq!(parsed["日本語"]["キー"], "値");
+    }
+
+    #[test]
+    fn test_normal_mode_lowercase_keys() {
+        let json = r#"{"UserName": "John", "UserAge": 30, "nested": {"InnerKey": true}}"#;
+        let result = JSONTools::new()
+            .normal()
+            .lowercase_keys(true)
+            .execute(json)
+            .unwrap();
+        let output = extract_single(result);
+        let parsed: Value = serde_json::from_str(&output).unwrap();
+
+        assert_eq!(parsed["username"], "John");
+        assert_eq!(parsed["userage"], 30);
+        assert_eq!(parsed["nested"]["innerkey"], true);
+    }
+
+    #[test]
+    fn test_normal_mode_auto_convert_types() {
+        let json = r#"{"count": "42", "active": "true", "rate": "3.14"}"#;
+        let result = JSONTools::new()
+            .normal()
+            .auto_convert_types(true)
+            .execute(json)
+            .unwrap();
+        let output = extract_single(result);
+        let parsed: Value = serde_json::from_str(&output).unwrap();
+
+        assert_eq!(parsed["count"], 42);
+        assert_eq!(parsed["active"], true);
+        assert!(parsed["rate"].is_f64());
+    }
+
+    #[test]
+    fn test_normal_mode_filtering() {
+        let json = r#"{"a": "", "b": null, "c": {}, "d": [], "e": "keep"}"#;
+        let result = JSONTools::new()
+            .normal()
+            .remove_empty_strings(true)
+            .remove_nulls(true)
+            .remove_empty_objects(true)
+            .remove_empty_arrays(true)
+            .execute(json)
+            .unwrap();
+        let output = extract_single(result);
+        let parsed: Value = serde_json::from_str(&output).unwrap();
+
+        assert!(parsed.get("a").is_none());
+        assert!(parsed.get("b").is_none());
+        assert!(parsed.get("c").is_none());
+        assert!(parsed.get("d").is_none());
+        assert_eq!(parsed["e"], "keep");
+    }
+
+    #[test]
+    fn test_batch_processing_error_includes_index() {
+        let inputs: Vec<&str> = vec![
+            r#"{"a": 1}"#,
+            "not valid json",
+            r#"{"b": 2}"#,
+        ];
+        let result = JSONTools::new().flatten().execute(inputs.as_slice());
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        // The error should mention the index of the failed item
+        assert!(err.to_string().contains("1") || err.to_string().contains("index"));
+    }
+
+    #[test]
+    fn test_json_output_try_into_single() {
+        let result = JSONTools::new()
+            .flatten()
+            .execute(r#"{"a": 1}"#)
+            .unwrap();
+        assert!(result.try_into_single().is_ok());
+    }
+
+    #[test]
+    fn test_json_output_try_into_multiple_from_single_errors() {
+        let result = JSONTools::new()
+            .flatten()
+            .execute(r#"{"a": 1}"#)
+            .unwrap();
+        assert!(result.try_into_multiple().is_err());
+    }
+
+    #[test]
+    fn test_json_output_into_vec_single() {
+        let result = JSONTools::new()
+            .flatten()
+            .execute(r#"{"a": 1}"#)
+            .unwrap();
+        let vec = result.into_vec();
+        assert_eq!(vec.len(), 1);
     }
 }

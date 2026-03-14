@@ -95,7 +95,10 @@ class TestBasicFunctionality:
 
     def test_roundtrip_consistency(self):
         """Test that flatten → unflatten preserves data"""
-        original = {"user": {"profile": {"name": "John", "age": 30}}, "settings": {"theme": "dark"}}
+        original = {
+            "user": {"profile": {"name": "John", "age": 30}},
+            "settings": {"theme": "dark"},
+        }
 
         # Flatten then unflatten
         flattened = json_tools_rs.JSONTools().flatten().execute(original)
@@ -136,13 +139,14 @@ class TestBasicFunctionality:
 class TestCollisionHandling:
     """Test collision handling strategies"""
 
-
     def test_handle_collision_strategy(self):
         """Test collision handling with arrays"""
-        tools = (json_tools_rs.JSONTools()
-                .flatten()
-                .key_replacement("(User|Admin|Guest)_", "")
-                .handle_key_collision(True))
+        tools = (
+            json_tools_rs.JSONTools()
+            .flatten()
+            .key_replacement("(User|Admin|Guest)_", "")
+            .handle_key_collision(True)
+        )
 
         data = {"User_name": "John", "Admin_name": "Jane", "Guest_name": "Bob"}
         result = tools.execute(data)
@@ -157,11 +161,13 @@ class TestCollisionHandling:
 
     def test_collision_with_filtering(self):
         """Test collision handling with filtering applied during resolution"""
-        tools = (json_tools_rs.JSONTools()
-                .flatten()
-                .key_replacement("(User|Admin|Guest)_", "")
-                .remove_empty_strings(True)
-                .handle_key_collision(True))
+        tools = (
+            json_tools_rs.JSONTools()
+            .flatten()
+            .key_replacement("(User|Admin|Guest)_", "")
+            .remove_empty_strings(True)
+            .handle_key_collision(True)
+        )
 
         data = {"User_name": "John", "Admin_name": "", "Guest_name": "Bob"}
         result = tools.execute(data)
@@ -173,7 +179,6 @@ class TestCollisionHandling:
         assert "John" in result["name"]
         assert "Bob" in result["name"]
         assert "" not in result["name"]
-
 
 
 class TestAdvancedConfiguration:
@@ -319,8 +324,8 @@ class TestReplacements:
 
     def test_regex_key_replacement(self):
         """Test regex key replacement"""
-        tools = json_tools_rs.JSONTools().flatten().key_replacement(
-            "^(user|admin)_", ""
+        tools = (
+            json_tools_rs.JSONTools().flatten().key_replacement("^(user|admin)_", "")
         )
         input_data = {
             "user_name": "John",
@@ -336,8 +341,10 @@ class TestReplacements:
 
     def test_literal_value_replacement(self):
         """Test literal string value replacement"""
-        tools = json_tools_rs.JSONTools().flatten().value_replacement(
-            "inactive", "disabled"
+        tools = (
+            json_tools_rs.JSONTools()
+            .flatten()
+            .value_replacement("inactive", "disabled")
         )
         input_data = {
             "user1": {"status": "active"},
@@ -353,8 +360,10 @@ class TestReplacements:
 
     def test_regex_value_replacement(self):
         """Test regex value replacement"""
-        tools = json_tools_rs.JSONTools().flatten().value_replacement(
-            "@example\\.com", "@company.org"
+        tools = (
+            json_tools_rs.JSONTools()
+            .flatten()
+            .value_replacement("@example\\.com", "@company.org")
         )
         input_data = {
             "user1": {"email": "john@example.com"},
@@ -393,8 +402,10 @@ class TestReplacements:
 
     def test_regex_capture_groups(self):
         """Test regex replacement with capture groups"""
-        tools = json_tools_rs.JSONTools().flatten().key_replacement(
-            "^field_(\\d+)_(.+)", "$2_id_$1"
+        tools = (
+            json_tools_rs.JSONTools()
+            .flatten()
+            .key_replacement("^field_(\\d+)_(.+)", "$2_id_$1")
         )
         input_data = {
             "field_123_name": "John",
@@ -638,8 +649,10 @@ class TestErrorHandling:
     def test_invalid_regex_pattern(self):
         """Test invalid regex patterns fall back to literal matching"""
         # Invalid regex in key replacement - should fall back to literal matching
-        tools = json_tools_rs.JSONTools().flatten().key_replacement(
-            "[invalid", "replacement"
+        tools = (
+            json_tools_rs.JSONTools()
+            .flatten()
+            .key_replacement("[invalid", "replacement")
         )
         result = tools.execute('{"test": "value"}')
         # Should not raise error, just treat as literal string (no match)
@@ -647,8 +660,10 @@ class TestErrorHandling:
         assert '"test"' in result and '"value"' in result
 
         # Invalid regex in value replacement - should fall back to literal matching
-        tools = json_tools_rs.JSONTools().flatten().value_replacement(
-            "*invalid", "replacement"
+        tools = (
+            json_tools_rs.JSONTools()
+            .flatten()
+            .value_replacement("*invalid", "replacement")
         )
         result = tools.execute('{"test": "value"}')
         # Should not raise error, just treat as literal string (no match)
@@ -1827,8 +1842,8 @@ class TestJsonUnflattenerBuilderPattern:
     def test_key_replacement(self):
         """Test key replacement configuration."""
         flattened = {"prefix.name": "John", "prefix.age": 30}
-        tools = json_tools_rs.JSONTools().unflatten().key_replacement(
-            "prefix.", "user."
+        tools = (
+            json_tools_rs.JSONTools().unflatten().key_replacement("prefix.", "user.")
         )
         result = tools.execute(flattened)
 
@@ -1838,8 +1853,10 @@ class TestJsonUnflattenerBuilderPattern:
     def test_value_replacement(self):
         """Test value replacement configuration."""
         flattened = {"user.email": "john@company.org", "user.name": "John"}
-        tools = json_tools_rs.JSONTools().unflatten().value_replacement(
-            "@company.org", "@example.com"
+        tools = (
+            json_tools_rs.JSONTools()
+            .unflatten()
+            .value_replacement("@company.org", "@example.com")
         )
         result = tools.execute(flattened)
 
@@ -1850,8 +1867,10 @@ class TestJsonUnflattenerBuilderPattern:
     def test_regex_key_replacement(self):
         """Test regex key replacement."""
         flattened = {"user_name": "John", "admin_role": "super"}
-        tools = json_tools_rs.JSONTools().unflatten().key_replacement(
-            "^(user|admin)_", "$1."
+        tools = (
+            json_tools_rs.JSONTools()
+            .unflatten()
+            .key_replacement("^(user|admin)_", "$1.")
         )
         result = tools.execute(flattened)
 
@@ -2074,7 +2093,7 @@ class TestTypeConversion:
             "usd": "$123.45",
             "eur": "€99.99",
             "gbp": "£50.00",
-            "yen": "¥1000"
+            "yen": "¥1000",
         }
         result = tools.execute(input_data)
 
@@ -2086,11 +2105,7 @@ class TestTypeConversion:
     def test_scientific_notation(self):
         """Test scientific notation conversion"""
         tools = json_tools_rs.JSONTools().flatten().auto_convert_types(True)
-        input_data = {
-            "small": "1.23e-4",
-            "large": "1e5",
-            "negative": "-2.5e3"
-        }
+        input_data = {"small": "1.23e-4", "large": "1e5", "negative": "-2.5e3"}
         result = tools.execute(input_data)
 
         assert result["small"] == 0.000123
@@ -2106,7 +2121,7 @@ class TestTypeConversion:
             "c": "True",
             "d": "false",
             "e": "FALSE",
-            "f": "False"
+            "f": "False",
         }
         result = tools.execute(input_data)
 
@@ -2124,7 +2139,7 @@ class TestTypeConversion:
             "name": "John",
             "code": "ABC123",
             "maybe": "perhaps",  # Not a valid boolean
-            "invalid": "12.34.56"  # Invalid number
+            "invalid": "12.34.56",  # Invalid number
         }
         result = tools.execute(input_data)
 
@@ -2141,7 +2156,7 @@ class TestTypeConversion:
             "name": "Alice",
             "price": "$1,234.56",
             "active": "true",
-            "code": "XYZ"
+            "code": "XYZ",
         }
         result = tools.execute(input_data)
 
@@ -2154,13 +2169,7 @@ class TestTypeConversion:
     def test_nested_conversion(self):
         """Test type conversion in nested structures"""
         tools = json_tools_rs.JSONTools().flatten().auto_convert_types(True)
-        input_data = {
-            "user": {
-                "id": "456",
-                "age": "25",
-                "verified": "true"
-            }
-        }
+        input_data = {"user": {"id": "456", "age": "25", "verified": "true"}}
         result = tools.execute(input_data)
 
         assert result["user.id"] == 456
@@ -2191,10 +2200,7 @@ class TestTypeConversion:
     def test_unflatten_with_conversion(self):
         """Test type conversion with unflatten operation"""
         tools = json_tools_rs.JSONTools().unflatten().auto_convert_types(True)
-        input_data = {
-            "user.id": "789",
-            "user.active": "false"
-        }
+        input_data = {"user.id": "789", "user.active": "false"}
         result = tools.execute(input_data)
 
         assert result["user"]["id"] == 789
@@ -2203,12 +2209,7 @@ class TestTypeConversion:
     def test_normal_mode_with_conversion(self):
         """Test type conversion with normal mode (no flatten/unflatten)"""
         tools = json_tools_rs.JSONTools().normal().auto_convert_types(True)
-        input_data = {
-            "user": {
-                "id": "999",
-                "enabled": "TRUE"
-            }
-        }
+        input_data = {"user": {"id": "999", "enabled": "TRUE"}}
         result = tools.execute(input_data)
 
         assert result["user"]["id"] == 999
@@ -2216,17 +2217,19 @@ class TestTypeConversion:
 
     def test_conversion_with_other_transformations(self):
         """Test type conversion combined with other transformations"""
-        tools = (json_tools_rs.JSONTools()
-                .flatten()
-                .auto_convert_types(True)
-                .lowercase_keys(True)
-                .remove_empty_strings(True))
+        tools = (
+            json_tools_rs.JSONTools()
+            .flatten()
+            .auto_convert_types(True)
+            .lowercase_keys(True)
+            .remove_empty_strings(True)
+        )
 
         input_data = {
             "User_ID": "123",
             "User_Active": "true",
             "User_Name": "Alice",
-            "Empty": ""
+            "Empty": "",
         }
         result = tools.execute(input_data)
 
@@ -2240,7 +2243,7 @@ class TestTypeConversion:
         tools = json_tools_rs.JSONTools().flatten().auto_convert_types(True)
         input_batch = [
             {"id": "101", "price": "$99.99"},
-            {"id": "102", "price": "$149.00"}
+            {"id": "102", "price": "$149.00"},
         ]
         result = tools.execute(input_batch)
 
@@ -2263,20 +2266,20 @@ class TestTypeConversion:
                         "id": "101",
                         "quantity": "5",
                         "price": "€99.99",
-                        "available": "true"
+                        "available": "true",
                     },
                     {
                         "id": "102",
                         "quantity": "2",
                         "price": "$49.50",
-                        "available": "FALSE"
-                    }
+                        "available": "FALSE",
+                    },
                 ],
                 "customer": {
                     "id": "CUST-789",
                     "verified": "True",
-                    "balance": "1,500.00"
-                }
+                    "balance": "1,500.00",
+                },
             }
         }
         result = tools.execute(input_data)
@@ -2410,8 +2413,7 @@ class TestParallelProcessing:
             .lowercase_keys(True)
         )
         batch = [
-            {"User_ID": i, "Name": "Test", "Empty": "", "Null": None}
-            for i in range(15)
+            {"User_ID": i, "Name": "Test", "Empty": "", "Null": None} for i in range(15)
         ]
         results = tools.execute(batch)
 
@@ -2596,6 +2598,7 @@ class TestDataFrameAndSeriesSupport:
         """Setup for DataFrame/Series tests"""
         try:
             import pandas as pd
+
             self.pd = pd
             self.has_pandas = True
         except ImportError:
@@ -2603,6 +2606,7 @@ class TestDataFrameAndSeriesSupport:
 
         try:
             import polars as pl
+
             self.pl = pl
             self.has_polars = True
         except ImportError:
@@ -2610,6 +2614,7 @@ class TestDataFrameAndSeriesSupport:
 
         try:
             import pyarrow as pa
+
             self.pa = pa
             self.has_pyarrow = True
         except ImportError:
@@ -2627,10 +2632,12 @@ class TestDataFrameAndSeriesSupport:
         tools = json_tools_rs.JSONTools().flatten()
 
         # Create DataFrame with nested dicts
-        df = self.pd.DataFrame([
-            {"user": {"name": "Alice", "age": 30}, "active": True},
-            {"user": {"name": "Bob", "age": 25}, "active": False}
-        ])
+        df = self.pd.DataFrame(
+            [
+                {"user": {"name": "Alice", "age": 30}, "active": True},
+                {"user": {"name": "Bob", "age": 25}, "active": False},
+            ]
+        )
 
         result = tools.execute(df)
 
@@ -2653,10 +2660,12 @@ class TestDataFrameAndSeriesSupport:
         tools = json_tools_rs.JSONTools().unflatten()
 
         # Create DataFrame with flattened structure
-        df = self.pd.DataFrame([
-            {"user.name": "Alice", "user.age": 30},
-            {"user.name": "Bob", "user.age": 25}
-        ])
+        df = self.pd.DataFrame(
+            [
+                {"user.name": "Alice", "user.age": 30},
+                {"user.name": "Bob", "user.age": 25},
+            ]
+        )
 
         result = tools.execute(df)
 
@@ -2699,10 +2708,12 @@ class TestDataFrameAndSeriesSupport:
         tools = json_tools_rs.JSONTools().flatten()
 
         # Create polars DataFrame with nested dicts
-        df = self.pl.DataFrame([
-            {"user": {"name": "Alice", "age": 30}, "active": True},
-            {"user": {"name": "Bob", "age": 25}, "active": False}
-        ])
+        df = self.pl.DataFrame(
+            [
+                {"user": {"name": "Alice", "age": 30}, "active": True},
+                {"user": {"name": "Bob", "age": 25}, "active": False},
+            ]
+        )
 
         result = tools.execute(df)
 
@@ -2722,10 +2733,12 @@ class TestDataFrameAndSeriesSupport:
         tools = json_tools_rs.JSONTools().unflatten()
 
         # Create polars DataFrame with flattened structure
-        df = self.pl.DataFrame([
-            {"user.name": "Alice", "user.age": 30},
-            {"user.name": "Bob", "user.age": 25}
-        ])
+        df = self.pl.DataFrame(
+            [
+                {"user.name": "Alice", "user.age": 30},
+                {"user.name": "Bob", "user.age": 25},
+            ]
+        )
 
         result = tools.execute(df)
 
@@ -2749,10 +2762,12 @@ class TestDataFrameAndSeriesSupport:
         tools = json_tools_rs.JSONTools().flatten()
 
         # Create PyArrow Table with nested dicts
-        table = self.pa.Table.from_pylist([
-            {"user": {"name": "Alice", "age": 30}, "active": True},
-            {"user": {"name": "Bob", "age": 25}, "active": False}
-        ])
+        table = self.pa.Table.from_pylist(
+            [
+                {"user": {"name": "Alice", "age": 30}, "active": True},
+                {"user": {"name": "Bob", "age": 25}, "active": False},
+            ]
+        )
 
         result = tools.execute(table)
 
@@ -2776,10 +2791,12 @@ class TestDataFrameAndSeriesSupport:
         tools = json_tools_rs.JSONTools().unflatten()
 
         # Create PyArrow Table with flattened structure
-        table = self.pa.Table.from_pylist([
-            {"user.name": "Alice", "user.age": 30},
-            {"user.name": "Bob", "user.age": 25}
-        ])
+        table = self.pa.Table.from_pylist(
+            [
+                {"user.name": "Alice", "user.age": 30},
+                {"user.name": "Bob", "user.age": 25},
+            ]
+        )
 
         result = tools.execute(table)
 
@@ -2822,15 +2839,19 @@ class TestDataFrameAndSeriesSupport:
         tools = json_tools_rs.JSONTools().flatten()
 
         # Create PyArrow Array of dicts
-        array = self.pa.array([
-            {"user": {"name": "Alice", "age": 30}},
-            {"user": {"name": "Bob", "age": 25}}
-        ])
+        array = self.pa.array(
+            [
+                {"user": {"name": "Alice", "age": 30}},
+                {"user": {"name": "Bob", "age": 25}},
+            ]
+        )
 
         result = tools.execute(array)
 
         # Result should be PyArrow Array (or list as fallback)
-        if hasattr(self.pa, 'Array') and isinstance(result, (self.pa.Array, self.pa.ChunkedArray)):
+        if hasattr(self.pa, "Array") and isinstance(
+            result, (self.pa.Array, self.pa.ChunkedArray)
+        ):
             assert len(result) == 2
         elif isinstance(result, list):
             # Fallback to list
@@ -2848,15 +2869,19 @@ class TestDataFrameAndSeriesSupport:
         tools = json_tools_rs.JSONTools().unflatten()
 
         # Create PyArrow Array of flattened dicts
-        array = self.pa.array([
-            {"user.name": "Alice", "user.age": 30},
-            {"user.name": "Bob", "user.age": 25}
-        ])
+        array = self.pa.array(
+            [
+                {"user.name": "Alice", "user.age": 30},
+                {"user.name": "Bob", "user.age": 25},
+            ]
+        )
 
         result = tools.execute(array)
 
         # Result should be PyArrow Array (or list as fallback)
-        if hasattr(self.pa, 'Array') and isinstance(result, (self.pa.Array, self.pa.ChunkedArray)):
+        if hasattr(self.pa, "Array") and isinstance(
+            result, (self.pa.Array, self.pa.ChunkedArray)
+        ):
             assert len(result) == 2
         elif isinstance(result, list):
             # Fallback to list
@@ -2878,10 +2903,9 @@ class TestDataFrameAndSeriesSupport:
         tools = json_tools_rs.JSONTools().flatten()
 
         # Create Series of JSON strings
-        series = self.pd.Series([
-            '{"user": {"name": "Alice"}}',
-            '{"user": {"name": "Bob"}}'
-        ])
+        series = self.pd.Series(
+            ['{"user": {"name": "Alice"}}', '{"user": {"name": "Bob"}}']
+        )
 
         result = tools.execute(series)
 
@@ -2904,10 +2928,12 @@ class TestDataFrameAndSeriesSupport:
         tools = json_tools_rs.JSONTools().flatten()
 
         # Create Series of dicts
-        series = self.pd.Series([
-            {"user": {"name": "Alice", "age": 30}},
-            {"user": {"name": "Bob", "age": 25}}
-        ])
+        series = self.pd.Series(
+            [
+                {"user": {"name": "Alice", "age": 30}},
+                {"user": {"name": "Bob", "age": 25}},
+            ]
+        )
 
         result = tools.execute(series)
 
@@ -2931,10 +2957,12 @@ class TestDataFrameAndSeriesSupport:
         tools = json_tools_rs.JSONTools().unflatten()
 
         # Create Series of flattened dicts
-        series = self.pd.Series([
-            {"user.name": "Alice", "user.age": 30},
-            {"user.name": "Bob", "user.age": 25}
-        ])
+        series = self.pd.Series(
+            [
+                {"user.name": "Alice", "user.age": 30},
+                {"user.name": "Bob", "user.age": 25},
+            ]
+        )
 
         result = tools.execute(series)
 
@@ -2979,10 +3007,12 @@ class TestDataFrameAndSeriesSupport:
         tools = json_tools_rs.JSONTools().flatten()
 
         # Create polars Series of dicts
-        series = self.pl.Series([
-            {"user": {"name": "Alice", "age": 30}},
-            {"user": {"name": "Bob", "age": 25}}
-        ])
+        series = self.pl.Series(
+            [
+                {"user": {"name": "Alice", "age": 30}},
+                {"user": {"name": "Bob", "age": 25}},
+            ]
+        )
 
         result = tools.execute(series)
 
@@ -3002,10 +3032,12 @@ class TestDataFrameAndSeriesSupport:
         tools = json_tools_rs.JSONTools().unflatten()
 
         # Create polars Series of flattened dicts
-        series = self.pl.Series([
-            {"user.name": "Alice", "user.age": 30},
-            {"user.name": "Bob", "user.age": 25}
-        ])
+        series = self.pl.Series(
+            [
+                {"user.name": "Alice", "user.age": 30},
+                {"user.name": "Bob", "user.age": 25},
+            ]
+        )
 
         result = tools.execute(series)
 
@@ -3056,18 +3088,9 @@ class TestDataFrameAndSeriesSupport:
 
         tools = json_tools_rs.JSONTools().flatten()
 
-        df = self.pd.DataFrame([
-            {
-                "level1": {
-                    "level2": {
-                        "level3": {
-                            "value": "deep",
-                            "array": [1, 2, 3]
-                        }
-                    }
-                }
-            }
-        ])
+        df = self.pd.DataFrame(
+            [{"level1": {"level2": {"level3": {"value": "deep", "array": [1, 2, 3]}}}}]
+        )
 
         result = tools.execute(df)
 
@@ -3086,10 +3109,7 @@ class TestDataFrameAndSeriesSupport:
         tools = json_tools_rs.JSONTools().flatten()
 
         # Mix of valid and invalid JSON
-        series = self.pd.Series([
-            '{"valid": 1}',
-            'invalid json'
-        ])
+        series = self.pd.Series(['{"valid": 1}', "invalid json"])
 
         # Should raise error for invalid JSON
         with pytest.raises(Exception):
@@ -3106,7 +3126,7 @@ class TestDataFrameAndSeriesSupport:
 
         original_data = [
             {"user": {"name": "Alice", "age": 30}, "active": True},
-            {"user": {"name": "Bob", "age": 25}, "active": False}
+            {"user": {"name": "Bob", "age": 25}, "active": False},
         ]
 
         # Flatten
@@ -3120,7 +3140,7 @@ class TestDataFrameAndSeriesSupport:
 
         # Verify roundtrip
         if isinstance(result, self.pd.DataFrame):
-            result_dicts = result.to_dict('records')
+            result_dicts = result.to_dict("records")
         else:
             result_dicts = result
 
@@ -3135,7 +3155,7 @@ class TestDataFrameAndSeriesSupport:
 
         original_data = [
             {"user": {"name": "Alice", "age": 30}},
-            {"user": {"name": "Bob", "age": 25}}
+            {"user": {"name": "Bob", "age": 25}},
         ]
 
         # Flatten
@@ -3163,7 +3183,7 @@ class TestDataFrameAndSeriesSupport:
 
         original_data = [
             {"user": {"name": "Alice", "age": 30}},
-            {"user": {"name": "Bob", "age": 25}}
+            {"user": {"name": "Bob", "age": 25}},
         ]
 
         # Flatten
@@ -3195,10 +3215,12 @@ class TestDataFrameAndSeriesSupport:
 
         tools = json_tools_rs.JSONTools().flatten()
 
-        df = self.pd.DataFrame([
-            {"user": {"name": "Alice", "age": None}},
-            {"user": {"name": None, "age": 25}}
-        ])
+        df = self.pd.DataFrame(
+            [
+                {"user": {"name": "Alice", "age": None}},
+                {"user": {"name": None, "age": 25}},
+            ]
+        )
 
         result = tools.execute(df)
 
@@ -3216,11 +3238,13 @@ class TestDataFrameAndSeriesSupport:
 
         tools = json_tools_rs.JSONTools().flatten()
 
-        series = self.pd.Series([
-            {"user": {"name": "Alice"}},
-            None,  # Invalid - not a dict or JSON string
-            {"user": {"name": "Bob"}}
-        ])
+        series = self.pd.Series(
+            [
+                {"user": {"name": "Alice"}},
+                None,  # Invalid - not a dict or JSON string
+                {"user": {"name": "Bob"}},
+            ]
+        )
 
         # Should raise error for None values (not valid JSON)
         with pytest.raises(Exception):
@@ -3237,11 +3261,13 @@ class TestDataFrameAndSeriesSupport:
 
         tools = json_tools_rs.JSONTools().flatten()
 
-        df = self.pd.DataFrame([
-            {"user": {"name": "José", "city": "São Paulo"}},
-            {"user": {"name": "李明", "city": "北京"}},
-            {"user": {"name": "Владимир", "city": "Москва"}}
-        ])
+        df = self.pd.DataFrame(
+            [
+                {"user": {"name": "José", "city": "São Paulo"}},
+                {"user": {"name": "李明", "city": "北京"}},
+                {"user": {"name": "Владимир", "city": "Москва"}},
+            ]
+        )
 
         result = tools.execute(df)
 
@@ -3259,10 +3285,12 @@ class TestDataFrameAndSeriesSupport:
 
         tools = json_tools_rs.JSONTools().flatten()
 
-        df = self.pd.DataFrame([
-            {"message": {"text": "Hello 👋", "reaction": "🎉"}},
-            {"message": {"text": "World 🌍", "reaction": "❤️"}}
-        ])
+        df = self.pd.DataFrame(
+            [
+                {"message": {"text": "Hello 👋", "reaction": "🎉"}},
+                {"message": {"text": "World 🌍", "reaction": "❤️"}},
+            ]
+        )
 
         result = tools.execute(df)
 
@@ -3283,18 +3311,20 @@ class TestDataFrameAndSeriesSupport:
 
         tools = json_tools_rs.JSONTools().flatten()
 
-        df = self.pd.DataFrame([
-            {
-                "data": {
-                    "string": "text",
-                    "integer": 42,
-                    "float": 3.14,
-                    "boolean": True,
-                    "array": [1, 2, 3],
-                    "nested": {"key": "value"}
+        df = self.pd.DataFrame(
+            [
+                {
+                    "data": {
+                        "string": "text",
+                        "integer": 42,
+                        "float": 3.14,
+                        "boolean": True,
+                        "array": [1, 2, 3],
+                        "nested": {"key": "value"},
+                    }
                 }
-            }
-        ])
+            ]
+        )
 
         result = tools.execute(df)
 
@@ -3437,9 +3467,9 @@ class TestDataFrameAndSeriesSupport:
 
         tools = json_tools_rs.JSONTools().flatten()
 
-        df = self.pd.DataFrame([
-            {"user@email": {"key$value": "data", "key-name": "test"}}
-        ])
+        df = self.pd.DataFrame(
+            [{"user@email": {"key$value": "data", "key-name": "test"}}]
+        )
 
         result = tools.execute(df)
 
@@ -3460,12 +3490,14 @@ class TestDataFrameAndSeriesSupport:
 
         tools = json_tools_rs.JSONTools().flatten()
 
-        df = self.pd.DataFrame([
-            {
-                "user": {"name": "Alice", "tags": ["python", "rust", "data"]},
-                "scores": [95, 87, 92]
-            }
-        ])
+        df = self.pd.DataFrame(
+            [
+                {
+                    "user": {"name": "Alice", "tags": ["python", "rust", "data"]},
+                    "scores": [95, 87, 92],
+                }
+            ]
+        )
 
         result = tools.execute(df)
 
@@ -3491,7 +3523,7 @@ class TestDataFrameAndSeriesSupport:
         # Create table with schema
         data = [
             {"user": {"name": "Alice", "age": 30}},
-            {"user": {"name": "Bob", "age": 25}}
+            {"user": {"name": "Bob", "age": 25}},
         ]
         table = self.pa.Table.from_pylist(data)
 
@@ -3516,14 +3548,14 @@ class TestDataFrameAndSeriesSupport:
 
         data = [
             {"user": {"name": "Alice", "age": 30}},
-            {"user": {"name": "Bob", "age": 25}}
+            {"user": {"name": "Bob", "age": 25}},
         ]
 
         # Process with pandas
         df_pandas = self.pd.DataFrame(data)
         result_pandas = tools.execute(df_pandas)
         if isinstance(result_pandas, self.pd.DataFrame):
-            result_pandas = result_pandas.to_dict('records')
+            result_pandas = result_pandas.to_dict("records")
 
         # Process with polars
         df_polars = self.pl.DataFrame(data)
@@ -3546,3 +3578,184 @@ class TestDataFrameAndSeriesSupport:
         assert "user.name" in result_pandas[0]
         assert "user.name" in result_polars[0]
         assert "user.name" in result_pyarrow[0]
+
+
+class TestErrorHandlingExtended:
+    """Extended error handling tests covering validation and error codes."""
+
+    def test_missing_operation_mode(self):
+        """E005: Execute without calling flatten/unflatten/normal."""
+        with pytest.raises(json_tools_rs.JsonToolsError, match="Operation mode not set"):
+            json_tools_rs.JSONTools().execute('{"key": "value"}')
+
+    def test_invalid_json_input(self):
+        """Invalid JSON should raise an error."""
+        with pytest.raises(json_tools_rs.JsonToolsError):
+            json_tools_rs.JSONTools().flatten().execute("not valid json")
+
+    def test_batch_error_includes_index(self):
+        """Batch processing errors should indicate which item failed."""
+        with pytest.raises(json_tools_rs.JsonToolsError):
+            inputs = ['{"valid": true}', "invalid json", '{"also": "valid"}']
+            json_tools_rs.JSONTools().flatten().execute(inputs)
+
+    def test_empty_separator_raises(self):
+        """Empty separator should raise an error."""
+        with pytest.raises(Exception):
+            json_tools_rs.JSONTools().flatten().separator("").execute('{"a": 1}')
+
+    def test_num_threads_zero_raises(self):
+        """Zero threads should raise a configuration error."""
+        with pytest.raises(json_tools_rs.JsonToolsError, match="num_threads"):
+            json_tools_rs.JSONTools().flatten().num_threads(0).execute('{"a": 1}')
+
+
+class TestExecuteToOutput:
+    """Test execute_to_output() and JsonOutput wrapper."""
+
+    def test_single_input_returns_json_output(self):
+        """Single input should produce a JsonOutput with is_single=True."""
+        tools = json_tools_rs.JSONTools().flatten()
+        result = tools.execute_to_output('{"a": {"b": 1}}')
+        assert result.is_single
+        assert not result.is_multiple
+        single = result.get_single()
+        assert isinstance(single, str)
+        assert "a.b" in single
+
+    def test_multiple_input_returns_json_output(self):
+        """Multiple inputs should produce a JsonOutput with is_multiple=True."""
+        tools = json_tools_rs.JSONTools().flatten()
+        result = tools.execute_to_output(['{"a": 1}', '{"b": 2}'])
+        assert result.is_multiple
+        assert not result.is_single
+        multiple = result.get_multiple()
+        assert isinstance(multiple, list)
+        assert len(multiple) == 2
+
+    def test_to_python_single(self):
+        """to_python() on single result should return a string."""
+        tools = json_tools_rs.JSONTools().flatten()
+        result = tools.execute_to_output('{"a": 1}')
+        py_result = result.to_python()
+        assert isinstance(py_result, str)
+
+    def test_to_python_multiple(self):
+        """to_python() on multiple results should return a list."""
+        tools = json_tools_rs.JSONTools().flatten()
+        result = tools.execute_to_output(['{"a": 1}', '{"b": 2}'])
+        py_result = result.to_python()
+        assert isinstance(py_result, list)
+        assert len(py_result) == 2
+
+
+class TestNormalModeComprehensive:
+    """Test normal mode (transforms without flatten/unflatten)."""
+
+    def test_normal_lowercase_keys(self):
+        """Normal mode should lowercase keys recursively."""
+        tools = json_tools_rs.JSONTools().normal().lowercase_keys(True)
+        result = tools.execute({"UserName": "John", "Nested": {"InnerKey": True}})
+        assert "username" in result
+        assert "nested" in result
+        assert "innerkey" in result["nested"]
+
+    def test_normal_auto_convert_types(self):
+        """Normal mode should convert string types."""
+        tools = json_tools_rs.JSONTools().normal().auto_convert_types(True)
+        result = tools.execute({"count": "42", "active": "true", "rate": "3.14"})
+        assert result["count"] == 42
+        assert result["active"] is True
+        assert isinstance(result["rate"], float)
+
+    def test_normal_filtering(self):
+        """Normal mode should filter empty values."""
+        tools = (
+            json_tools_rs.JSONTools()
+            .normal()
+            .remove_empty_strings(True)
+            .remove_nulls(True)
+            .remove_empty_objects(True)
+            .remove_empty_arrays(True)
+        )
+        result = tools.execute({"a": "", "b": None, "c": {}, "d": [], "e": "keep"})
+        assert "a" not in result
+        assert "b" not in result
+        assert "c" not in result
+        assert "d" not in result
+        assert result["e"] == "keep"
+
+    def test_normal_key_replacement(self):
+        """Normal mode should apply key replacements."""
+        tools = (
+            json_tools_rs.JSONTools()
+            .normal()
+            .key_replacement("user_", "person_")
+        )
+        result = tools.execute({"user_name": "John", "user_age": 30})
+        assert "person_name" in result
+        assert "person_age" in result
+
+    def test_normal_value_replacement(self):
+        """Normal mode should apply value replacements."""
+        tools = (
+            json_tools_rs.JSONTools()
+            .normal()
+            .value_replacement("@example\\.com", "@company.org")
+        )
+        result = tools.execute({"email": "user@example.com"})
+        assert result["email"] == "user@company.org"
+
+
+class TestMaxArrayIndexProtection:
+    """Test DoS protection via max_array_index."""
+
+    def test_default_limit_rejects_huge_index(self):
+        """Default limit should reject very large array indices."""
+        with pytest.raises(json_tools_rs.JsonToolsError):
+            json_tools_rs.JSONTools().unflatten().execute(
+                {"items.999999999": "value"}
+            )
+
+    def test_custom_limit(self):
+        """Custom limit should be enforced."""
+        with pytest.raises(json_tools_rs.JsonToolsError):
+            json_tools_rs.JSONTools().unflatten().max_array_index(10).execute(
+                {"items.11": "value"}
+            )
+
+    def test_within_limit_succeeds(self):
+        """Indices within limit should succeed."""
+        result = json_tools_rs.JSONTools().unflatten().max_array_index(10).execute(
+            {"items.9": "value"}
+        )
+        assert isinstance(result, dict)
+
+
+class TestUnicodeEdgeCases:
+    """Test Unicode handling in keys and values."""
+
+    def test_emoji_keys(self):
+        """Emoji keys should flatten correctly."""
+        tools = json_tools_rs.JSONTools().flatten()
+        result = tools.execute({"🏠": {"🔑": "value"}})
+        assert "🏠.🔑" in result
+
+    def test_cjk_keys(self):
+        """CJK characters in keys should work."""
+        tools = json_tools_rs.JSONTools().flatten()
+        result = tools.execute({"用户": {"名前": "太郎"}})
+        assert result["用户.名前"] == "太郎"
+
+    def test_unicode_roundtrip(self):
+        """Unicode keys should survive flatten→unflatten roundtrip."""
+        original = {"café": {"naïve": "résumé"}}
+        flattened = json_tools_rs.JSONTools().flatten().execute(original)
+        unflattened = json_tools_rs.JSONTools().unflatten().execute(flattened)
+        assert unflattened["café"]["naïve"] == "résumé"
+
+    def test_mixed_scripts(self):
+        """Mixed script keys should work."""
+        tools = json_tools_rs.JSONTools().flatten()
+        result = tools.execute({"العربية": {"日本語": "value"}})
+        assert "العربية.日本語" in result

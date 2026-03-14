@@ -1,8 +1,37 @@
+//! Configuration types for JSONTools operations.
+//!
+//! Defines operation modes, filtering flags, collision handling, replacement
+//! patterns, and processing thresholds. Supports environment variable overrides
+//! for parallelism settings.
+
 use smallvec::SmallVec;
+use std::sync::LazyLock;
+
+/// Parse an environment variable once at process startup.
+pub(crate) fn parse_env_usize(name: &str, default: usize) -> usize {
+    std::env::var(name)
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(default)
+}
+
+/// Parse an optional environment variable (returns None if unset).
+pub(crate) fn parse_env_usize_opt(name: &str) -> Option<usize> {
+    std::env::var(name).ok().and_then(|v| v.parse().ok())
+}
+
+pub(crate) static DEFAULT_PARALLEL_THRESHOLD: LazyLock<usize> =
+    LazyLock::new(|| parse_env_usize("JSON_TOOLS_PARALLEL_THRESHOLD", 100));
+pub(crate) static DEFAULT_NESTED_PARALLEL_THRESHOLD: LazyLock<usize> =
+    LazyLock::new(|| parse_env_usize("JSON_TOOLS_NESTED_PARALLEL_THRESHOLD", 100));
+pub(crate) static DEFAULT_MAX_ARRAY_INDEX: LazyLock<usize> =
+    LazyLock::new(|| parse_env_usize("JSON_TOOLS_MAX_ARRAY_INDEX", 100_000));
+pub(crate) static DEFAULT_NUM_THREADS: LazyLock<Option<usize>> =
+    LazyLock::new(|| parse_env_usize_opt("JSON_TOOLS_NUM_THREADS"));
 
 /// Operation mode for the unified JSONTools API
-#[derive(Debug, Clone, PartialEq)]
-#[repr(u8)] // OPTIMIZATION: Smaller discriminant for better cache locality
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)] // Smaller discriminant for better cache locality
 pub(crate) enum OperationMode {
     /// Flatten JSON structures
     Flatten,
@@ -32,24 +61,28 @@ impl FilteringConfig {
     }
 
     /// Enable removal of empty strings
+    #[must_use]
     pub fn remove_empty_strings(mut self, enabled: bool) -> Self {
         self.remove_empty_strings = enabled;
         self
     }
 
     /// Enable removal of null values
+    #[must_use]
     pub fn remove_nulls(mut self, enabled: bool) -> Self {
         self.remove_nulls = enabled;
         self
     }
 
     /// Enable removal of empty objects
+    #[must_use]
     pub fn remove_empty_objects(mut self, enabled: bool) -> Self {
         self.remove_empty_objects = enabled;
         self
     }
 
     /// Enable removal of empty arrays
+    #[must_use]
     pub fn remove_empty_arrays(mut self, enabled: bool) -> Self {
         self.remove_empty_arrays = enabled;
         self
@@ -78,6 +111,7 @@ impl CollisionConfig {
     }
 
     /// Enable collision handling by collecting values into arrays
+    #[must_use]
     pub fn handle_collisions(mut self, enabled: bool) -> Self {
         self.handle_collisions = enabled;
         self
@@ -110,6 +144,7 @@ impl ReplacementConfig {
     }
 
     /// Add a key replacement pattern
+    #[must_use]
     pub fn add_key_replacement(
         mut self,
         find: impl Into<String>,
@@ -120,6 +155,7 @@ impl ReplacementConfig {
     }
 
     /// Add a value replacement pattern
+    #[must_use]
     pub fn add_value_replacement(
         mut self,
         find: impl Into<String>,
@@ -163,6 +199,9 @@ pub struct ProcessingConfig {
     /// Only objects/arrays with more than this many keys/items will be processed in parallel
     /// Default: 100 (can be overridden with JSON_TOOLS_NESTED_PARALLEL_THRESHOLD environment variable)
     pub nested_parallel_threshold: usize,
+    /// Maximum array index allowed during unflattening to prevent DoS via malicious keys
+    /// Default: 100,000 (can be overridden with JSON_TOOLS_MAX_ARRAY_INDEX environment variable)
+    pub max_array_index: usize,
 }
 
 impl Default for ProcessingConfig {
@@ -174,12 +213,10 @@ impl Default for ProcessingConfig {
             collision: CollisionConfig::default(),
             replacements: ReplacementConfig::default(),
             auto_convert_types: false,
-            parallel_threshold: 10,
+            parallel_threshold: *DEFAULT_PARALLEL_THRESHOLD,
             num_threads: None, // Use system default (number of logical CPUs)
-            nested_parallel_threshold: std::env::var("JSON_TOOLS_NESTED_PARALLEL_THRESHOLD")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(100),
+            nested_parallel_threshold: *DEFAULT_NESTED_PARALLEL_THRESHOLD,
+            max_array_index: *DEFAULT_MAX_ARRAY_INDEX,
         }
     }
 }
@@ -191,30 +228,35 @@ impl ProcessingConfig {
     }
 
     /// Set the separator for nested keys
+    #[must_use]
     pub fn separator(mut self, separator: impl Into<String>) -> Self {
         self.separator = separator.into();
         self
     }
 
     /// Enable lowercase key conversion
+    #[must_use]
     pub fn lowercase_keys(mut self, enabled: bool) -> Self {
         self.lowercase_keys = enabled;
         self
     }
 
     /// Configure filtering options
+    #[must_use]
     pub fn filtering(mut self, filtering: FilteringConfig) -> Self {
         self.filtering = filtering;
         self
     }
 
     /// Configure collision handling options
+    #[must_use]
     pub fn collision(mut self, collision: CollisionConfig) -> Self {
         self.collision = collision;
         self
     }
 
     /// Configure replacement options
+    #[must_use]
     pub fn replacements(mut self, replacements: ReplacementConfig) -> Self {
         self.replacements = replacements;
         self

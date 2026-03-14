@@ -6,7 +6,7 @@
 //! and all advanced features.
 
 #[cfg(feature = "python")]
-use pyo3::exceptions::PyValueError;
+use pyo3::exceptions::{PyRuntimeError, PyValueError};
 #[cfg(feature = "python")]
 use pyo3::prelude::*;
 #[cfg(feature = "python")]
@@ -36,37 +36,69 @@ pyo3::create_exception!(
     "Python exception for JSON Tools operations"
 );
 
+/// Lock the inner config mutex, converting poison errors to Python exceptions.
+#[cfg(feature = "python")]
+#[inline]
+fn lock_config(mutex: &Mutex<JSONTools>) -> PyResult<std::sync::MutexGuard<'_, JSONTools>> {
+    mutex
+        .lock()
+        .map_err(|e| PyRuntimeError::new_err(format!("internal config lock poisoned: {e}")))
+}
+
 // =============================================================================
 // DataFrame and Series Support Types
 // =============================================================================
 
-/// Type of DataFrame library detected
+/// Type of DataFrame library detected via duck-typing.
+///
+/// Detection uses `type(obj).__module__` and `type(obj).__name__` to identify
+/// the DataFrame variant without importing the library, falling back to
+/// checking for `to_dict()` or `to_json()` methods for generic compatibility.
 #[cfg(feature = "python")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DataFrameType {
+    /// pandas.DataFrame — uses `to_dict("records")` for row extraction
     Pandas,
+    /// polars.DataFrame — uses `to_dicts()` for row extraction
     Polars,
-    PyArrow, // PyArrow Table
+    /// pyarrow.Table — uses `to_pydict()` for columnar extraction
+    PyArrow,
+    /// pyspark.sql.DataFrame — uses `toJSON().collect()` for distributed extraction
     PySpark,
-    Generic, // Any object with to_dict() or to_json()
+    /// Any object with `to_dict()` or `to_json()` methods
+    Generic,
 }
 
-/// Type of Series library detected
+/// Type of Series library detected via duck-typing.
+///
+/// Similar to `DataFrameType`, uses module/name introspection to identify
+/// the Series variant, falling back to `to_list()` / `tolist()` for generics.
 #[cfg(feature = "python")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SeriesType {
+    /// pandas.Series — uses `tolist()` for value extraction
     Pandas,
+    /// polars.Series — uses `to_list()` for value extraction
     Polars,
-    PyArrow, // PyArrow Array/ChunkedArray
+    /// pyarrow.Array or pyarrow.ChunkedArray — uses `to_pylist()`
+    PyArrow,
+    /// pyspark.sql.Column (rare) — uses `collect()` for distributed extraction
     PySpark,
-    Generic, // Any object with to_list() or tolist()
+    /// Any object with `to_list()` or `tolist()` methods
+    Generic,
 }
 
-/// Unified data structure type for detection
+/// Unified data structure type for detection.
+///
+/// Wraps either a DataFrame or Series detection result so the processing
+/// pipeline can handle both types uniformly before dispatching to
+/// type-specific extraction logic.
 #[cfg(feature = "python")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DataStructureType {
+    /// A DataFrame-like object (tabular rows/columns)
     DataFrame(DataFrameType),
+    /// A Series-like object (single column/array of values)
     Series(SeriesType),
 }
 
@@ -396,9 +428,9 @@ fn dataframe_to_records(
                 let list = records.cast::<pyo3::types::PyList>()?;
                 convert_pylist_to_json_values(list)
             } else {
-                return Err(JsonToolsError::new_err(
+                Err(JsonToolsError::new_err(
                     "Generic DataFrame must have to_dict() method",
-                ));
+                ))
             }
         }
     }
@@ -477,179 +509,177 @@ fn series_to_list<'py>(
     }
 }
 
+/// Helper macro to reduce boilerplate in PyJSONTools builder methods.
+/// Each builder method follows the same pattern: lock the mutex, take the inner
+/// JSONTools, apply a builder method, store the result back, and return `slf`.
+#[cfg(feature = "python")]
+macro_rules! py_builder_method {
+    ($slf:expr, $tools:ident, $body:expr) => {{
+        let mut guard = lock_config(&$slf.inner)?;
+        let $tools = mem::take(&mut *guard);
+        *guard = $body;
+        drop(guard);
+        Ok($slf)
+    }};
+}
+
 #[cfg(feature = "python")]
 #[pymethods]
 impl PyJSONTools {
-    /// Create a new JSONTools instance with default settings
+    /// Create a new JSONTools instance with default settings.
+    ///
+    /// Returns a new builder that can be configured with flatten(), unflatten(),
+    /// or normal() mode, optional transformations, and then executed.
+    ///
+    /// Example:
+    ///     >>> tools = JSONTools()
+    ///     >>> result = tools.flatten().execute({"user": {"name": "John"}})
     #[new]
+    #[pyo3(text_signature = "()")]
     pub fn new() -> Self {
         Self {
             inner: Mutex::new(JSONTools::new()),
         }
     }
 
-    /// Configure for flattening operations
+    /// Set operation mode to flatten nested JSON into dot-separated keys.
     ///
-    /// TIER 6→3 OPTIMIZATION: Direct mutation without temporary allocation
-    /// Eliminates mem::replace overhead (saves ~100 cycles per call)
+    /// Example:
+    ///     >>> result = JSONTools().flatten().execute({"a": {"b": 1}})
+    ///     >>> result == {"a.b": 1}
+    #[pyo3(text_signature = "($self)")]
     #[inline]
-    pub fn flatten(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
-        let mut guard = slf.inner.lock().unwrap();
-        let tools = mem::take(&mut *guard); // Take ownership (leaves Default)
-        *guard = tools.flatten();
-        drop(guard); // Explicitly release lock before returning slf
-        slf
+    pub fn flatten(slf: PyRef<'_, Self>) -> PyResult<PyRef<'_, Self>> {
+        py_builder_method!(slf, tools, tools.flatten())
     }
 
-    /// Configure for unflattening operations
+    /// Set operation mode to unflatten dot-separated keys back into nested JSON.
     ///
-    /// TIER 6→3 OPTIMIZATION: Direct mutation without temporary allocation
+    /// Example:
+    ///     >>> result = JSONTools().unflatten().execute({"a.b": 1})
+    ///     >>> result == {"a": {"b": 1}}
+    #[pyo3(text_signature = "($self)")]
     #[inline]
-    pub fn unflatten(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
-        let mut guard = slf.inner.lock().unwrap();
-        let tools = mem::take(&mut *guard);
-        *guard = tools.unflatten();
-        drop(guard); // Explicitly release lock before returning slf
-        slf
+    pub fn unflatten(slf: PyRef<'_, Self>) -> PyResult<PyRef<'_, Self>> {
+        py_builder_method!(slf, tools, tools.unflatten())
     }
 
-    /// Configure for normal mode (apply transformations without flattening/unflattening)
+    /// Set operation mode to normal (apply transformations without flatten/unflatten).
     ///
-    /// TIER 6→3 OPTIMIZATION: Direct mutation without temporary allocation
+    /// In normal mode, key/value replacements, filtering, and type conversion
+    /// are applied recursively without changing the nesting structure.
+    #[pyo3(text_signature = "($self)")]
     #[inline]
-    pub fn normal(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
-        let mut guard = slf.inner.lock().unwrap();
-        let tools = mem::take(&mut *guard);
-        *guard = tools.normal();
-        drop(guard); // Explicitly release lock before returning slf
-        slf
+    pub fn normal(slf: PyRef<'_, Self>) -> PyResult<PyRef<'_, Self>> {
+        py_builder_method!(slf, tools, tools.normal())
     }
 
-    /// Set the separator for nested keys (default: ".")
+    /// Set the separator for nested keys (default: ".").
     ///
-    /// Performance: Uses interior mutability to avoid cloning the entire JSONTools struct
+    /// Args:
+    ///     separator: Non-empty string to use between nested key segments.
+    ///
+    /// Raises:
+    ///     PanicException: If separator is empty.
+    #[pyo3(text_signature = "($self, separator)")]
     #[inline]
-    pub fn separator(slf: PyRef<'_, Self>, separator: String) -> PyRef<'_, Self> {
-        let mut guard = slf.inner.lock().unwrap();
-        let tools = mem::take(&mut *guard);
-        *guard = tools.separator(separator);
-        drop(guard);
-        slf
+    pub fn separator(slf: PyRef<'_, Self>, separator: String) -> PyResult<PyRef<'_, Self>> {
+        py_builder_method!(slf, tools, tools.separator(separator))
     }
 
-    /// Convert all keys to lowercase
+    /// Enable or disable lowercase key conversion.
     ///
-    /// Performance: Uses interior mutability to avoid cloning the entire JSONTools struct
+    /// Args:
+    ///     value: True to convert all keys to lowercase.
+    #[pyo3(text_signature = "($self, value)")]
     #[inline]
-    pub fn lowercase_keys(slf: PyRef<'_, Self>, value: bool) -> PyRef<'_, Self> {
-        let mut guard = slf.inner.lock().unwrap();
-        let tools = mem::take(&mut *guard);
-        *guard = tools.lowercase_keys(value);
-        drop(guard);
-        slf
+    pub fn lowercase_keys(slf: PyRef<'_, Self>, value: bool) -> PyResult<PyRef<'_, Self>> {
+        py_builder_method!(slf, tools, tools.lowercase_keys(value))
     }
 
-    /// Remove keys with empty string values
+    /// Enable or disable removal of keys with empty string values.
     ///
-    /// Performance: Uses interior mutability to avoid cloning the entire JSONTools struct
+    /// Args:
+    ///     value: True to remove keys whose values are empty strings ("").
+    #[pyo3(text_signature = "($self, value)")]
     #[inline]
-    pub fn remove_empty_strings(slf: PyRef<'_, Self>, value: bool) -> PyRef<'_, Self> {
-        let mut guard = slf.inner.lock().unwrap();
-        let tools = mem::take(&mut *guard);
-        *guard = tools.remove_empty_strings(value);
-        drop(guard);
-        slf
+    pub fn remove_empty_strings(slf: PyRef<'_, Self>, value: bool) -> PyResult<PyRef<'_, Self>> {
+        py_builder_method!(slf, tools, tools.remove_empty_strings(value))
     }
 
-    /// Remove keys with empty string values
+    /// Enable or disable removal of keys with null values.
     ///
-    /// Performance: Uses interior mutability to avoid cloning the entire JSONTools struct
+    /// Args:
+    ///     value: True to remove keys whose values are null/None.
+    #[pyo3(text_signature = "($self, value)")]
     #[inline]
-    pub fn remove_nulls(slf: PyRef<'_, Self>, value: bool) -> PyRef<'_, Self> {
-        let mut guard = slf.inner.lock().unwrap();
-        let tools = mem::take(&mut *guard);
-        *guard = tools.remove_nulls(value);
-        drop(guard);
-        slf
+    pub fn remove_nulls(slf: PyRef<'_, Self>, value: bool) -> PyResult<PyRef<'_, Self>> {
+        py_builder_method!(slf, tools, tools.remove_nulls(value))
     }
 
-    /// Remove keys with empty object values
+    /// Enable or disable removal of keys with empty object values ({}).
     ///
-    /// Performance: Uses interior mutability to avoid cloning the entire JSONTools struct
+    /// Args:
+    ///     value: True to remove keys whose values are empty objects.
+    #[pyo3(text_signature = "($self, value)")]
     #[inline]
-    pub fn remove_empty_objects(slf: PyRef<'_, Self>, value: bool) -> PyRef<'_, Self> {
-        let mut guard = slf.inner.lock().unwrap();
-        let tools = mem::take(&mut *guard);
-        *guard = tools.remove_empty_objects(value);
-        drop(guard);
-        slf
+    pub fn remove_empty_objects(slf: PyRef<'_, Self>, value: bool) -> PyResult<PyRef<'_, Self>> {
+        py_builder_method!(slf, tools, tools.remove_empty_objects(value))
     }
 
-    /// Remove keys with empty array values
+    /// Enable or disable removal of keys with empty array values ([]).
     ///
-    /// Performance: Uses interior mutability to avoid cloning the entire JSONTools struct
+    /// Args:
+    ///     value: True to remove keys whose values are empty arrays.
+    #[pyo3(text_signature = "($self, value)")]
     #[inline]
-    pub fn remove_empty_arrays(slf: PyRef<'_, Self>, value: bool) -> PyRef<'_, Self> {
-        let mut guard = slf.inner.lock().unwrap();
-        let tools = mem::take(&mut *guard);
-        *guard = tools.remove_empty_arrays(value);
-        drop(guard);
-        slf
+    pub fn remove_empty_arrays(slf: PyRef<'_, Self>, value: bool) -> PyResult<PyRef<'_, Self>> {
+        py_builder_method!(slf, tools, tools.remove_empty_arrays(value))
     }
 
-    /// Add a key replacement pattern
+    /// Add a key replacement pattern (regex or literal fallback).
     ///
-    /// # Arguments
-    /// * `find` - Pattern to find (uses standard Rust regex syntax; falls back to literal if regex compilation fails)
-    /// * `replace` - Replacement string
-    ///
-    /// Performance: Uses interior mutability to avoid cloning the entire JSONTools struct
+    /// Args:
+    ///     find: Regex pattern to match against keys. Falls back to literal
+    ///         string replacement if regex compilation fails.
+    ///     replace: Replacement string.
+    #[pyo3(text_signature = "($self, find, replace)")]
     #[inline]
-    pub fn key_replacement(slf: PyRef<'_, Self>, find: String, replace: String) -> PyRef<'_, Self> {
-        let mut guard = slf.inner.lock().unwrap();
-        let tools = mem::take(&mut *guard);
-        *guard = tools.key_replacement(find, replace);
-        drop(guard);
-        slf
+    pub fn key_replacement(
+        slf: PyRef<'_, Self>,
+        find: String,
+        replace: String,
+    ) -> PyResult<PyRef<'_, Self>> {
+        py_builder_method!(slf, tools, tools.key_replacement(find, replace))
     }
 
-    /// Add a value replacement pattern
+    /// Add a value replacement pattern (regex or literal fallback).
     ///
-    /// # Arguments
-    /// * `find` - Pattern to find (uses standard Rust regex syntax; falls back to literal if regex compilation fails)
-    /// * `replace` - Replacement string
-    ///
-    /// Performance: Uses interior mutability to avoid cloning the entire JSONTools struct
+    /// Args:
+    ///     find: Regex pattern to match against values. Falls back to literal
+    ///         string replacement if regex compilation fails.
+    ///     replace: Replacement string.
+    #[pyo3(text_signature = "($self, find, replace)")]
     #[inline]
     pub fn value_replacement(
         slf: PyRef<'_, Self>,
         find: String,
         replace: String,
-    ) -> PyRef<'_, Self> {
-        let mut guard = slf.inner.lock().unwrap();
-        let tools = mem::take(&mut *guard);
-        *guard = tools.value_replacement(find, replace);
-        drop(guard);
-        slf
+    ) -> PyResult<PyRef<'_, Self>> {
+        py_builder_method!(slf, tools, tools.value_replacement(find, replace))
     }
 
-    /// Enable collision handling strategy
+    /// Enable collision handling by collecting duplicate keys into arrays.
     ///
-    /// When key transformations result in duplicate keys, this strategy collects
-    /// all values into arrays (e.g., "name": ["John", "Jane", "Bob"]).
-    /// Filtering is applied during collision resolution.
+    /// When key transformations produce duplicate keys, values are collected
+    /// into arrays (e.g., "name": ["John", "Jane"]).
     ///
-    /// # Arguments
-    /// * `value` - Whether to enable collision handling
-    ///
-    /// Performance: Uses interior mutability to avoid cloning the entire JSONTools struct
+    /// Args:
+    ///     value: True to enable collision handling.
+    #[pyo3(text_signature = "($self, value)")]
     #[inline]
-    pub fn handle_key_collision(slf: PyRef<'_, Self>, value: bool) -> PyRef<'_, Self> {
-        let mut guard = slf.inner.lock().unwrap();
-        let tools = mem::take(&mut *guard);
-        *guard = tools.handle_key_collision(value);
-        drop(guard);
-        slf
+    pub fn handle_key_collision(slf: PyRef<'_, Self>, value: bool) -> PyResult<PyRef<'_, Self>> {
+        py_builder_method!(slf, tools, tools.handle_key_collision(value))
     }
 
     /// Enable automatic type conversion from strings to numbers and booleans
@@ -673,14 +703,10 @@ impl PyJSONTools {
     /// print(result)  # {'id': 123, 'active': True}
     /// ```
     ///
-    /// Performance: Uses interior mutability to avoid cloning the entire JSONTools struct
+    #[pyo3(text_signature = "($self, enable)")]
     #[inline]
-    pub fn auto_convert_types(slf: PyRef<'_, Self>, enable: bool) -> PyRef<'_, Self> {
-        let mut guard = slf.inner.lock().unwrap();
-        let tools = mem::take(&mut *guard);
-        *guard = tools.auto_convert_types(enable);
-        drop(guard);
-        slf
+    pub fn auto_convert_types(slf: PyRef<'_, Self>, enable: bool) -> PyResult<PyRef<'_, Self>> {
+        py_builder_method!(slf, tools, tools.auto_convert_types(enable))
     }
 
     /// Set the minimum batch size for parallel processing
@@ -705,14 +731,10 @@ impl PyJSONTools {
     /// results = tools.execute([...])  # Large batch will use parallel processing
     /// ```
     ///
-    /// Performance: Uses interior mutability to avoid cloning the entire JSONTools struct
+    #[pyo3(text_signature = "($self, threshold)")]
     #[inline]
-    pub fn parallel_threshold(slf: PyRef<'_, Self>, threshold: usize) -> PyRef<'_, Self> {
-        let mut guard = slf.inner.lock().unwrap();
-        let tools = mem::take(&mut *guard);
-        *guard = tools.parallel_threshold(threshold);
-        drop(guard);
-        slf
+    pub fn parallel_threshold(slf: PyRef<'_, Self>, threshold: usize) -> PyResult<PyRef<'_, Self>> {
+        py_builder_method!(slf, tools, tools.parallel_threshold(threshold))
     }
 
     /// Configure the number of threads for parallel processing
@@ -735,14 +757,13 @@ impl PyJSONTools {
     /// tools = jt.JSONTools().flatten().num_threads(None)
     /// ```
     ///
-    /// Performance: Uses interior mutability to avoid cloning the entire JSONTools struct
+    #[pyo3(text_signature = "($self, num_threads)")]
     #[inline]
-    pub fn num_threads(slf: PyRef<'_, Self>, num_threads: Option<usize>) -> PyRef<'_, Self> {
-        let mut guard = slf.inner.lock().unwrap();
-        let tools = mem::take(&mut *guard);
-        *guard = tools.num_threads(num_threads);
-        drop(guard);
-        slf
+    pub fn num_threads(
+        slf: PyRef<'_, Self>,
+        num_threads: Option<usize>,
+    ) -> PyResult<PyRef<'_, Self>> {
+        py_builder_method!(slf, tools, tools.num_threads(num_threads))
     }
 
     /// Configure the threshold for nested parallel processing within individual JSON documents
@@ -767,14 +788,26 @@ impl PyJSONTools {
     /// result = tools.execute(large_json)  # Large nested structures will use parallel processing
     /// ```
     ///
-    /// Performance: Uses interior mutability to avoid cloning the entire JSONTools struct
+    #[pyo3(text_signature = "($self, threshold)")]
     #[inline]
-    pub fn nested_parallel_threshold(slf: PyRef<'_, Self>, threshold: usize) -> PyRef<'_, Self> {
-        let mut guard = slf.inner.lock().unwrap();
-        let tools = mem::take(&mut *guard);
-        *guard = tools.nested_parallel_threshold(threshold);
-        drop(guard);
-        slf
+    pub fn nested_parallel_threshold(
+        slf: PyRef<'_, Self>,
+        threshold: usize,
+    ) -> PyResult<PyRef<'_, Self>> {
+        py_builder_method!(slf, tools, tools.nested_parallel_threshold(threshold))
+    }
+
+    /// Set the maximum array index allowed during unflattening (DoS protection)
+    ///
+    /// Prevents malicious flattened keys like "items.999999999" from causing
+    /// excessive memory allocation. Keys with array indices exceeding this
+    /// limit will produce an error during unflattening.
+    ///
+    /// Default: 100,000
+    #[pyo3(text_signature = "($self, max)")]
+    #[inline]
+    pub fn max_array_index(slf: PyRef<'_, Self>, max: usize) -> PyResult<PyRef<'_, Self>> {
+        py_builder_method!(slf, tools, tools.max_array_index(max))
     }
 
     /// Execute the configured JSON operation
@@ -797,6 +830,7 @@ impl PyJSONTools {
     ///
     /// # Performance
     /// Uses interior mutability to avoid cloning JSONTools - only clones for execute() call
+    #[pyo3(text_signature = "($self, json_input)")]
     pub fn execute(&self, json_input: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
         let py = json_input.py();
 
@@ -819,7 +853,7 @@ impl PyJSONTools {
             // Saves 1K-10K cycles by avoiding deep clone of entire JSONTools config
             let result = py
                 .detach(|| {
-                    let mut guard = self.inner.lock().unwrap();
+                    let mut guard = lock_config(&self.inner)?;
                     let tools = mem::take(&mut *guard);
                     let result = tools.execute(json_str.as_str());
                     *guard = tools;
@@ -854,7 +888,7 @@ impl PyJSONTools {
             // Process with Rust tools (release GIL)
             let result = py
                 .detach(|| {
-                    let mut guard = self.inner.lock().unwrap();
+                    let mut guard = lock_config(&self.inner)?;
                     let tools = mem::take(&mut *guard);
                     let result = tools.execute(json_str.as_str());
                     *guard = tools;
@@ -925,7 +959,7 @@ impl PyJSONTools {
             // TIER 6→3 OPTIMIZATION: Take ownership instead of cloning
             let result = py
                 .detach(|| {
-                    let mut guard = self.inner.lock().unwrap();
+                    let mut guard = lock_config(&self.inner)?;
                     let tools = mem::take(&mut *guard);
                     let result = tools.execute(json_strings);
                     *guard = tools;
@@ -1020,6 +1054,7 @@ impl PyJSONTools {
     ///
     /// # Performance
     /// Uses interior mutability to avoid cloning JSONTools - only clones for execute() call
+    #[pyo3(text_signature = "($self, json_input)")]
     pub fn execute_to_output(&self, json_input: &Bound<'_, PyAny>) -> PyResult<PyJsonOutput> {
         let py = json_input.py();
 
@@ -1031,7 +1066,7 @@ impl PyJSONTools {
             // TIER 6→3: Take ownership instead of cloning (10K-50K cycles saved)
             let result = py
                 .detach(|| {
-                    let mut guard = self.inner.lock().unwrap();
+                    let mut guard = lock_config(&self.inner)?;
                     let tools = mem::take(&mut *guard);
                     let result = tools.execute(json_str.as_str());
                     *guard = tools;
@@ -1056,7 +1091,7 @@ impl PyJSONTools {
             // TIER 6→3 OPTIMIZATION: Take ownership instead of cloning
             let result = py
                 .detach(|| {
-                    let mut guard = self.inner.lock().unwrap();
+                    let mut guard = lock_config(&self.inner)?;
                     let tools = mem::take(&mut *guard);
                     let result = tools.execute(json_str.as_str());
                     *guard = tools;
@@ -1102,7 +1137,7 @@ impl PyJSONTools {
             // TIER 6→3: Take ownership instead of cloning (10K-50K cycles saved)
             let result = py
                 .detach(|| {
-                    let mut guard = self.inner.lock().unwrap();
+                    let mut guard = lock_config(&self.inner)?;
                     let tools = mem::take(&mut *guard);
                     let result = tools.execute(json_strings);
                     *guard = tools;
@@ -1294,7 +1329,7 @@ impl PyJSONTools {
         // Step 3: Process through existing pipeline (releases GIL)
         let result = py
             .detach(|| {
-                let mut guard = self.inner.lock().unwrap();
+                let mut guard = lock_config(&self.inner)?;
                 let tools = mem::take(&mut *guard);
                 let result = tools.execute(json_strings); // Batch processing
                 *guard = tools;
@@ -1372,7 +1407,7 @@ impl PyJSONTools {
         // Step 3: Process through existing pipeline (releases GIL)
         let result = py
             .detach(|| {
-                let mut guard = self.inner.lock().unwrap();
+                let mut guard = lock_config(&self.inner)?;
                 let tools = mem::take(&mut *guard);
                 let result = tools.execute(json_strings);
                 *guard = tools;
@@ -1391,8 +1426,17 @@ impl PyJSONTools {
                     // All strings - convert to list of strings
                     processed_list
                         .into_iter()
-                        .map(|s| s.into_pyobject(py).unwrap().into_any().unbind())
-                        .collect()
+                        .map(|s| {
+                            s.into_pyobject(py)
+                                .map(|o| o.into_any().unbind())
+                                .map_err(|e| {
+                                    JsonToolsError::new_err(format!(
+                                        "Failed to convert string to Python object: {}",
+                                        e
+                                    ))
+                                })
+                        })
+                        .collect::<PyResult<Vec<_>>>()?
                 } else if all_dicts {
                     // All dicts - convert to list of dicts
                     let mut dict_results = Vec::with_capacity(processed_list.len());

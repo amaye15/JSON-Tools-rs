@@ -1,7 +1,12 @@
+//! Automatic type conversion for JSON string values.
+//!
+//! Detects and converts string representations of booleans, numbers, dates,
+//! and null into their native JSON types. Handles locale-aware number formats
+//! (EU comma decimals, accounting negatives) with SIMD-accelerated cleaning.
+
 use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
 use memchr::{memchr, memchr2, memchr3, memchr_iter};
 use phf::phf_map;
-use serde_json::Value;
 use smallvec::SmallVec;
 use std::borrow::Cow;
 
@@ -27,14 +32,19 @@ pub(crate) fn try_parse_number(trimmed: &str) -> Option<f64> {
 
     // Fast path: try direct parse first (handles basic numbers and scientific notation)
     // This catches ~90% of cases with minimal overhead
-    if let Ok(num) = fast_float2::parse(trimmed) {
-        return Some(num);
+    // Guard against NaN/Infinity which fast_float2 may accept but aren't valid JSON numbers
+    if let Ok(num) = fast_float2::parse::<f64, _>(trimmed) {
+        if num.is_finite() {
+            return Some(num);
+        }
     }
 
     // Handle percentage strings (e.g., "50%" -> 50.0)
     if let Some(stripped) = trimmed.strip_suffix('%') {
-        if let Ok(num) = fast_float2::parse(stripped) {
-            return Some(num);
+        if let Ok(num) = fast_float2::parse::<f64, _>(stripped) {
+            if num.is_finite() {
+                return Some(num);
+            }
         }
     }
 
@@ -98,7 +108,9 @@ pub(crate) fn try_parse_number(trimmed: &str) -> Option<f64> {
 
     // Slow path: clean common number formats and try again
     let cleaned = clean_number_string(trimmed);
-    fast_float2::parse(cleaned.as_ref()).ok()
+    fast_float2::parse::<f64, _>(cleaned.as_ref())
+        .ok()
+        .filter(|n| n.is_finite())
 }
 
 /// Parse basis points: 25bp, 25bps, 25 bp, 25 bps -> 0.0025
@@ -188,15 +200,11 @@ fn try_parse_fraction(s: &str) -> Option<f64> {
 /// Parse a simple fraction like "1/2" or "3/4"
 #[inline]
 fn parse_simple_fraction(s: &str) -> Option<f64> {
-    let parts: Vec<&str> = s.split('/').collect();
-    if parts.len() != 2 {
-        return None;
-    }
+    let (num_str, den_str) = s.split_once('/')?;
 
-    let numerator: f64 = fast_float2::parse(parts[0].trim()).ok()?;
-    let denominator: f64 = fast_float2::parse(parts[1].trim()).ok()?;
+    let numerator: f64 = fast_float2::parse(num_str.trim()).ok()?;
+    let denominator: f64 = fast_float2::parse(den_str.trim()).ok()?;
 
-    // Avoid division by zero
     if denominator == 0.0 {
         return None;
     }
@@ -285,7 +293,8 @@ fn try_parse_and_normalize_iso8601(s: &str) -> Option<String> {
     }
 
     // Try compact date format first: YYYYMMDD (exactly 8 digits)
-    if len == 8 && bytes.iter().all(|b| b.is_ascii_digit()) {
+    // Year must start with 1 or 2 to be a plausible date (1000-2999)
+    if len == 8 && matches!(first_byte, b'1' | b'2') && bytes.iter().all(|b| b.is_ascii_digit()) {
         return try_parse_compact_date(trimmed);
     }
 
@@ -598,7 +607,7 @@ fn could_be_date(s: &str) -> bool {
 /// Separators: comma, dot, space, apostrophe, underscore
 /// Optimized with single-pass filtering and comprehensive format detection
 /// OPTIMIZATION: Returns Cow to avoid allocation when number is already clean
-#[inline(always)] // Optimization #13: Force inline for hot path
+#[inline(always)] // Called per-value during type conversion; force inline to avoid call overhead
 pub(crate) fn clean_number_string(s: &str) -> Cow<'_, str> {
     let trimmed = s.trim();
 
@@ -725,8 +734,8 @@ pub(crate) fn clean_number_string(s: &str) -> Cow<'_, str> {
     let (last_dot_pos, dot_count) =
         memchr_iter(b'.', bytes).fold((None, 0usize), |(_, c), pos| (Some(pos), c + 1));
 
-    // OPTIMIZATION #20: Use stack-allocated SmallVec buffer for short numbers
-    // Most numbers are under 64 bytes, so this avoids heap allocation entirely
+    // Stack-allocated buffer for short numbers (most are under 64 bytes),
+    // avoiding heap allocation entirely
     let mut buffer: SmallVec<[u8; 64]> = SmallVec::new();
 
     // Add negative sign if needed
@@ -782,7 +791,9 @@ pub(crate) fn clean_number_string(s: &str) -> Cow<'_, str> {
             //           12,34,567 -> [12, 34, 567]
             //           1,23,45,678 -> [1, 23, 45, 678]
             let is_indian_format = segments.len() >= 2 && {
-                let last_seg = segments.last().unwrap();
+                let last_seg = segments
+                    .last()
+                    .expect("segments non-empty: len >= 2 checked above");
                 let middle_segs = &segments[1..segments.len() - 1];
 
                 // Last segment must be 3 digits (or 2 for lakhs like 1,00,000)
@@ -884,27 +895,6 @@ fn try_parse_bool(s: &str) -> Option<bool> {
     BOOL_MAP.get(s).copied()
 }
 
-/// Convert f64 to JSON Number value
-/// Returns None for NaN or Infinity (invalid JSON numbers)
-/// Converts to integer if the number has no fractional part
-#[inline]
-fn f64_to_json_number(num: f64) -> Option<Value> {
-    // Check if the number is an integer (no fractional part)
-    if num.is_finite() && num.fract() == 0.0 {
-        // Try to convert to i64 first for better representation
-        if num >= i64::MIN as f64 && num <= i64::MAX as f64 {
-            return Some(Value::Number(serde_json::Number::from(num as i64)));
-        }
-        // If it's too large for i64, try u64
-        if num >= 0.0 && num <= u64::MAX as f64 {
-            return Some(Value::Number(serde_json::Number::from(num as u64)));
-        }
-    }
-
-    // Otherwise, use f64
-    serde_json::Number::from_f64(num).map(Value::Number)
-}
-
 /// Fast version that accepts already-trimmed string (no trim() overhead)
 #[inline(always)]
 fn is_null_string(s: &str) -> bool {
@@ -926,126 +916,90 @@ fn is_null_string(s: &str) -> bool {
     )
 }
 
-/// Apply automatic type conversion to a single value
-/// Tries conversions in order: null strings, booleans, numbers
-/// Booleans checked first since "1"/"0" are commonly used as boolean indicators
-/// Keeps original string if no conversion succeeds
-/// OPTIMIZATION #17: First-byte filtering for faster rejection of non-convertible strings
-#[inline(always)]
-fn apply_type_conversion_to_value(value: &mut Value) {
-    if let Value::String(s) = value {
-        // Early exit for empty strings (most common case that won't convert)
-        if s.is_empty() {
-            return;
+/// Try to convert a string value to its native JSON representation.
+/// Returns `Some(json_bytes)` if the string can be converted (e.g., "123" → "123", "true" → "true",
+/// "null" → "null"), or `None` if the string should remain as-is.
+/// The returned string is valid JSON (NOT quoted — e.g., `123` not `"123"`).
+#[inline]
+pub(crate) fn try_convert_string_to_json_bytes(s: &str) -> Option<Cow<'static, str>> {
+    if s.is_empty() {
+        return None;
+    }
+
+    let trimmed = s.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let first_byte = trimmed.as_bytes()[0];
+    match first_byte {
+        // Null patterns
+        b'n' | b'N' => {
+            if is_null_string(trimmed) {
+                return Some(Cow::Borrowed("null"));
+            }
+            if let Some(b) = try_parse_bool(trimmed) {
+                return Some(Cow::Borrowed(if b { "true" } else { "false" }));
+            }
+            None
         }
-
-        // OPTIMIZATION: Trim once and reuse to avoid multiple trim() calls
-        let trimmed = s.trim();
-
-        // Early exit if trimming removed everything
-        if trimmed.is_empty() {
-            return;
+        // Boolean patterns
+        b't' | b'T' | b'f' | b'F' | b'y' | b'Y' | b'o' | b'O' => {
+            try_parse_bool(trimmed).map(|b| Cow::Borrowed(if b { "true" } else { "false" }))
         }
-
-        // OPTIMIZATION #17: Fast rejection based on first byte
-        // This avoids expensive parsing for strings that can't possibly convert
-        let first_byte = trimmed.as_bytes()[0];
-        match first_byte {
-            // Null patterns: "null", "NULL", "Null", "none", "None", "nil", "Nil"
-            b'n' | b'N' => {
-                if is_null_string(trimmed) {
-                    *value = Value::Null;
-                    return;
-                }
-                // 'n' or 'N' could also be "no", "NO", "No" for boolean
+        // Number/date patterns
+        b'0'..=b'9' | b'-' | b'+' | b'.' | b'$' | b'(' | b'[' => {
+            // Boolean for "0", "1"
+            if first_byte == b'0' || first_byte == b'1' {
                 if let Some(b) = try_parse_bool(trimmed) {
-                    *value = Value::Bool(b);
+                    return Some(Cow::Borrowed(if b { "true" } else { "false" }));
                 }
             }
-            // Boolean patterns: true/false, True/False, TRUE/FALSE
-            b't' | b'T' | b'f' | b'F' => {
-                if let Some(b) = try_parse_bool(trimmed) {
-                    *value = Value::Bool(b);
-                }
-            }
-            // Yes/Y patterns
-            b'y' | b'Y' => {
-                if let Some(b) = try_parse_bool(trimmed) {
-                    *value = Value::Bool(b);
-                }
-            }
-            // On/Off patterns
-            b'o' | b'O' => {
-                if let Some(b) = try_parse_bool(trimmed) {
-                    *value = Value::Bool(b);
-                }
-            }
-            // Number patterns: digits, minus, plus, dot, currency symbols, opening paren/bracket (accounting format)
-            // Also include E/G/U for "EUR", "GBP", "USD" currency codes
-            // NOTE: Digits can also be dates (2024-01-15), so check for dates first
-            b'0'..=b'9' | b'-' | b'+' | b'.' | b'$' | b'(' | b'[' => {
-                // Try boolean first for "0", "1"
-                if first_byte == b'0' || first_byte == b'1' {
-                    if let Some(b) = try_parse_bool(trimmed) {
-                        *value = Value::Bool(b);
-                        return;
+            // Date detection before number
+            if could_be_date(trimmed) {
+                if let Some(normalized_date) = try_parse_and_normalize_iso8601(trimmed) {
+                    if normalized_date != trimmed {
+                        // Return as JSON string (quoted)
+                        return Some(Cow::Owned(format!("\"{}\"", normalized_date)));
                     }
-                }
-
-                // Try ISO-8601 date detection before number conversion
-                // Dates like "2024-01-15" should not be converted to numbers
-                if could_be_date(trimmed) {
-                    if let Some(normalized_date) = try_parse_and_normalize_iso8601(trimmed) {
-                        // Only update if the date was normalized (different from original)
-                        if normalized_date != trimmed {
-                            *value = Value::String(normalized_date);
-                        }
-                        return; // Don't try number conversion for valid dates
-                    }
-                }
-
-                // Then try number conversion
-                if let Some(num) = try_parse_number(trimmed) {
-                    if let Some(num_value) = f64_to_json_number(num) {
-                        *value = num_value;
-                    }
+                    return None; // Date but no normalization needed — keep original
                 }
             }
-            // Currency codes and symbols: EUR, GBP, USD, R$ (BRL), A$ (AUD), etc.
-            // Any uppercase letter could be a currency code prefix (e.g., CHF, JPY, NZD)
-            // Multi-byte UTF-8 currency symbols start with bytes >= 0xC0
-            b'A'..=b'Z' | b'\xc2'..=b'\xf4' => {
-                // Try number conversion for currency-prefixed values
-                if let Some(num) = try_parse_number(trimmed) {
-                    if let Some(num_value) = f64_to_json_number(num) {
-                        *value = num_value;
-                    }
-                }
+            // Number conversion
+            if let Some(num) = try_parse_number(trimmed) {
+                return f64_to_json_bytes(num);
             }
-            // All other first bytes can't convert to null/bool/number
-            _ => {}
+            None
         }
+        // Currency codes
+        b'A'..=b'Z' | b'\xc2'..=b'\xf4' => {
+            if let Some(num) = try_parse_number(trimmed) {
+                return f64_to_json_bytes(num);
+            }
+            None
+        }
+        _ => None,
     }
 }
 
-/// Recursively apply type conversion to all string values in a JSON structure
-pub(crate) fn apply_type_conversion_recursive(value: &mut Value) {
-    match value {
-        Value::Object(map) => {
-            for v in map.values_mut() {
-                apply_type_conversion_recursive(v);
-            }
+/// Convert f64 to a JSON number string representation.
+/// Returns None for NaN or Infinity. Converts to integer representation when possible.
+#[inline]
+fn f64_to_json_bytes(num: f64) -> Option<Cow<'static, str>> {
+    if num.is_finite() && num.fract() == 0.0 {
+        if num >= i64::MIN as f64 && num <= i64::MAX as f64 {
+            return Some(Cow::Owned(
+                itoa::Buffer::new().format(num as i64).to_string(),
+            ));
         }
-        Value::Array(arr) => {
-            for v in arr.iter_mut() {
-                apply_type_conversion_recursive(v);
-            }
+        if num >= 0.0 && num <= u64::MAX as f64 {
+            return Some(Cow::Owned(
+                itoa::Buffer::new().format(num as u64).to_string(),
+            ));
         }
-        Value::String(_) => {
-            apply_type_conversion_to_value(value);
-        }
-        _ => {} // Leave other types unchanged
     }
+    // Use serde_json for correct float formatting (uses ryu internally)
+    serde_json::Number::from_f64(num).map(|n| Cow::Owned(n.to_string()))
 }
 
 /// SIMD-accelerated copy skipping exactly 4 specified bytes.
@@ -1105,3 +1059,4 @@ pub(crate) fn extend_skipping_3(dst: &mut SmallVec<[u8; 64]>, src: &[u8], s1: u8
         }
     }
 }
+

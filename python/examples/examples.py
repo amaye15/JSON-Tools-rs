@@ -92,9 +92,7 @@ def main() -> None:
         .value_replacement("@example.com", "@company.org")
     )
 
-    result = replacement_tools.execute(
-        python_patterns
-    )  # Pass Python dict directly!
+    result = replacement_tools.execute(python_patterns)  # Pass Python dict directly!
     print(f"Output: {result}")
 
     # Example 4: Batch processing
@@ -265,7 +263,9 @@ def main() -> None:
         .flatten()
         .parallel_threshold(25)  # Only parallelize batches of 25+ items
         .num_threads(4)  # Limit to 4 threads
-        .nested_parallel_threshold(200)  # Parallelize large nested structures (200+ keys/items)
+        .nested_parallel_threshold(
+            200
+        )  # Parallelize large nested structures (200+ keys/items)
     )
 
     results = custom_parallel_tools.execute(large_batch)
@@ -355,5 +355,41 @@ def main() -> None:
     print("advanced collision handling, and automatic parallel processing!")
 
 
+def error_handling_examples():
+    """Examples of error handling with JSONTools."""
+    from json_tools_rs import JSONTools, JsonToolsError
+
+    print("\n" + "=" * 60)
+    print("Error Handling Examples")
+    print("=" * 60)
+
+    # Example 1: Missing operation mode
+    print("\n1. Missing operation mode")
+    try:
+        result = JSONTools().execute('{"key": "value"}')
+    except JsonToolsError as e:
+        print(f"Error: {e}")
+        # Error: Operation mode not set...
+
+    # Example 2: Invalid JSON input
+    print("\n2. Invalid JSON input")
+    try:
+        result = JSONTools().flatten().execute("not valid json")
+    except JsonToolsError as e:
+        print(f"Error: {e}")
+
+    # Example 3: Batch processing - errors include the index
+    print("\n3. Batch processing error (includes index)")
+    try:
+        inputs = ['{"valid": true}', "invalid", '{"also": "valid"}']
+        result = JSONTools().flatten().execute(inputs)
+    except JsonToolsError as e:
+        print(f"Batch error: {e}")
+        # Batch error includes which item (index) failed
+
+    print("\nError handling examples completed!")
+
+
 if __name__ == "__main__":
     main()
+    error_handling_examples()

@@ -1,11 +1,6 @@
-use rustc_hash::FxHashMap;
-use serde_json::Value;
 use std::borrow::Cow;
-use std::sync::Arc;
 
-// OPTIMIZATION: Use Arc<str> for HashMap keys to enable zero-copy sharing of repeated keys
-// This significantly reduces memory allocations for large datasets with repeated field names
-pub(crate) type FlatMap = FxHashMap<Arc<str>, Value>;
+use crate::error::JsonToolsError;
 
 /// Input type for JSON flattening operations with Cow optimization
 #[derive(Debug, Clone)]
@@ -71,7 +66,12 @@ pub enum JsonOutput {
 }
 
 impl JsonOutput {
-    /// Extract single result, panicking if multiple results
+    /// Extract single result, panicking if multiple results.
+    ///
+    /// # Panics
+    /// Panics if this is a `Multiple` variant. Use [`try_into_single`](Self::try_into_single)
+    /// for a non-panicking alternative.
+    #[must_use]
     pub fn into_single(self) -> String {
         match self {
             JsonOutput::Single(result) => result,
@@ -79,7 +79,12 @@ impl JsonOutput {
         }
     }
 
-    /// Extract multiple results, panicking if single result
+    /// Extract multiple results, panicking if single result.
+    ///
+    /// # Panics
+    /// Panics if this is a `Single` variant. Use [`try_into_multiple`](Self::try_into_multiple)
+    /// for a non-panicking alternative.
+    #[must_use]
     pub fn into_multiple(self) -> Vec<String> {
         match self {
             JsonOutput::Single(_) => panic!("Expected multiple results but got single"),
@@ -87,7 +92,28 @@ impl JsonOutput {
         }
     }
 
+    /// Try to extract single result, returning an error if multiple results.
+    pub fn try_into_single(self) -> Result<String, JsonToolsError> {
+        match self {
+            JsonOutput::Single(result) => Ok(result),
+            JsonOutput::Multiple(_) => Err(JsonToolsError::input_validation_error(
+                "Expected single result but got multiple",
+            )),
+        }
+    }
+
+    /// Try to extract multiple results, returning an error if single result.
+    pub fn try_into_multiple(self) -> Result<Vec<String>, JsonToolsError> {
+        match self {
+            JsonOutput::Single(_) => Err(JsonToolsError::input_validation_error(
+                "Expected multiple results but got single",
+            )),
+            JsonOutput::Multiple(results) => Ok(results),
+        }
+    }
+
     /// Get results as vector (single result becomes vec with one element)
+    #[must_use]
     pub fn into_vec(self) -> Vec<String> {
         match self {
             JsonOutput::Single(result) => vec![result],

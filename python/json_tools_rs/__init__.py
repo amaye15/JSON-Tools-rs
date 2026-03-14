@@ -84,7 +84,7 @@ Parallel Processing (Automatic):
     ...     .nested_parallel_threshold(200))  # Parallelize large nested structures
 """
 
-from .json_tools_rs import JSONTools, JsonToolsError, JsonOutput
+from .json_tools_rs import JsonOutput, JSONTools, JsonToolsError
 
 __version__ = "0.9.0"
 __author__ = "JSON Tools RS Contributors"
