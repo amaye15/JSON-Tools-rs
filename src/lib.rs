@@ -427,8 +427,8 @@
 //!
 
 // Use mimalloc for ~5-10% performance improvement on allocation-heavy workloads.
-// Gated behind cfg(not(feature = "python")) because Python manages its own allocator.
-#[cfg(not(feature = "python"))]
+// Only enabled when the mimalloc feature is active (default for Rust, excluded for Python).
+#[cfg(feature = "mimalloc")]
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
