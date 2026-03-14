@@ -26,7 +26,7 @@ regex = "1.11.1"
 # JSON parsing: sonic-rs on 64-bit (fastest), simd-json on 32-bit (fallback)
 serde = { version = "1.0", features = ["rc"] }  # rc feature needed for Arc<T> serialization
 serde_json = "1.0.141"
-pyo3 = { version = "0.27.2", features = ["extension-module"], optional = true }
+pyo3 = { version = "0.28.2", features = ["extension-module"], optional = true }
 thiserror = "2.0.12"
 rustc-hash = "2.0.0"
 fast-float2 = "0.2"
