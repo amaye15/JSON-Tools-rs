@@ -2690,7 +2690,10 @@ mod validation_and_edge_case_tests {
         let json = r#"{"café": {"naïve": "résumé"}, "日本語": {"キー": "値"}}"#;
         let flattened = JSONTools::new().flatten().execute(json).unwrap();
         let flat_str = extract_single(flattened);
-        let unflattened = JSONTools::new().unflatten().execute(flat_str.as_str()).unwrap();
+        let unflattened = JSONTools::new()
+            .unflatten()
+            .execute(flat_str.as_str())
+            .unwrap();
         let result = extract_single(unflattened);
         let parsed: Value = serde_json::from_str(&result).unwrap();
 
@@ -2753,11 +2756,7 @@ mod validation_and_edge_case_tests {
 
     #[test]
     fn test_batch_processing_error_includes_index() {
-        let inputs: Vec<&str> = vec![
-            r#"{"a": 1}"#,
-            "not valid json",
-            r#"{"b": 2}"#,
-        ];
+        let inputs: Vec<&str> = vec![r#"{"a": 1}"#, "not valid json", r#"{"b": 2}"#];
         let result = JSONTools::new().flatten().execute(inputs.as_slice());
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -2767,28 +2766,19 @@ mod validation_and_edge_case_tests {
 
     #[test]
     fn test_json_output_try_into_single() {
-        let result = JSONTools::new()
-            .flatten()
-            .execute(r#"{"a": 1}"#)
-            .unwrap();
+        let result = JSONTools::new().flatten().execute(r#"{"a": 1}"#).unwrap();
         assert!(result.try_into_single().is_ok());
     }
 
     #[test]
     fn test_json_output_try_into_multiple_from_single_errors() {
-        let result = JSONTools::new()
-            .flatten()
-            .execute(r#"{"a": 1}"#)
-            .unwrap();
+        let result = JSONTools::new().flatten().execute(r#"{"a": 1}"#).unwrap();
         assert!(result.try_into_multiple().is_err());
     }
 
     #[test]
     fn test_json_output_into_vec_single() {
-        let result = JSONTools::new()
-            .flatten()
-            .execute(r#"{"a": 1}"#)
-            .unwrap();
+        let result = JSONTools::new().flatten().execute(r#"{"a": 1}"#).unwrap();
         let vec = result.into_vec();
         assert_eq!(vec.len(), 1);
     }

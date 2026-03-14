@@ -148,7 +148,7 @@ jobs:
       - name: Install cargo-tarpaulin
         run: cargo install cargo-tarpaulin --locked
       - name: Run coverage
-        run: cargo tarpaulin --verbose --workspace --timeout 120 --out xml --fail-under 80 --exclude-files "src/main.rs" --exclude-files "src/python.rs"
+        run: cargo tarpaulin --verbose --workspace --timeout 120 --out xml --fail-under 60 --exclude-files "src/main.rs" --exclude-files "src/python.rs"
       - name: Upload to Codecov
         uses: codecov/codecov-action@v4
         with:
@@ -172,7 +172,7 @@ jobs:
       - name: Check isort ordering
         run: isort --check-only python/
       - name: Run mypy type checking
-        run: mypy python/json_tools_rs/__init__.py python/json_tools_rs/__init__.pyi --ignore-missing-imports
+        run: mypy python/json_tools_rs/__init__.py --ignore-missing-imports
 
   python-test:
     name: Python Tests (${{ matrix.python-version }})

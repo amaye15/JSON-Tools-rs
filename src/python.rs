@@ -584,6 +584,12 @@ impl PyJSONTools {
     #[pyo3(text_signature = "($self, separator)")]
     #[inline]
     pub fn separator(slf: PyRef<'_, Self>, separator: String) -> PyResult<PyRef<'_, Self>> {
+        if separator.is_empty() {
+            return Err(crate::error::JsonToolsError::input_validation_error(
+                "Separator cannot be empty",
+            )
+            .into());
+        }
         py_builder_method!(slf, tools, tools.separator(separator))
     }
 
