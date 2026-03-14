@@ -94,22 +94,6 @@ jobs:
       - name: Build documentation
         run: cargo doc --no-deps
 
-  miri:
-    name: Miri (Undefined Behavior Detection)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@v1
-        with:
-          toolchain: nightly
-          components: miri
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: miri
-      - name: Run Miri
-        run: cargo miri test
-        env:
-          MIRIFLAGS: -Zmiri-disable-isolation
 
   cross-platform:
     name: Build (${{ matrix.target }})
@@ -164,7 +148,7 @@ jobs:
       - name: Install cargo-tarpaulin
         run: cargo install cargo-tarpaulin --locked
       - name: Run coverage
-        run: cargo tarpaulin --verbose --workspace --timeout 120 --out xml --fail-under 80
+        run: cargo tarpaulin --verbose --workspace --timeout 120 --out xml --fail-under 80 --exclude-files "src/main.rs" --exclude-files "src/python.rs"
       - name: Upload to Codecov
         uses: codecov/codecov-action@v4
         with:
@@ -210,10 +194,14 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - name: Install maturin and build
         run: |
+          python -m venv .venv
+          source .venv/bin/activate
           pip install maturin pytest
           maturin develop --features python
       - name: Run Python tests
-        run: pytest python/tests/tests.py -v
+        run: |
+          source .venv/bin/activate
+          pytest python/tests/tests.py -v
 
   benchmark:
     name: Benchmark

@@ -1059,4 +1059,3 @@ pub(crate) fn extend_skipping_3(dst: &mut SmallVec<[u8; 64]>, src: &[u8], s1: u8
         }
     }
 }
-

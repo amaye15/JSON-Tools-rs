@@ -3585,7 +3585,9 @@ class TestErrorHandlingExtended:
 
     def test_missing_operation_mode(self):
         """E005: Execute without calling flatten/unflatten/normal."""
-        with pytest.raises(json_tools_rs.JsonToolsError, match="Operation mode not set"):
+        with pytest.raises(
+            json_tools_rs.JsonToolsError, match="Operation mode not set"
+        ):
             json_tools_rs.JSONTools().execute('{"key": "value"}')
 
     def test_invalid_json_input(self):
@@ -3687,11 +3689,7 @@ class TestNormalModeComprehensive:
 
     def test_normal_key_replacement(self):
         """Normal mode should apply key replacements."""
-        tools = (
-            json_tools_rs.JSONTools()
-            .normal()
-            .key_replacement("user_", "person_")
-        )
+        tools = json_tools_rs.JSONTools().normal().key_replacement("user_", "person_")
         result = tools.execute({"user_name": "John", "user_age": 30})
         assert "person_name" in result
         assert "person_age" in result
@@ -3713,9 +3711,7 @@ class TestMaxArrayIndexProtection:
     def test_default_limit_rejects_huge_index(self):
         """Default limit should reject very large array indices."""
         with pytest.raises(json_tools_rs.JsonToolsError):
-            json_tools_rs.JSONTools().unflatten().execute(
-                {"items.999999999": "value"}
-            )
+            json_tools_rs.JSONTools().unflatten().execute({"items.999999999": "value"})
 
     def test_custom_limit(self):
         """Custom limit should be enforced."""
@@ -3726,8 +3722,11 @@ class TestMaxArrayIndexProtection:
 
     def test_within_limit_succeeds(self):
         """Indices within limit should succeed."""
-        result = json_tools_rs.JSONTools().unflatten().max_array_index(10).execute(
-            {"items.9": "value"}
+        result = (
+            json_tools_rs.JSONTools()
+            .unflatten()
+            .max_array_index(10)
+            .execute({"items.9": "value"})
         )
         assert isinstance(result, dict)
 

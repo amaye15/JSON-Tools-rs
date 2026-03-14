@@ -368,10 +368,8 @@ fn handle_entry_collisions<'a>(
     result
         .into_iter()
         .map(|(idx, override_value)| {
-            let (key, original_value) = std::mem::replace(
-                &mut entries[idx],
-                (String::new(), ValueRef::Raw(b"null")),
-            );
+            let (key, original_value) =
+                std::mem::replace(&mut entries[idx], (String::new(), ValueRef::Raw(b"null")));
             let value = override_value.unwrap_or(original_value);
             (key, value)
         })
