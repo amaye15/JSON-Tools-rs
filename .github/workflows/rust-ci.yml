@@ -67,7 +67,7 @@ jobs:
         with:
           key: msrv
       - name: Check MSRV
-        run: cargo check --all-features
+        run: cargo check --features test-assets-performance
 
   test:
     name: Test

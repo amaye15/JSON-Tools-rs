@@ -580,15 +580,12 @@ impl PyJSONTools {
     ///     separator: Non-empty string to use between nested key segments.
     ///
     /// Raises:
-    ///     PanicException: If separator is empty.
+    ///     ValueError: If separator is empty.
     #[pyo3(text_signature = "($self, separator)")]
     #[inline]
     pub fn separator(slf: PyRef<'_, Self>, separator: String) -> PyResult<PyRef<'_, Self>> {
         if separator.is_empty() {
-            return Err(crate::error::JsonToolsError::input_validation_error(
-                "Separator cannot be empty",
-            )
-            .into());
+            return Err(PyValueError::new_err("Separator cannot be empty"));
         }
         py_builder_method!(slf, tools, tools.separator(separator))
     }
