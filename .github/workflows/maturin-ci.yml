@@ -48,7 +48,7 @@ jobs:
         with:
           target: ${{ matrix.platform.target }}
           args: --release --out dist --find-interpreter
-          sccache: false
+          sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
           manylinux: auto
       - name: Upload wheels
         uses: actions/upload-artifact@v4
@@ -62,7 +62,7 @@ jobs:
           set -e
           python3 -m venv .venv
           source .venv/bin/activate
-          pip install json-tools-rs --find-links dist --force-reinstall
+          pip install json-tools-rs --no-index --find-links dist --force-reinstall
           pip install pytest
           pytest
       - name: pytest
@@ -78,7 +78,7 @@ jobs:
             pip3 install -U pip pytest
           run: |
             set -e
-            pip3 install json-tools-rs --find-links dist --force-reinstall
+            pip3 install json-tools-rs --no-index --find-links dist --force-reinstall
             pytest
 
   musllinux:
@@ -105,7 +105,7 @@ jobs:
         with:
           target: ${{ matrix.platform.target }}
           args: --release --out dist --find-interpreter
-          sccache: false
+          sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
           manylinux: musllinux_1_2
       - name: Upload wheels
         uses: actions/upload-artifact@v4
@@ -140,7 +140,7 @@ jobs:
             python3 -m virtualenv .venv
             source .venv/bin/activate
             pip install pytest
-            pip install json-tools-rs --find-links dist --force-reinstall
+            pip install json-tools-rs --no-index --find-links dist --force-reinstall
             pytest
 
   windows:
@@ -165,7 +165,7 @@ jobs:
         with:
           target: ${{ matrix.platform.target }}
           args: --release --out dist --find-interpreter
-          sccache: false
+          sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
@@ -178,7 +178,7 @@ jobs:
           set -e
           python3 -m venv .venv
           source .venv/Scripts/activate
-          pip install json-tools-rs --find-links dist --force-reinstall
+          pip install json-tools-rs --no-index --find-links dist --force-reinstall
           pip install pytest
           pytest
 
@@ -202,7 +202,7 @@ jobs:
         with:
           target: ${{ matrix.platform.target }}
           args: --release --out dist --find-interpreter
-          sccache: false
+          sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
@@ -213,7 +213,7 @@ jobs:
           set -e
           python3 -m venv .venv
           source .venv/bin/activate
-          pip install json-tools-rs --find-links dist --force-reinstall
+          pip install json-tools-rs --no-index --find-links dist --force-reinstall
           pip install pytest
           pytest
 
