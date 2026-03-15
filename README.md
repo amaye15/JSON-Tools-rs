@@ -216,6 +216,7 @@ print(type(result))  # <class 'pandas.core.frame.DataFrame'>
 | `.parallel_threshold(n)` | Min batch size for parallelism | `.parallel_threshold(500)` |
 | `.num_threads(n)` | Number of threads (default: CPU count) | `.num_threads(Some(4))` |
 | `.nested_parallel_threshold(n)` | Nested object parallelism size | `.nested_parallel_threshold(50)` |
+| `.max_array_index(n)` | Max array index for unflatten (DoS protection) | `.max_array_index(100_000)` |
 
 ## Automatic Type Conversion
 
@@ -271,7 +272,7 @@ The codebase is organized into focused, single-responsibility modules:
 src/
 ├── lib.rs            Facade: mod declarations + pub use re-exports
 ├── json_parser.rs    Conditional SIMD parser (sonic-rs on 64-bit, simd-json on 32-bit)
-├── types.rs          Core types: JsonInput, JsonOutput, FlatMap
+├── types.rs          Core types: JsonInput, JsonOutput
 ├── error.rs          Error types with codes E001-E008
 ├── config.rs         Configuration structs and operation modes
 ├── cache.rs          Tiered caching: regex, key deduplication, phf perfect hash

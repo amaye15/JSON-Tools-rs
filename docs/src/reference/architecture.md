@@ -8,7 +8,7 @@ JSON Tools RS is organized into focused, single-responsibility modules. This mod
 src/
 ├── lib.rs            Facade: mod declarations + pub use re-exports
 ├── json_parser.rs    Conditional SIMD parser (sonic-rs / simd-json)
-├── types.rs          Core types: JsonInput, JsonOutput, FlatMap
+├── types.rs          Core types: JsonInput, JsonOutput
 ├── error.rs          Error types with codes E001-E008
 ├── config.rs         Configuration structs and operation modes
 ├── cache.rs          Tiered caching: regex, key deduplication, phf
@@ -37,7 +37,6 @@ Exposes `from_str()`, `to_string()`, and `parse_json()` with a unified `JsonErro
 Defines the public-facing input/output types:
 - `JsonInput<'a>` -- Enum accepting `&str`, `&[&str]`, `Vec<String>`, etc.
 - `JsonOutput` -- Enum returning `Single(String)` or `Multiple(Vec<String>)`
-- `FlatMap` -- Internal type alias for `FxHashMap<Arc<str>, Value>`
 
 ### `error` -- Error Handling
 

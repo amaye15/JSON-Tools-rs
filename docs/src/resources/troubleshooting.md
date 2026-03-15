@@ -295,7 +295,7 @@ print(f"Processing took {elapsed:.3f}s")
 
 ### mimalloc (Rust-only)
 
-The `mimalloc` global allocator is enabled for the Rust library and provides a 5-10% performance improvement. It is **disabled for Python builds** because PyO3 manages memory through Python's allocator. This is handled automatically by Cargo feature flags -- no user action is required.
+The `mimalloc` global allocator is an optional feature that provides a 5-10% performance improvement. Enable it with `features = ["mimalloc"]` in your `Cargo.toml`. It is **not included in Python builds** because PyO3 manages memory through Python's allocator.
 
 ### sonic-rs (64-bit only)
 

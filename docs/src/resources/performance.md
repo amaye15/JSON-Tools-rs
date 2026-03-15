@@ -16,7 +16,7 @@ JSON Tools RS achieves ~2,000+ ops/ms through multiple optimization layers.
 | **Crossbeam Parallelism** | Scoped thread pools for batch and nested parallelism |
 | **Zero-Copy (Cow)** | Avoid allocations when strings don't need modification |
 | **itoa** | Fast integer-to-string formatting |
-| **mimalloc** | High-performance global allocator (~5-10% speedup) |
+| **mimalloc** | Optional high-performance allocator (`features = ["mimalloc"]`, ~5-10% speedup) |
 
 ## Benchmark Results
 
