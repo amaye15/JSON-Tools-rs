@@ -104,7 +104,7 @@ enum DataStructureType {
 
 /// Python wrapper for JsonOutput enum
 #[cfg(feature = "python")]
-#[pyclass(name = "JsonOutput")]
+#[pyclass(name = "JsonOutput", frozen, from_py_object)]
 #[derive(Debug, Clone)]
 pub struct PyJsonOutput {
     inner: JsonOutput,
