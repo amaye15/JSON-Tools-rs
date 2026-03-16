@@ -2643,7 +2643,10 @@ mod validation_and_edge_case_tests {
 
     #[test]
     fn test_empty_separator_returns_error() {
-        let result = JSONTools::new().flatten().separator("").execute(r#"{"a": 1}"#);
+        let result = JSONTools::new()
+            .flatten()
+            .separator("")
+            .execute(r#"{"a": 1}"#);
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(err.to_string().contains("Separator cannot be empty"));

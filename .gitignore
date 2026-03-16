@@ -4,6 +4,8 @@ Cargo.lock
 
 uv.lock
 
+python/json_tools_rs/libjson_tools_rs.dylib.dSYM*
+
 test_assets*
 
 # Python
