@@ -72,6 +72,10 @@ impl JsonOutput {
     /// Panics if this is a `Multiple` variant. Use [`try_into_single`](Self::try_into_single)
     /// for a non-panicking alternative.
     #[must_use]
+    #[deprecated(
+        since = "0.10.0",
+        note = "Use try_into_single() instead to avoid panics"
+    )]
     pub fn into_single(self) -> String {
         match self {
             JsonOutput::Single(result) => result,
@@ -85,6 +89,10 @@ impl JsonOutput {
     /// Panics if this is a `Single` variant. Use [`try_into_multiple`](Self::try_into_multiple)
     /// for a non-panicking alternative.
     #[must_use]
+    #[deprecated(
+        since = "0.10.0",
+        note = "Use try_into_multiple() instead to avoid panics"
+    )]
     pub fn into_multiple(self) -> Vec<String> {
         match self {
             JsonOutput::Single(_) => panic!("Expected multiple results but got single"),

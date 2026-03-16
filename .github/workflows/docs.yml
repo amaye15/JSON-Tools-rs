@@ -27,11 +27,17 @@ jobs:
           curl -sSL https://github.com/rust-lang/mdBook/releases/download/v0.4.44/mdbook-v0.4.44-x86_64-unknown-linux-gnu.tar.gz | tar -xz
           chmod +x mdbook
       - name: Build book
-        run: ./mdbook build
+        run: ./mdbook build docs
+      - name: Check for broken links
+        uses: lycheeverse/lychee-action@v2
+        with:
+          args: --no-progress ./docs/book
+          fail: true
+        continue-on-error: true
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: ./book
+          path: ./docs/book
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4

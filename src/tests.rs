@@ -2642,9 +2642,11 @@ mod validation_and_edge_case_tests {
     use serde_json::Value;
 
     #[test]
-    #[should_panic(expected = "Separator cannot be empty")]
-    fn test_empty_separator_panics() {
-        let _ = JSONTools::new().flatten().separator("");
+    fn test_empty_separator_returns_error() {
+        let result = JSONTools::new().flatten().separator("").execute(r#"{"a": 1}"#);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("Separator cannot be empty"));
     }
 
     #[test]

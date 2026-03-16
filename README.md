@@ -320,6 +320,20 @@ JSON Tools RS uses several techniques to achieve high performance (~2,000+ ops/m
 * **First-Byte Discriminators**: Rapid rejection of non-convertible strings during type conversion.
 * **Parallelism**: Automatic Crossbeam-based parallelism for batch processing and large nested structures.
 
+## CLI Demo
+
+The crate includes an educational demo binary that showcases library features:
+
+```bash
+cargo run
+```
+
+This prints progressive examples covering basic flattening, unflattening, custom separators, filtering, replacements, collision handling, type conversion, and batch processing.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, testing, benchmarking, and PR guidelines.
+
 ## Changelog
 
 ### v0.9.0 (Current)

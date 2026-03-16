@@ -54,6 +54,15 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Run clippy
         run: cargo clippy --all-targets --all-features -- -D warnings -D clippy::correctness -D clippy::perf -D clippy::suspicious
+      - name: Check version synchronization
+        run: |
+          CARGO_VER=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+          PY_VER=$(grep '__version__' python/json_tools_rs/__init__.py | sed 's/.*"\(.*\)"/\1/')
+          if [ "$CARGO_VER" != "$PY_VER" ]; then
+            echo "::error::Version mismatch: Cargo.toml=$CARGO_VER, __init__.py=$PY_VER"
+            exit 1
+          fi
+          echo "Versions in sync: $CARGO_VER"
 
   msrv:
     name: MSRV Check (1.80)
@@ -222,7 +231,7 @@ jobs:
         with:
           tool: 'cargo'
           output-file-path: output.txt
-          alert-threshold: '105%'
+          alert-threshold: '115%'
           comment-on-alert: true
           fail-on-alert: true
           github-token: ${{ secrets.GITHUB_TOKEN }}

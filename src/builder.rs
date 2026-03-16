@@ -132,12 +132,14 @@ impl JSONTools {
     }
 
     /// Set the operation mode to flatten
+    #[must_use]
     pub fn flatten(mut self) -> Self {
         self.mode = Some(OperationMode::Flatten);
         self
     }
 
     /// Set the operation mode to unflatten
+    #[must_use]
     pub fn unflatten(mut self) -> Self {
         self.mode = Some(OperationMode::Unflatten);
         self
@@ -168,6 +170,7 @@ impl JSONTools {
     ///     _ => unreachable!(),
     /// }
     /// ```
+    #[must_use]
     pub fn normal(mut self) -> Self {
         self.mode = Some(OperationMode::Normal);
         self
@@ -175,16 +178,15 @@ impl JSONTools {
 
     /// Set the separator used for nested keys (default: ".")
     ///
-    /// # Panics
-    /// Panics if `separator` is empty.
+    /// Empty separators are rejected at [`execute()`](Self::execute) time with a descriptive error.
+    #[must_use]
     pub fn separator(mut self, separator: impl Into<String>) -> Self {
-        let sep = separator.into();
-        assert!(!sep.is_empty(), "Separator cannot be empty");
-        self.separator = sep;
+        self.separator = separator.into();
         self
     }
 
     /// Convert all keys to lowercase
+    #[must_use]
     pub fn lowercase_keys(mut self, value: bool) -> Self {
         self.lowercase_keys = value;
         self
@@ -214,6 +216,7 @@ impl JSONTools {
     ///     .key_replacement("user_", "person_")
     ///     .execute(json).unwrap();
     /// ```
+    #[must_use]
     pub fn key_replacement(mut self, find: impl Into<String>, replace: impl Into<String>) -> Self {
         self.key_replacements.push((find.into(), replace.into()));
         self
@@ -243,6 +246,7 @@ impl JSONTools {
     ///     .value_replacement("@example.com", "@company.org")
     ///     .execute(json).unwrap();
     /// ```
+    #[must_use]
     pub fn value_replacement(
         mut self,
         find: impl Into<String>,
@@ -257,6 +261,7 @@ impl JSONTools {
     /// Works for both flatten and unflatten operations:
     /// - In flatten mode: removes flattened keys that have empty string values
     /// - In unflatten mode: removes keys from the unflattened JSON structure that have empty string values
+    #[must_use]
     pub fn remove_empty_strings(mut self, value: bool) -> Self {
         self.remove_empty_string_values = value;
         self
@@ -267,6 +272,7 @@ impl JSONTools {
     /// Works for both flatten and unflatten operations:
     /// - In flatten mode: removes flattened keys that have null values
     /// - In unflatten mode: removes keys from the unflattened JSON structure that have null values
+    #[must_use]
     pub fn remove_nulls(mut self, value: bool) -> Self {
         self.remove_null_values = value;
         self
@@ -277,6 +283,7 @@ impl JSONTools {
     /// Works for both flatten and unflatten operations:
     /// - In flatten mode: removes flattened keys that have empty object values
     /// - In unflatten mode: removes keys from the unflattened JSON structure that have empty object values
+    #[must_use]
     pub fn remove_empty_objects(mut self, value: bool) -> Self {
         self.remove_empty_objects = value;
         self
@@ -287,6 +294,7 @@ impl JSONTools {
     /// Works for both flatten and unflatten operations:
     /// - In flatten mode: removes flattened keys that have empty array values
     /// - In unflatten mode: removes keys from the unflattened JSON structure that have empty array values
+    #[must_use]
     pub fn remove_empty_arrays(mut self, value: bool) -> Self {
         self.remove_empty_arrays = value;
         self
@@ -296,6 +304,7 @@ impl JSONTools {
     ///
     /// When enabled, collect all values that would have the same key into an array.
     /// Works for all operations (flatten, unflatten, normal).
+    #[must_use]
     pub fn handle_key_collision(mut self, value: bool) -> Self {
         self.handle_key_collision = value;
         self
@@ -332,6 +341,7 @@ impl JSONTools {
     ///     _ => unreachable!(),
     /// }
     /// ```
+    #[must_use]
     pub fn auto_convert_types(mut self, enable: bool) -> Self {
         self.auto_convert_types = enable;
         self
@@ -358,6 +368,7 @@ impl JSONTools {
     ///     .flatten()
     ///     .parallel_threshold(50); // Only use parallelism for batches of 50+ items
     /// ```
+    #[must_use]
     pub fn parallel_threshold(mut self, threshold: usize) -> Self {
         self.parallel_threshold = threshold;
         self
@@ -381,6 +392,7 @@ impl JSONTools {
     ///     .flatten()
     ///     .num_threads(Some(4)); // Use exactly 4 threads
     /// ```
+    #[must_use]
     pub fn num_threads(mut self, num_threads: Option<usize>) -> Self {
         self.num_threads = num_threads;
         self
@@ -407,6 +419,7 @@ impl JSONTools {
     ///     .flatten()
     ///     .nested_parallel_threshold(200); // Only parallelize objects/arrays with 200+ items
     /// ```
+    #[must_use]
     pub fn nested_parallel_threshold(mut self, threshold: usize) -> Self {
         self.nested_parallel_threshold = threshold;
         self
@@ -419,6 +432,7 @@ impl JSONTools {
     /// indices exceeding this limit will produce an error during unflattening.
     ///
     /// Default: 100,000 (can be overridden with JSON_TOOLS_MAX_ARRAY_INDEX environment variable)
+    #[must_use]
     pub fn max_array_index(mut self, max: usize) -> Self {
         self.max_array_index = max;
         self
