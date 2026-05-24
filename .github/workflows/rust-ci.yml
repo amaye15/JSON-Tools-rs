@@ -215,7 +215,8 @@ jobs:
   benchmark:
     name: Benchmark
     runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@v1
@@ -224,18 +225,25 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: bench
-      - name: Run benchmarks
-        run: cargo bench --locked --bench comprehensive_benchmark -- --output-format bencher | tee output.txt
-      - name: Store benchmark result
+      - name: Run all benchmark suites
+        run: |
+          cargo bench --locked --bench comprehensive_benchmark -- --output-format bencher | tee -a output.txt
+          cargo bench --locked --bench isolation_benchmarks -- --output-format bencher | tee -a output.txt
+          cargo bench --locked --bench combination_benchmarks -- --output-format bencher | tee -a output.txt
+          cargo bench --locked --bench realworld_benchmarks -- --output-format bencher | tee -a output.txt
+          cargo bench --locked --bench stress_benchmarks -- --output-format bencher | tee -a output.txt
+      - name: Store and track benchmark results
         uses: benchmark-action/github-action-benchmark@v1
         with:
           tool: 'cargo'
           output-file-path: output.txt
           alert-threshold: '115%'
           comment-on-alert: true
-          fail-on-alert: true
+          fail-on-alert: ${{ github.event_name == 'pull_request' }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          auto-push: false
+          auto-push: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' }}
+          gh-pages-branch: gh-pages
+          benchmark-data-dir-path: dev/bench
 
   nightly:
     name: Nightly Rust Check

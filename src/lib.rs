@@ -442,6 +442,7 @@ mod config;
 pub(crate) mod convert;
 mod error;
 pub(crate) mod flatten;
+pub(crate) mod fxhash;
 pub(crate) mod json_parser;
 pub(crate) mod transform;
 mod types;

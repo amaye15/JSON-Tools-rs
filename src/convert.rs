@@ -6,9 +6,13 @@
 
 use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
 use memchr::{memchr, memchr2, memchr3, memchr_iter};
-use phf::phf_map;
 use smallvec::SmallVec;
 use std::borrow::Cow;
+
+#[inline(always)]
+fn parse_f64(s: &str) -> Result<f64, std::num::ParseFloatError> {
+    s.parse()
+}
 
 /// Try to parse a string into a number, handling various formats
 /// Returns None if the string cannot be parsed as a valid number
@@ -32,8 +36,8 @@ pub(crate) fn try_parse_number(trimmed: &str) -> Option<f64> {
 
     // Fast path: try direct parse first (handles basic numbers and scientific notation)
     // This catches ~90% of cases with minimal overhead
-    // Guard against NaN/Infinity which fast_float2 may accept but aren't valid JSON numbers
-    if let Ok(num) = fast_float2::parse::<f64, _>(trimmed) {
+    // Guard against NaN/Infinity which str::parse may accept but aren't valid JSON numbers
+    if let Ok(num) = parse_f64(trimmed) {
         if num.is_finite() {
             return Some(num);
         }
@@ -41,7 +45,7 @@ pub(crate) fn try_parse_number(trimmed: &str) -> Option<f64> {
 
     // Handle percentage strings (e.g., "50%" -> 50.0)
     if let Some(stripped) = trimmed.strip_suffix('%') {
-        if let Ok(num) = fast_float2::parse::<f64, _>(stripped) {
+        if let Ok(num) = parse_f64(stripped) {
             if num.is_finite() {
                 return Some(num);
             }
@@ -50,14 +54,14 @@ pub(crate) fn try_parse_number(trimmed: &str) -> Option<f64> {
 
     // Handle permille -- per thousand
     if let Some(stripped) = trimmed.strip_suffix('\u{2030}') {
-        if let Ok(num) = fast_float2::parse::<f64, _>(stripped) {
+        if let Ok(num) = parse_f64(stripped) {
             return Some(num / 1000.0);
         }
     }
 
     // Handle per ten-thousand -- basis points symbol
     if let Some(stripped) = trimmed.strip_suffix('\u{2031}') {
-        if let Ok(num) = fast_float2::parse::<f64, _>(stripped) {
+        if let Ok(num) = parse_f64(stripped) {
             return Some(num / 10000.0);
         }
     }
@@ -108,7 +112,7 @@ pub(crate) fn try_parse_number(trimmed: &str) -> Option<f64> {
 
     // Slow path: clean common number formats and try again
     let cleaned = clean_number_string(trimmed);
-    fast_float2::parse::<f64, _>(cleaned.as_ref())
+    parse_f64(cleaned.as_ref())
         .ok()
         .filter(|n| n.is_finite())
 }
@@ -120,14 +124,14 @@ fn try_parse_basis_points(s: &str) -> Option<f64> {
 
     // Try "25bps" or "25bp" (no space)
     if let Some(num_str) = s.strip_suffix("bps").or_else(|| s.strip_suffix("bp")) {
-        if let Ok(num) = fast_float2::parse::<f64, _>(num_str.trim()) {
+        if let Ok(num) = parse_f64(num_str.trim()) {
             return Some(num / 10000.0);
         }
     }
 
     // Try "25 bps" or "25 bp" (with space)
     if let Some(num_str) = s.strip_suffix(" bps").or_else(|| s.strip_suffix(" bp")) {
-        if let Ok(num) = fast_float2::parse::<f64, _>(num_str.trim()) {
+        if let Ok(num) = parse_f64(num_str.trim()) {
             return Some(num / 10000.0);
         }
     }
@@ -156,7 +160,7 @@ fn try_parse_suffixed_number(s: &str) -> Option<f64> {
 
     // Parse the number part (everything except the last character)
     let num_str = &s[..s.len() - 1];
-    if let Ok(num) = fast_float2::parse::<f64, _>(num_str.trim()) {
+    if let Ok(num) = parse_f64(num_str.trim()) {
         return Some(num * multiplier);
     }
 
@@ -181,7 +185,7 @@ fn try_parse_fraction(s: &str) -> Option<f64> {
         let fraction_part = s[space_pos + 1..].trim();
 
         if let (Ok(whole), Some(frac_value)) = (
-            fast_float2::parse::<f64, _>(whole_part),
+            parse_f64(whole_part),
             parse_simple_fraction(fraction_part),
         ) {
             // Handle negative mixed fractions: -1 1/2 = -1.5, not -0.5
@@ -202,8 +206,8 @@ fn try_parse_fraction(s: &str) -> Option<f64> {
 fn parse_simple_fraction(s: &str) -> Option<f64> {
     let (num_str, den_str) = s.split_once('/')?;
 
-    let numerator: f64 = fast_float2::parse(num_str.trim()).ok()?;
-    let denominator: f64 = fast_float2::parse(den_str.trim()).ok()?;
+    let numerator: f64 = parse_f64(num_str.trim()).ok()?;
+    let denominator: f64 = parse_f64(den_str.trim()).ok()?;
 
     if denominator == 0.0 {
         return None;
@@ -854,45 +858,16 @@ pub(crate) fn clean_number_string(s: &str) -> Cow<'_, str> {
     Cow::Owned(unsafe { String::from_utf8_unchecked(buffer.into_vec()) })
 }
 
-/// OPTIMIZATION: Perfect hash map for O(1) boolean value lookup (compile-time)
-/// Using phf for constant-time lookups without runtime hashing overhead
-static BOOL_MAP: phf::Map<&'static str, bool> = phf_map! {
-    // Standard true/false variants
-    "true" => true,
-    "TRUE" => true,
-    "True" => true,
-    "false" => false,
-    "FALSE" => false,
-    "False" => false,
-
-    // Yes/No variants
-    "yes" => true,
-    "YES" => true,
-    "Yes" => true,
-    "no" => false,
-    "NO" => false,
-    "No" => false,
-
-    // Y/N variants
-    "y" => true,
-    "Y" => true,
-    "n" => false,
-    "N" => false,
-
-    // On/Off variants
-    "on" => true,
-    "ON" => true,
-    "On" => true,
-    "off" => false,
-    "OFF" => false,
-    "Off" => false,
-};
-
-/// Fast version that accepts already-trimmed string (no trim() overhead)
-/// OPTIMIZATION: Uses perfect hash map (phf) for O(1) constant-time lookup
 #[inline(always)]
 fn try_parse_bool(s: &str) -> Option<bool> {
-    BOOL_MAP.get(s).copied()
+    match s {
+        "true" | "TRUE" | "True" | "yes" | "YES" | "Yes" | "y" | "Y" | "on" | "ON" | "On" => {
+            Some(true)
+        }
+        "false" | "FALSE" | "False" | "no" | "NO" | "No" | "n" | "N" | "off" | "OFF"
+        | "Off" => Some(false),
+        _ => None,
+    }
 }
 
 /// Fast version that accepts already-trimmed string (no trim() overhead)
@@ -989,12 +964,12 @@ fn f64_to_json_bytes(num: f64) -> Option<Cow<'static, str>> {
     if num.is_finite() && num.fract() == 0.0 {
         if num >= i64::MIN as f64 && num <= i64::MAX as f64 {
             return Some(Cow::Owned(
-                itoa::Buffer::new().format(num as i64).to_string(),
+                (num as i64).to_string(),
             ));
         }
         if num >= 0.0 && num <= u64::MAX as f64 {
             return Some(Cow::Owned(
-                itoa::Buffer::new().format(num as u64).to_string(),
+                (num as u64).to_string(),
             ));
         }
     }

@@ -18,7 +18,7 @@ use crate::flatten::{
     TapeEntry,
 };
 use memchr::memmem;
-use rustc_hash::FxHashMap;
+use crate::fxhash::FxHashMap;
 use serde_json::Value;
 use smallvec::SmallVec;
 use std::borrow::Cow;

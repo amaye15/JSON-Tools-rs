@@ -1,12 +1,11 @@
 //! Multi-tier caching for regex patterns.
 //!
 //! Three-tier regex cache: compile-time table for common patterns, thread-local
-//! FxHashMap for recent patterns, and global DashMap for shared access.
+//! FxHashMap for recent patterns, and global RwLock<FxHashMap> for shared access.
 
-use dashmap::DashMap;
 use regex::Regex;
-use rustc_hash::FxHashMap;
-use std::sync::{Arc, LazyLock};
+use crate::fxhash::FxHashMap;
+use std::sync::{Arc, LazyLock, RwLock};
 
 /// Maximum number of patterns in the thread-local cache before eviction.
 const THREAD_LOCAL_CACHE_CAPACITY: usize = 128;
@@ -117,10 +116,12 @@ static COMMON_REGEX_PATTERNS: LazyLock<FxHashMap<&'static str, Arc<Regex>>> = La
     patterns
 });
 
-/// Lock-free concurrent hashmap for regex caching using DashMap.
-/// Eliminates write-lock contention that existed with RwLock<LruCache>.
-static REGEX_CACHE: LazyLock<DashMap<Arc<str>, Arc<Regex>>> =
-    LazyLock::new(|| DashMap::with_capacity(GLOBAL_CACHE_CAPACITY));
+static REGEX_CACHE: LazyLock<RwLock<FxHashMap<Arc<str>, Arc<Regex>>>> = LazyLock::new(|| {
+    RwLock::new(FxHashMap::with_capacity_and_hasher(
+        GLOBAL_CACHE_CAPACITY,
+        Default::default(),
+    ))
+});
 
 thread_local! {
     static THREAD_LOCAL_REGEX_CACHE: std::cell::RefCell<FxHashMap<Arc<str>, Arc<Regex>>> =
@@ -155,7 +156,7 @@ fn insert_thread_local(pattern: &str, regex: &Arc<Regex>) {
 /// Three-tier caching strategy (optimized for both latency and concurrency):
 /// 1. Pre-compiled common patterns (static, no allocation)
 /// 2. Thread-local cache (lock-free, thread-specific)
-/// 3. Global DashMap (lock-free concurrent, shared across threads)
+/// 3. Global RwLock<FxHashMap> (shared across threads)
 pub(crate) fn get_cached_regex(pattern: &str) -> Result<Arc<Regex>, regex::Error> {
     // TIER 1: Check pre-compiled common patterns (fastest path, no allocation)
     if let Some(regex) = COMMON_REGEX_PATTERNS.get(pattern) {
@@ -172,27 +173,33 @@ pub(crate) fn get_cached_regex(pattern: &str) -> Result<Arc<Regex>, regex::Error
         return Ok(regex);
     }
 
-    // TIER 3: Try global DashMap cache (lock-free concurrent access)
-    if let Some(regex) = REGEX_CACHE.get(pattern) {
-        let regex_arc = Arc::clone(regex.value());
-        insert_thread_local(pattern, &regex_arc);
-        return Ok(regex_arc);
-    }
-
-    // NOT FOUND: Compile new regex and cache it
-    let regex = Arc::new(Regex::new(pattern)?);
-
-    // Bounded cache: evict one entry if at capacity
-    if REGEX_CACHE.len() >= GLOBAL_CACHE_CAPACITY {
-        if let Some(entry) = REGEX_CACHE.iter().next() {
-            let key_to_remove = entry.key().clone();
-            drop(entry);
-            REGEX_CACHE.remove(&key_to_remove);
+    // TIER 3: Try global cache under read lock
+    {
+        if let Some(regex) = REGEX_CACHE.read().unwrap().get(pattern) {
+            let regex_arc = Arc::clone(regex);
+            insert_thread_local(pattern, &regex_arc);
+            return Ok(regex_arc);
         }
     }
 
-    REGEX_CACHE.insert(Arc::from(pattern), Arc::clone(&regex));
-    insert_thread_local(pattern, &regex);
+    // NOT FOUND: Compile before taking the write lock (expensive operation)
+    let regex = Arc::new(Regex::new(pattern)?);
 
+    {
+        let mut cache = REGEX_CACHE.write().unwrap();
+        // Another thread may have compiled the same pattern while we were waiting
+        if let Some(existing) = cache.get(pattern) {
+            return Ok(Arc::clone(existing));
+        }
+        // Bounded cache: evict one entry if at capacity
+        if cache.len() >= GLOBAL_CACHE_CAPACITY {
+            if let Some(key) = cache.keys().next().cloned() {
+                cache.remove(&key);
+            }
+        }
+        cache.insert(Arc::from(pattern), Arc::clone(&regex));
+    }
+
+    insert_thread_local(pattern, &regex);
     Ok(regex)
 }

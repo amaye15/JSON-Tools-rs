@@ -11,7 +11,7 @@
 //! - Zero-copy value references (ValueRef::Raw) avoiding Value tree allocation
 
 use memchr::memchr;
-use rustc_hash::FxHashMap;
+use crate::fxhash::FxHashMap;
 use smallvec::SmallVec;
 use std::borrow::Cow;
 
@@ -522,6 +522,36 @@ fn count_trailing_backslashes_fast(input: &[u8], pos: usize) -> usize {
 }
 
 // ================================================================================================
+// IntBuf — stack-allocated integer formatter (replaces itoa crate)
+// ================================================================================================
+
+struct IntBuf {
+    bytes: [u8; 20], // enough for usize::MAX on 64-bit (20 digits)
+}
+
+impl IntBuf {
+    #[inline]
+    fn new() -> Self {
+        Self { bytes: [0u8; 20] }
+    }
+
+    #[inline]
+    fn format(&mut self, mut n: usize) -> &str {
+        if n == 0 {
+            return "0";
+        }
+        let mut pos = 20usize;
+        while n > 0 {
+            pos -= 1;
+            self.bytes[pos] = b'0' + (n % 10) as u8;
+            n /= 10;
+        }
+        // SAFETY: bytes[pos..] contains only ASCII digit bytes
+        unsafe { std::str::from_utf8_unchecked(&self.bytes[pos..]) }
+    }
+}
+
+// ================================================================================================
 // FastStreamingPathBuilder
 // ================================================================================================
 
@@ -530,7 +560,7 @@ fn count_trailing_backslashes_fast(input: &[u8], pos: usize) -> usize {
 struct FastStreamingPathBuilder {
     buffer: String,
     stack: SmallVec<[usize; 16]>,
-    itoa_buf: itoa::Buffer,
+    itoa_buf: IntBuf,
 }
 
 impl FastStreamingPathBuilder {
@@ -539,7 +569,7 @@ impl FastStreamingPathBuilder {
         Self {
             buffer: String::with_capacity(256),
             stack: SmallVec::new(),
-            itoa_buf: itoa::Buffer::new(),
+            itoa_buf: IntBuf::new(),
         }
     }
 
@@ -1551,12 +1581,12 @@ fn flatten_collecting_parallel<'a>(
     let mut all_entries: Vec<Option<Vec<CollectedEntry<'a>>>> =
         (0..n_threads).map(|_| None).collect();
 
-    crossbeam::thread::scope(|s| {
+    std::thread::scope(|s| {
         let handles: Vec<_> = ranges
             .chunks(chunk_size)
             .zip(all_entries.iter_mut())
             .map(|(range_chunk, slot)| {
-                s.spawn(move |_| {
+                s.spawn(move || {
                     let sep = SeparatorCache::new(&separator.separator);
                     let mut walker =
                         CollectingWalker::new(input, tape, config, sep, range_chunk.len() * 4);
@@ -1598,8 +1628,7 @@ fn flatten_collecting_parallel<'a>(
         for handle in handles {
             handle.join().expect("streaming flatten thread panicked");
         }
-    })
-    .map_err(|_| JsonToolsError::invalid_json_structure("Parallel streaming flatten failed"))?;
+    });
 
     let total: usize = all_entries
         .iter()

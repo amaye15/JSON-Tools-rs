@@ -7,63 +7,92 @@ use crate::json_parser;
 /// - Human-readable message
 /// - Actionable suggestion
 /// - Source error (where applicable)
-#[derive(Debug, thiserror::Error)]
-#[non_exhaustive] // Allow adding variants without breaking changes
+#[derive(Debug)]
+#[non_exhaustive]
 pub enum JsonToolsError {
     /// Error parsing JSON input with detailed context and suggestions
-    #[error("[E001] JSON parsing failed: {message}\n\u{1f4a1} Suggestion: {suggestion}")]
     JsonParseError {
         message: String,
         suggestion: String,
-        #[source]
         source: json_parser::JsonError,
     },
 
     /// Error compiling or using regex patterns with helpful suggestions
-    #[error("[E002] Regex pattern error: {message}\n\u{1f4a1} Suggestion: {suggestion}")]
     RegexError {
         message: String,
         suggestion: String,
-        #[source]
         source: regex::Error,
     },
 
     /// Invalid replacement pattern configuration with detailed guidance
-    #[error("[E003] Invalid replacement pattern: {message}\n\u{1f4a1} Suggestion: {suggestion}")]
     InvalidReplacementPattern { message: String, suggestion: String },
 
     /// Invalid JSON structure for the requested operation
-    #[error("[E004] Invalid JSON structure: {message}\n\u{1f4a1} Suggestion: {suggestion}")]
     InvalidJsonStructure { message: String, suggestion: String },
 
     /// Configuration error when operation mode is not set
-    #[error("[E005] Operation mode not configured: {message}\n\u{1f4a1} Suggestion: {suggestion}")]
     ConfigurationError { message: String, suggestion: String },
 
     /// Error processing batch item with detailed context
-    #[error(
-        "[E006] Batch processing failed at index {index}: {message}\n\u{1f4a1} Suggestion: {suggestion}"
-    )]
     BatchProcessingError {
         index: usize,
         message: String,
         suggestion: String,
-        #[source]
         source: Box<JsonToolsError>,
     },
 
     /// Input validation error with helpful guidance
-    #[error("[E007] Input validation failed: {message}\n\u{1f4a1} Suggestion: {suggestion}")]
     InputValidationError { message: String, suggestion: String },
 
     /// Serialization error when converting results back to JSON
-    #[error("[E008] JSON serialization failed: {message}\n\u{1f4a1} Suggestion: {suggestion}")]
     SerializationError {
         message: String,
         suggestion: String,
-        #[source]
         source: json_parser::JsonError,
     },
+}
+
+impl std::fmt::Display for JsonToolsError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::JsonParseError { message, suggestion, .. } => {
+                write!(f, "[E001] JSON parsing failed: {message}\n\u{1f4a1} Suggestion: {suggestion}")
+            }
+            Self::RegexError { message, suggestion, .. } => {
+                write!(f, "[E002] Regex pattern error: {message}\n\u{1f4a1} Suggestion: {suggestion}")
+            }
+            Self::InvalidReplacementPattern { message, suggestion } => {
+                write!(f, "[E003] Invalid replacement pattern: {message}\n\u{1f4a1} Suggestion: {suggestion}")
+            }
+            Self::InvalidJsonStructure { message, suggestion } => {
+                write!(f, "[E004] Invalid JSON structure: {message}\n\u{1f4a1} Suggestion: {suggestion}")
+            }
+            Self::ConfigurationError { message, suggestion } => {
+                write!(f, "[E005] Operation mode not configured: {message}\n\u{1f4a1} Suggestion: {suggestion}")
+            }
+            Self::BatchProcessingError { index, message, suggestion, .. } => {
+                write!(f, "[E006] Batch processing failed at index {index}: {message}\n\u{1f4a1} Suggestion: {suggestion}")
+            }
+            Self::InputValidationError { message, suggestion } => {
+                write!(f, "[E007] Input validation failed: {message}\n\u{1f4a1} Suggestion: {suggestion}")
+            }
+            Self::SerializationError { message, suggestion, .. } => {
+                write!(f, "[E008] JSON serialization failed: {message}\n\u{1f4a1} Suggestion: {suggestion}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for JsonToolsError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::JsonParseError { source, .. } => Some(source),
+            Self::RegexError { source, .. } => Some(source),
+            Self::BatchProcessingError { source, .. } => Some(source.as_ref()),
+            Self::SerializationError { source, .. } => Some(source),
+            _ => None,
+        }
+    }
 }
 
 impl JsonToolsError {

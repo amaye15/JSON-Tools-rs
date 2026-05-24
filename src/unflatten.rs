@@ -9,7 +9,7 @@
 use std::borrow::Cow;
 
 use memchr::{memchr, memmem};
-use rustc_hash::FxHashMap;
+use crate::fxhash::FxHashMap;
 use smallvec::SmallVec;
 
 use crate::config::{FilteringConfig, ProcessingConfig};
@@ -668,11 +668,10 @@ fn set_nested_value_recursive<'a>(
             } else {
                 // Non-numeric key in array context — convert array to object
                 let mut obj = FxHashMap::default();
-                let mut itoa_buf = itoa::Buffer::new();
                 for (i, item) in arr.iter_mut().enumerate() {
                     if !matches!(item, UnflatNode::Null) {
                         let taken = std::mem::replace(item, UnflatNode::Null);
-                        obj.insert(itoa_buf.format(i).to_owned(), taken);
+                        obj.insert(i.to_string(), taken);
                     }
                 }
                 obj.insert(next_part.to_string(), UnflatNode::Null);

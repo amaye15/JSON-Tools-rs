@@ -533,14 +533,14 @@ impl JSONTools {
             let mut slots: Vec<Option<Result<String, JsonToolsError>>> =
                 (0..items.len()).map(|_| None).collect();
 
-            crossbeam::thread::scope(|s| {
+            std::thread::scope(|s| {
                 for (chunk_idx, (inputs, outputs)) in items
                     .chunks(chunk_size)
                     .zip(slots.chunks_mut(chunk_size))
                     .enumerate()
                 {
                     let base = chunk_idx * chunk_size;
-                    s.spawn(move |_| {
+                    s.spawn(move || {
                         for (i, (item, slot)) in inputs.iter().zip(outputs.iter_mut()).enumerate() {
                             *slot =
                                 Some(processor(item.as_ref(), config).map_err(|e| {
@@ -549,12 +549,7 @@ impl JSONTools {
                         }
                     });
                 }
-            })
-            .map_err(|_| {
-                JsonToolsError::invalid_json_structure(
-                    "A worker thread panicked during batch processing",
-                )
-            })?;
+            });
 
             let results: Result<Vec<_>, _> = slots.into_iter().map(|s| s.unwrap()).collect();
             return results;
