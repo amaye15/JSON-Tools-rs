@@ -10,8 +10,8 @@
 //! - Direct-to-output fast path when no key transforms/collision handling needed
 //! - Zero-copy value references (ValueRef::Raw) avoiding Value tree allocation
 
-use memchr::memchr;
 use crate::fxhash::FxHashMap;
+use memchr::memchr;
 use smallvec::SmallVec;
 use std::borrow::Cow;
 

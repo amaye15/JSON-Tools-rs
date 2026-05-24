@@ -17,8 +17,8 @@ use crate::flatten::{
     tape_scalar_bytes, trim_ascii, unescape_json_string, write_json_escaped_key, EntryKind,
     TapeEntry,
 };
-use memchr::memmem;
 use crate::fxhash::FxHashMap;
+use memchr::memmem;
 use serde_json::Value;
 use smallvec::SmallVec;
 use std::borrow::Cow;

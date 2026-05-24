@@ -55,28 +55,69 @@ pub enum JsonToolsError {
 impl std::fmt::Display for JsonToolsError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::JsonParseError { message, suggestion, .. } => {
-                write!(f, "[E001] JSON parsing failed: {message}\n\u{1f4a1} Suggestion: {suggestion}")
+            Self::JsonParseError {
+                message,
+                suggestion,
+                ..
+            } => {
+                write!(
+                    f,
+                    "[E001] JSON parsing failed: {message}\n\u{1f4a1} Suggestion: {suggestion}"
+                )
             }
-            Self::RegexError { message, suggestion, .. } => {
-                write!(f, "[E002] Regex pattern error: {message}\n\u{1f4a1} Suggestion: {suggestion}")
+            Self::RegexError {
+                message,
+                suggestion,
+                ..
+            } => {
+                write!(
+                    f,
+                    "[E002] Regex pattern error: {message}\n\u{1f4a1} Suggestion: {suggestion}"
+                )
             }
-            Self::InvalidReplacementPattern { message, suggestion } => {
+            Self::InvalidReplacementPattern {
+                message,
+                suggestion,
+            } => {
                 write!(f, "[E003] Invalid replacement pattern: {message}\n\u{1f4a1} Suggestion: {suggestion}")
             }
-            Self::InvalidJsonStructure { message, suggestion } => {
-                write!(f, "[E004] Invalid JSON structure: {message}\n\u{1f4a1} Suggestion: {suggestion}")
+            Self::InvalidJsonStructure {
+                message,
+                suggestion,
+            } => {
+                write!(
+                    f,
+                    "[E004] Invalid JSON structure: {message}\n\u{1f4a1} Suggestion: {suggestion}"
+                )
             }
-            Self::ConfigurationError { message, suggestion } => {
+            Self::ConfigurationError {
+                message,
+                suggestion,
+            } => {
                 write!(f, "[E005] Operation mode not configured: {message}\n\u{1f4a1} Suggestion: {suggestion}")
             }
-            Self::BatchProcessingError { index, message, suggestion, .. } => {
+            Self::BatchProcessingError {
+                index,
+                message,
+                suggestion,
+                ..
+            } => {
                 write!(f, "[E006] Batch processing failed at index {index}: {message}\n\u{1f4a1} Suggestion: {suggestion}")
             }
-            Self::InputValidationError { message, suggestion } => {
-                write!(f, "[E007] Input validation failed: {message}\n\u{1f4a1} Suggestion: {suggestion}")
+            Self::InputValidationError {
+                message,
+                suggestion,
+            } => {
+                write!(
+                    f,
+                    "[E007] Input validation failed: {message}\n\u{1f4a1} Suggestion: {suggestion}"
+                )
             }
-            Self::SerializationError { message, suggestion, .. } => {
+            Self::SerializationError {
+                message,
+                suggestion,
+                ..
+            } => {
                 write!(f, "[E008] JSON serialization failed: {message}\n\u{1f4a1} Suggestion: {suggestion}")
             }
         }

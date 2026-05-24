@@ -112,9 +112,7 @@ pub(crate) fn try_parse_number(trimmed: &str) -> Option<f64> {
 
     // Slow path: clean common number formats and try again
     let cleaned = clean_number_string(trimmed);
-    parse_f64(cleaned.as_ref())
-        .ok()
-        .filter(|n| n.is_finite())
+    parse_f64(cleaned.as_ref()).ok().filter(|n| n.is_finite())
 }
 
 /// Parse basis points: 25bp, 25bps, 25 bp, 25 bps -> 0.0025
@@ -184,10 +182,9 @@ fn try_parse_fraction(s: &str) -> Option<f64> {
         let whole_part = s[..space_pos].trim();
         let fraction_part = s[space_pos + 1..].trim();
 
-        if let (Ok(whole), Some(frac_value)) = (
-            parse_f64(whole_part),
-            parse_simple_fraction(fraction_part),
-        ) {
+        if let (Ok(whole), Some(frac_value)) =
+            (parse_f64(whole_part), parse_simple_fraction(fraction_part))
+        {
             // Handle negative mixed fractions: -1 1/2 = -1.5, not -0.5
             if whole < 0.0 {
                 return Some(whole - frac_value);
@@ -864,8 +861,9 @@ fn try_parse_bool(s: &str) -> Option<bool> {
         "true" | "TRUE" | "True" | "yes" | "YES" | "Yes" | "y" | "Y" | "on" | "ON" | "On" => {
             Some(true)
         }
-        "false" | "FALSE" | "False" | "no" | "NO" | "No" | "n" | "N" | "off" | "OFF"
-        | "Off" => Some(false),
+        "false" | "FALSE" | "False" | "no" | "NO" | "No" | "n" | "N" | "off" | "OFF" | "Off" => {
+            Some(false)
+        }
         _ => None,
     }
 }
@@ -963,14 +961,10 @@ pub(crate) fn try_convert_string_to_json_bytes(s: &str) -> Option<Cow<'static, s
 fn f64_to_json_bytes(num: f64) -> Option<Cow<'static, str>> {
     if num.is_finite() && num.fract() == 0.0 {
         if num >= i64::MIN as f64 && num <= i64::MAX as f64 {
-            return Some(Cow::Owned(
-                (num as i64).to_string(),
-            ));
+            return Some(Cow::Owned((num as i64).to_string()));
         }
         if num >= 0.0 && num <= u64::MAX as f64 {
-            return Some(Cow::Owned(
-                (num as u64).to_string(),
-            ));
+            return Some(Cow::Owned((num as u64).to_string()));
         }
     }
     // Use serde_json for correct float formatting (uses ryu internally)

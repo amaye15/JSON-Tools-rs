@@ -8,8 +8,8 @@
 
 use std::borrow::Cow;
 
-use memchr::{memchr, memmem};
 use crate::fxhash::FxHashMap;
+use memchr::{memchr, memmem};
 use smallvec::SmallVec;
 
 use crate::config::{FilteringConfig, ProcessingConfig};

@@ -3,8 +3,8 @@
 //! Three-tier regex cache: compile-time table for common patterns, thread-local
 //! FxHashMap for recent patterns, and global RwLock<FxHashMap> for shared access.
 
-use regex::Regex;
 use crate::fxhash::FxHashMap;
+use regex::Regex;
 use std::sync::{Arc, LazyLock, RwLock};
 
 /// Maximum number of patterns in the thread-local cache before eviction.
