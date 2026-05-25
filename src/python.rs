@@ -1005,8 +1005,7 @@ impl PyJSONTools {
                         // TIER 6→3: Mixed results - use pythonize for dicts
                         let mut mixed_results: Vec<Py<PyAny>> =
                             Vec::with_capacity(processed_list.len());
-                        for (processed_json, is_str) in
-                            processed_list.into_iter().zip(is_str_flags)
+                        for (processed_json, is_str) in processed_list.into_iter().zip(is_str_flags)
                         {
                             if is_str {
                                 mixed_results
@@ -1460,9 +1459,7 @@ impl PyJSONTools {
                 } else {
                     // Mixed results - convert each based on type
                     let mut mixed_results = Vec::with_capacity(processed_list.len());
-                    for (processed_json, is_str) in
-                        processed_list.into_iter().zip(is_str_flags)
-                    {
+                    for (processed_json, is_str) in processed_list.into_iter().zip(is_str_flags) {
                         if is_str {
                             mixed_results
                                 .push(processed_json.into_pyobject(py)?.into_any().unbind());
