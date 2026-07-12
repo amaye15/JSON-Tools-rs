@@ -1042,7 +1042,9 @@ mod unit_tests {
 
 #[cfg(test)]
 mod memory_profiling_tests {
+    use crate::tests::extract_multiple;
     use crate::JSONTools;
+    use serde_json::Value;
 
     #[test]
     fn test_parallel_memory_overhead() {
@@ -1100,6 +1102,60 @@ mod memory_profiling_tests {
 
         // Each flattened JSON should be reasonable (< 1KB for this test data)
         assert!(avg_size < 1000, "Average result size is unexpectedly large");
+    }
+
+    #[test]
+    fn test_effective_thread_count_respects_override() {
+        // Regression test: `num_threads` was previously stored/validated but never
+        // consulted by the parallel dispatch paths, which always used
+        // available_parallelism() regardless of the configured override.
+        let with_override = crate::ProcessingConfig {
+            num_threads: Some(2),
+            ..crate::ProcessingConfig::new()
+        };
+        assert_eq!(with_override.effective_thread_count(1000), 2);
+
+        // Override is still capped by the item count.
+        assert_eq!(with_override.effective_thread_count(1), 1);
+
+        // 0 is rejected by the builder before reaching here (see JSONTools::num_threads
+        // validation), but effective_thread_count defends against it anyway.
+        let zero_override = crate::ProcessingConfig {
+            num_threads: Some(0),
+            ..crate::ProcessingConfig::new()
+        };
+        assert_eq!(zero_override.effective_thread_count(1000), 1);
+
+        // None falls back to available_parallelism(), capped by item count.
+        let default_config = crate::ProcessingConfig::new();
+        let n = default_config.effective_thread_count(1000);
+        assert!(n >= 1);
+        assert_eq!(default_config.effective_thread_count(1), 1);
+    }
+
+    #[test]
+    fn test_num_threads_builder_option_produces_correct_batch_results() {
+        // End-to-end check that constraining num_threads still yields correct,
+        // order-preserving batch output through the parallel dispatch path.
+        let json_docs: Vec<String> = (0..50)
+            .map(|i| format!(r#"{{"id": {i}, "nested": {{"value": {i}}}}}"#))
+            .collect();
+        let json_refs: Vec<&str> = json_docs.iter().map(|s| s.as_str()).collect();
+
+        let result = JSONTools::new()
+            .flatten()
+            .parallel_threshold(1) // force the parallel path
+            .num_threads(Some(2))
+            .execute(json_refs)
+            .expect("Batch processing with constrained num_threads failed");
+
+        let results = extract_multiple(result);
+        assert_eq!(results.len(), 50);
+        for (i, flat) in results.iter().enumerate() {
+            let parsed: Value = serde_json::from_str(flat).unwrap();
+            assert_eq!(parsed["id"], i);
+            assert_eq!(parsed["nested.value"], i);
+        }
     }
 
     #[test]
@@ -2704,6 +2760,22 @@ mod validation_and_edge_case_tests {
 
         assert_eq!(parsed["café"]["naïve"], "résumé");
         assert_eq!(parsed["日本語"]["キー"], "値");
+    }
+
+    #[test]
+    fn test_unicode_value_with_escape_sequence() {
+        // Regression test: unescape_json_string previously reinterpreted each byte of a
+        // multi-byte UTF-8 sequence as a separate Latin-1 codepoint whenever the string
+        // also contained a JSON escape sequence (e.g. \n), corrupting non-ASCII text.
+        let json =
+            r#"{"note": "café\nrésumé", "emoji": "hi 👍\tthere", "mixed": "日本語\"quoted\""}"#;
+        let flattened = JSONTools::new().flatten().execute(json).unwrap();
+        let flat_str = extract_single(flattened);
+        let parsed: Value = serde_json::from_str(&flat_str).unwrap();
+
+        assert_eq!(parsed["note"], "café\nrésumé");
+        assert_eq!(parsed["emoji"], "hi 👍\tthere");
+        assert_eq!(parsed["mixed"], "日本語\"quoted\"");
     }
 
     #[test]

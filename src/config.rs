@@ -227,6 +227,17 @@ impl ProcessingConfig {
         Self::default()
     }
 
+    /// Resolve the thread count to use for a parallel workload of `item_count` items,
+    /// honoring an explicit `num_threads` override and never exceeding `item_count`.
+    pub(crate) fn effective_thread_count(&self, item_count: usize) -> usize {
+        let base = self.num_threads.unwrap_or_else(|| {
+            std::thread::available_parallelism()
+                .map(|p| p.get())
+                .unwrap_or(4)
+        });
+        base.max(1).min(item_count)
+    }
+
     /// Set the separator for nested keys
     #[must_use]
     pub fn separator(mut self, separator: impl Into<String>) -> Self {

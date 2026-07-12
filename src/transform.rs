@@ -464,6 +464,19 @@ struct SlowObjectEntry {
     val_start: usize,
 }
 
+/// Lowercase `s`, using full Unicode case-folding (e.g. 'Ñ' -> 'ñ') for correctness.
+/// `str::to_lowercase()` always allocates a new String even when nothing changes, so this
+/// first does a cheap scan for any uppercase character and returns `s` unchanged if none are
+/// found -- the common case for real-world JSON keys, which are typically already lowercase.
+#[inline]
+fn lowercase_if_needed(s: String) -> String {
+    if s.chars().any(char::is_uppercase) {
+        s.to_lowercase()
+    } else {
+        s
+    }
+}
+
 /// Walk the tape with key transforms and collision handling.
 fn normal_slow_walk(
     input: &[u8],
@@ -543,9 +556,9 @@ impl<'a> NormalSlowWalker<'a> {
                     key_unescaped.into_owned()
                 };
 
-                // Apply lowercase
+                // Apply lowercase (full Unicode case-folding, e.g. 'Ñ' -> 'ñ')
                 if self.config.lowercase_keys {
-                    transformed_key = transformed_key.to_lowercase();
+                    transformed_key = lowercase_if_needed(transformed_key);
                 }
 
                 // Skip key and colon

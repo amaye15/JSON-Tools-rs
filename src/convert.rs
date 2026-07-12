@@ -34,6 +34,15 @@ pub(crate) fn try_parse_number(trimmed: &str) -> Option<f64> {
         return None;
     }
 
+    // Every supported format (plain numbers, currency, percentages, fractions, hex/binary/octal,
+    // K/M/B/T suffixes) requires at least one ASCII digit. Strings with none -- ordinary
+    // capitalized words ("Pending"), non-ASCII text ("café", "日本語"), "Infinity"/"NaN" -- can
+    // never parse, so reject them before paying for the suffix checks and clean_number_string's
+    // currency-stripping machinery below.
+    if !trimmed.bytes().any(|b| b.is_ascii_digit()) {
+        return None;
+    }
+
     // Fast path: try direct parse first (handles basic numbers and scientific notation)
     // This catches ~90% of cases with minimal overhead
     // Guard against NaN/Infinity which str::parse may accept but aren't valid JSON numbers

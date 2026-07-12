@@ -3,6 +3,9 @@
 #
 #    maturin generate-ci github --pytest --platform linux musllinux windows macos --output .github/workflows/maturin-ci.yml
 #
+# MANUAL PATCH: the `macos` job below has a hand-added `env.RUSTFLAGS` override to prevent
+# `-C target-cpu=native` (set in .cargo/config.toml) from being baked into published wheels.
+# If you regenerate this file, re-apply that override afterward.
 name: Python Wheels CI
 
 on:
@@ -192,6 +195,15 @@ jobs:
             target: x86_64
           - runner: macos-latest
             target: aarch64
+    # .cargo/config.toml sets `-C target-cpu=native` for these targets, which is correct for
+    # local source builds (native = the machine doing the build) but wrong here: this job builds
+    # a binary wheel *once* on the runner's CPU and ships it to arbitrary end-user machines via
+    # PyPI. `target-cpu=native` would bake in the runner's specific CPU features (e.g. AVX-512),
+    # causing SIGILL crashes for users on older/different CPUs. RUSTFLAGS fully replaces (does not
+    # merge with) config.toml's target.<triple>.rustflags, so we must restate the link-arg flags
+    # that are otherwise required for the cdylib to link on macOS.
+    env:
+      RUSTFLAGS: "-C link-arg=-undefined -C link-arg=dynamic_lookup"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

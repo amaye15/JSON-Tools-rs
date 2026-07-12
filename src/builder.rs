@@ -522,10 +522,7 @@ impl JSONTools {
         F: Fn(&str, &ProcessingConfig) -> Result<String, JsonToolsError> + Sync + Send,
     {
         if items.len() >= config.parallel_threshold {
-            let n_threads = std::thread::available_parallelism()
-                .map(|p| p.get())
-                .unwrap_or(4)
-                .min(items.len());
+            let n_threads = config.effective_thread_count(items.len());
             let chunk_size = items.len().div_ceil(n_threads);
 
             // Pre-allocate result slots; each thread writes to its own non-overlapping slice,

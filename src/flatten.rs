@@ -1299,9 +1299,17 @@ pub(crate) fn unescape_json_string(s: &str) -> Cow<'_, str> {
     let mut result = String::with_capacity(s.len());
     let bytes = s.as_bytes();
     let mut i = 0;
+    // Tracks the start of the current run of plain (non-escape) bytes not yet flushed to `result`.
+    let mut run_start = 0;
 
     while i < bytes.len() {
         if bytes[i] == b'\\' && i + 1 < bytes.len() {
+            // Flush the plain-byte run preceding this escape in one UTF-8-safe bulk copy,
+            // instead of re-encoding each byte individually (which corrupts multi-byte UTF-8).
+            if run_start < i {
+                result.push_str(&s[run_start..i]);
+            }
+
             match bytes[i + 1] {
                 b'"' => {
                     result.push('"');
@@ -1349,14 +1357,24 @@ pub(crate) fn unescape_json_string(s: &str) -> Cow<'_, str> {
                     i += 6;
                 }
                 _ => {
-                    result.push(bytes[i] as char);
+                    // Unknown escape: keep the backslash literally; the byte after it
+                    // is left for the next run so multi-byte UTF-8 sequences stay intact.
+                    result.push('\\');
                     i += 1;
                 }
             }
+            run_start = i;
+        } else if bytes[i] == b'\\' {
+            // Trailing lone backslash at end of string (no bytes[i+1]).
+            i += 1;
         } else {
-            result.push(bytes[i] as char);
             i += 1;
         }
+    }
+
+    // Flush any trailing plain-byte run.
+    if run_start < bytes.len() {
+        result.push_str(&s[run_start..]);
     }
 
     Cow::Owned(result)
@@ -1572,10 +1590,7 @@ fn flatten_collecting_parallel<'a>(
     ranges: &[(usize, usize, usize)],
     is_root_object: bool,
 ) -> Result<Vec<CollectedEntry<'a>>, JsonToolsError> {
-    let n_threads = std::thread::available_parallelism()
-        .map(|p| p.get())
-        .unwrap_or(4)
-        .min(ranges.len());
+    let n_threads = config.effective_thread_count(ranges.len());
     let chunk_size = ranges.len().div_ceil(n_threads);
 
     let mut all_entries: Vec<Option<Vec<CollectedEntry<'a>>>> =
