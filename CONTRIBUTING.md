@@ -55,6 +55,35 @@ cargo bench --bench combination_benchmarks
 cargo bench --bench realworld_benchmarks
 ```
 
+### Recording a benchmark
+
+For the full statistical picture, use Criterion (above). For a quick sanity check or to
+add a data point to the persistent, cross-commit history, use `bench_quick` instead —
+it's a hand-timed harness (no Criterion wait) covering the scenarios in
+[BENCHMARKS.md](BENCHMARKS.md)'s "Performance Targets" table:
+
+```bash
+cargo run --release --example bench_quick             # human-readable table
+cargo run --release --example bench_quick -- --csv    # CSV rows to stdout
+```
+
+CI appends real numbers to [`benches/history.csv`](benches/history.csv) (one row per
+`(commit, os, arch, threads, operation, scenario, size) -> time_us`) automatically on
+every push to `master`, so most of the time you don't need to do anything. To add a
+deliberate local snapshot yourself — e.g. before and after a change you're about to
+make, on hardware CI doesn't cover:
+
+```bash
+cargo run --release --example bench_quick -- --csv >> benches/history.csv
+cargo run --release --example bench_compare               # diffs the last two commits recorded
+cargo run --release --example bench_compare <old> <new>    # or two specific ones (prefix match ok)
+```
+
+`bench_quick --csv` tags each row with the current `git rev-parse --short HEAD` unless
+`BENCH_COMMIT` is set (CI sets it to the commit SHA). Only commit `benches/history.csv`
+alongside a change if the numbers actually mean something for that change — don't
+commit noise from an idle-machine sanity check.
+
 ### Profiling (macOS)
 
 The project uses [samply](https://github.com/mstange/samply) for profiling on macOS:
@@ -83,7 +112,7 @@ samply load /tmp/profile.json
 1. Create a feature branch from `master`.
 2. Make your changes with tests.
 3. Ensure `cargo test`, `cargo clippy`, and `cargo fmt --check` pass.
-4. For performance changes, include before/after benchmark results.
+4. For performance changes, include before/after benchmark results (`cargo run --release --example bench_compare` after recording both, or Criterion's own before/after comparison).
 5. Open a PR with a clear description of the change.
 
 ## Architecture Overview

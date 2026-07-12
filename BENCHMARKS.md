@@ -171,6 +171,11 @@ cargo bench --bench stress_benchmarks
 
 # Run specific benchmark group
 cargo bench --bench isolation_benchmarks -- iso_03_lowercase
+
+# Quick sanity check (no Criterion wait) covering the Performance Targets below,
+# and the source of the persistent history in benches/history.csv (see that
+# section further down)
+cargo run --release --example bench_quick
 ```
 
 ### Using the Benchmark Runner Script
@@ -328,7 +333,7 @@ cargo bench --bench stress_benchmarks
 
 ## Performance Targets
 
-Based on v0.9.0 baseline (Crossbeam parallelism, optimized caching):
+Based on v0.9.0 baseline (`std::thread::scope`-based parallelism, optimized caching):
 
 | Operation | Target | Notes |
 |-----------|--------|-------|
@@ -338,6 +343,37 @@ Based on v0.9.0 baseline (Crossbeam parallelism, optimized caching):
 | Batch processing (10) | > 2,500 ops/ms | Parallel speedup |
 | Batch processing (100) | > 3,000 ops/ms | Better parallelization |
 | Roundtrip | > 1,000 cycles/ms | Flatten + unflatten |
+
+---
+
+## Persistent Cross-Commit History
+
+The table above is a point-in-time target, not a trend. For the raw, growing *data* —
+one row per `(commit, os, arch, threads, operation, scenario, size) -> time_us`
+measurement, comparable across commits — see
+[`benches/history.csv`](benches/history.csv). It's appended to automatically by CI on
+every push to `master` (one job per `ubuntu-latest`/`windows-latest`/`macos-latest`
+target feeds a single append-and-commit job, so all three land together), and is
+appendable locally too:
+
+```bash
+# Record a snapshot (tagged with the current commit) and append it
+cargo run --release --example bench_quick -- --csv >> benches/history.csv
+
+# Diff the two most recently recorded commits
+cargo run --release --example bench_compare
+
+# Or two specific ones (prefix match ok)
+cargo run --release --example bench_compare <old> <new>
+```
+
+`bench_compare` joins on everything except the timing (`os`, `arch`, `threads`,
+`operation`, `scenario`, `size`), so it never compares across different targets or
+thread counts by accident, and flags anything that moved more than 3% as `faster` or
+`SLOWER`. This is separate from, and complements, the Criterion-based regression
+alerting in CI (see below) — `bench_quick`'s numbers are informational (shared CI
+runners are noisy), while the committed history is what to look at for a longer-term
+trend across many commits.
 
 ---
 
@@ -360,10 +396,17 @@ Add to CI pipeline:
 
 ### Performance Tracking
 
-- Save benchmark results as artifacts
-- Track performance over time
-- Alert on significant regressions
-- Generate performance trends
+Two complementary mechanisms run in CI (`.github/workflows/rust-ci.yml`), both
+described above:
+
+- The `benchmark` job runs all five Criterion suites on every push/PR and publishes to
+  a `gh-pages` dashboard via `github-action-benchmark`, failing PRs with a >15% Criterion-detected
+  regression (`alert-threshold: 115%`).
+- The `cross-platform`/`bench-history` jobs run `bench_quick` natively on
+  `ubuntu-latest`/`windows-latest`/`macos-latest` on every push/PR, and on an actual
+  push to `master` append the results to the committed
+  [`benches/history.csv`](benches/history.csv) — the persistent, queryable historical
+  record described above.
 
 ---
 

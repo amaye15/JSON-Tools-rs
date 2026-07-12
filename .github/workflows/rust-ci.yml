@@ -142,6 +142,59 @@ jobs:
       - name: Test
         if: matrix.can_test
         run: cargo test --locked --verbose --target ${{ matrix.target }}
+      - name: bench_quick (real-hardware timing, informational only — shared CI runners are noisy, not for regression gating)
+        if: matrix.can_test
+        run: cargo run --locked --release --target ${{ matrix.target }} --example bench_quick
+      - name: bench_quick --csv (persistent history — see the bench-history job)
+        if: matrix.can_test
+        shell: bash
+        run: |
+          BENCH_COMMIT="${GITHUB_SHA:0:8}" cargo run --locked --release --target ${{ matrix.target }} --example bench_quick -- --csv > "bench-${{ matrix.target }}.csv"
+      - name: Upload bench CSV artifact
+        if: matrix.can_test
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-csv-${{ matrix.target }}
+          path: bench-${{ matrix.target }}.csv
+
+  bench-history:
+    name: Append benchmark history
+    needs: cross-platform
+    # Only on a real push to main/master — not PRs (no write access needed/wanted
+    # there) and not workflow_dispatch reruns of an old ref. `needs: cross-platform`
+    # already means this is skipped if any matrix leg failed, which is the right call:
+    # don't record perf data for a broken build.
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: bench-csv-*
+          path: bench-csv
+          merge-multiple: true
+      - name: Append, commit, and push (idempotent — skips if this commit is already recorded, e.g. on a job re-run)
+        shell: bash
+        run: |
+          short_sha="${GITHUB_SHA:0:8}"
+          if grep -q ",$short_sha," benches/history.csv 2>/dev/null; then
+            echo "commit $short_sha already recorded in benches/history.csv, skipping"
+            exit 0
+          fi
+          for f in bench-csv/*.csv; do
+            tail -n +2 "$f" >> benches/history.csv
+          done
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add benches/history.csv
+          git commit -m "chore: append CI benchmark history for ${short_sha} [skip ci]"
+          git fetch origin "${{ github.ref_name }}"
+          git rebase "origin/${{ github.ref_name }}"
+          git push origin "HEAD:${{ github.ref_name }}"
 
   coverage:
     name: Code Coverage
