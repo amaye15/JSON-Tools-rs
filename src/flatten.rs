@@ -325,9 +325,11 @@ pub(crate) fn scan_and_fixup(input: &[u8]) -> Result<Vec<TapeEntry>, JsonToolsEr
                 let str_start = pos;
                 pos += 1; // skip opening quote
                 let content_start = pos;
-                let mut has_escape = false;
 
-                // Find closing quote using memchr (SIMD-accelerated)
+                // Find closing quote using memchr (SIMD-accelerated). This loop only
+                // needs to distinguish a real closing quote from an escaped one (`\"`)
+                // to find the correct boundary -- it does NOT determine has_escape
+                // (see below for why a separate pass is needed for that).
                 loop {
                     match memchr(b'"', unsafe { input.get_unchecked(pos..len) }) {
                         Some(offset) => {
@@ -336,10 +338,19 @@ pub(crate) fn scan_and_fixup(input: &[u8]) -> Result<Vec<TapeEntry>, JsonToolsEr
                             let bs = count_trailing_backslashes_fast(input, candidate);
                             if bs & 1 == 0 {
                                 // Even backslashes → unescaped closing quote
-                                if bs > 0 {
-                                    has_escape = true;
-                                }
                                 let content_len = candidate - content_start;
+                                // has_escape must cover every escape type (\n, \t, \r, \uXXXX,
+                                // \/, \b, \f, \\, \"), not just escaped quotes -- a JSON string
+                                // can only contain a backslash as part of a valid escape
+                                // sequence, so "any backslash in the content" is exactly
+                                // equivalent to "needs unescaping". Checking backslash-runs
+                                // only immediately before a matched quote (the old approach)
+                                // missed every escape that isn't adjacent to a quote, e.g. a
+                                // plain "\n" or "\t" alone in the string.
+                                let has_escape = memchr(b'\\', unsafe {
+                                    input.get_unchecked(content_start..candidate)
+                                })
+                                .is_some();
                                 let mut aux = content_len as u32;
                                 if has_escape {
                                     aux |= STRING_HAS_ESCAPE_BIT;
@@ -349,7 +360,6 @@ pub(crate) fn scan_and_fixup(input: &[u8]) -> Result<Vec<TapeEntry>, JsonToolsEr
                                 break;
                             }
                             // Odd backslashes → escaped quote, keep scanning
-                            has_escape = true;
                             pos = candidate + 1;
                         }
                         None => {
@@ -758,43 +768,44 @@ impl<'a> DirectWalker<'a> {
 
         let content_str = tape_content_str(self.input, entry);
 
-        // Value replacement
-        if self.config.replacements.has_value_replacements() {
-            // Only unescape if the string has escape sequences
+        let has_value_replacements = self.config.replacements.has_value_replacements();
+        let auto_convert_types = self.config.auto_convert_types;
+
+        if has_value_replacements || auto_convert_types {
+            // Unescape once — reused below by both replacement and conversion checks
+            // (previously each ran its own unescape, doubling the cost whenever both
+            // features were enabled and the replacement didn't match).
             let unescaped = if entry.string_has_escapes() {
                 unescape_json_string(content_str)
             } else {
                 Cow::Borrowed(content_str)
             };
 
-            if let Some(replaced) = apply_value_replacement_cow(
-                unescaped.as_ref(),
-                &self.config.replacements.value_replacements,
-            ) {
-                if self.config.filtering.remove_empty_strings && replaced.is_empty() {
+            // Value replacement
+            if has_value_replacements {
+                if let Some(replaced) = apply_value_replacement_cow(
+                    unescaped.as_ref(),
+                    &self.config.replacements.value_replacements,
+                ) {
+                    if self.config.filtering.remove_empty_strings && replaced.is_empty() {
+                        return;
+                    }
+                    // Write as owned string value
+                    let escaped = escape_json_string(&replaced);
+                    self.write_leaf_owned_string(escaped.as_ref());
                     return;
                 }
-                // Write as owned string value
-                let escaped = escape_json_string(&replaced);
-                self.write_leaf_owned_string(escaped.as_ref());
-                return;
             }
-        }
 
-        // Type conversion
-        if self.config.auto_convert_types {
-            let unescaped = if entry.string_has_escapes() {
-                unescape_json_string(content_str)
-            } else {
-                Cow::Borrowed(content_str)
-            };
-
-            if let Some(converted) = try_convert_string_to_json_bytes(unescaped.as_ref()) {
-                if self.config.filtering.remove_nulls && converted == "null" {
+            // Type conversion
+            if auto_convert_types {
+                if let Some(converted) = try_convert_string_to_json_bytes(unescaped.as_ref()) {
+                    if self.config.filtering.remove_nulls && converted == "null" {
+                        return;
+                    }
+                    self.write_leaf_json_fragment(&converted);
                     return;
                 }
-                self.write_leaf_json_fragment(&converted);
-                return;
             }
         }
 
@@ -1007,43 +1018,45 @@ impl<'a> CollectingWalker<'a> {
 
         let content_str = tape_content_str(self.input, entry);
 
-        if self.config.replacements.has_value_replacements() {
+        let has_value_replacements = self.config.replacements.has_value_replacements();
+        let auto_convert_types = self.config.auto_convert_types;
+
+        if has_value_replacements || auto_convert_types {
+            // Unescape once — reused below by both replacement and conversion checks
+            // (previously each ran its own unescape, doubling the cost whenever both
+            // features were enabled and the replacement didn't match).
             let unescaped = if entry.string_has_escapes() {
                 unescape_json_string(content_str)
             } else {
                 Cow::Borrowed(content_str)
             };
 
-            if let Some(replaced) = apply_value_replacement_cow(
-                unescaped.as_ref(),
-                &self.config.replacements.value_replacements,
-            ) {
-                if self.config.filtering.remove_empty_strings && replaced.is_empty() {
+            if has_value_replacements {
+                if let Some(replaced) = apply_value_replacement_cow(
+                    unescaped.as_ref(),
+                    &self.config.replacements.value_replacements,
+                ) {
+                    if self.config.filtering.remove_empty_strings && replaced.is_empty() {
+                        return;
+                    }
+                    let escaped = escape_json_string(&replaced);
+                    let mut buf = String::with_capacity(escaped.len() + 2);
+                    buf.push('"');
+                    buf.push_str(&escaped);
+                    buf.push('"');
+                    self.collect_value(ValueRef::Owned(buf));
                     return;
                 }
-                let escaped = escape_json_string(&replaced);
-                let mut buf = String::with_capacity(escaped.len() + 2);
-                buf.push('"');
-                buf.push_str(&escaped);
-                buf.push('"');
-                self.collect_value(ValueRef::Owned(buf));
-                return;
             }
-        }
 
-        if self.config.auto_convert_types {
-            let unescaped = if entry.string_has_escapes() {
-                unescape_json_string(content_str)
-            } else {
-                Cow::Borrowed(content_str)
-            };
-
-            if let Some(converted) = try_convert_string_to_json_bytes(unescaped.as_ref()) {
-                if self.config.filtering.remove_nulls && *converted == *"null" {
+            if auto_convert_types {
+                if let Some(converted) = try_convert_string_to_json_bytes(unescaped.as_ref()) {
+                    if self.config.filtering.remove_nulls && *converted == *"null" {
+                        return;
+                    }
+                    self.collect_value(ValueRef::Owned(converted.into_owned()));
                     return;
                 }
-                self.collect_value(ValueRef::Owned(converted.into_owned()));
-                return;
             }
         }
 

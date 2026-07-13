@@ -2779,6 +2779,88 @@ mod validation_and_edge_case_tests {
     }
 
     #[test]
+    fn test_escaped_value_falls_through_replacement_to_auto_convert() {
+        // Regression test combining two fixes: (1) a perf fix where value_replacement +
+        // auto_convert_types together used to unescape the same string twice when the
+        // replacement pattern didn't match, and (2) the has_escape scanner bug covered in
+        // detail by test_scanner_detects_non_quote_escapes below -- "123\t" only exercises
+        // auto_convert_types at all once the scanner correctly flags it as escaped. Covers
+        // both the DirectWalker path (no key transforms) and the CollectingWalker path
+        // (lowercase_keys forces it).
+        let json = r#"{"Count": "123\t", "Label": "hello\nworld"}"#;
+
+        // DirectWalker path: value_replacement (non-matching) + auto_convert_types.
+        let direct = JSONTools::new()
+            .flatten()
+            .value_replacement("NOMATCH", "x")
+            .auto_convert_types(true)
+            .execute(json)
+            .unwrap();
+        let direct_parsed: Value = serde_json::from_str(&extract_single(direct)).unwrap();
+        assert_eq!(direct_parsed["Count"], 123);
+        assert_eq!(direct_parsed["Label"], "hello\nworld");
+
+        // CollectingWalker path: same, plus lowercase_keys to force the collecting path.
+        let collecting = JSONTools::new()
+            .flatten()
+            .value_replacement("NOMATCH", "x")
+            .auto_convert_types(true)
+            .lowercase_keys(true)
+            .execute(json)
+            .unwrap();
+        let collecting_parsed: Value = serde_json::from_str(&extract_single(collecting)).unwrap();
+        assert_eq!(collecting_parsed["count"], 123);
+        assert_eq!(collecting_parsed["label"], "hello\nworld");
+    }
+
+    #[test]
+    fn test_scanner_detects_non_quote_escapes() {
+        // Regression test: the tape scanner's has_escape bit was only set by detecting
+        // escaped quotes (\") or backslash-runs immediately preceding a quote character --
+        // it used memchr to jump straight to the next `"`, so any escape sequence that
+        // wasn't adjacent to a quote (\n, \t, \r, \b, \f, \/, \uXXXX, or a lone \\ in the
+        // middle of a string) was invisible to it. Any feature gated on string_has_escapes()
+        // (auto_convert_types, value_replacement, key_replacement, lowercase_keys, collision
+        // handling) silently skipped unescaping such strings. auto_convert_types is the
+        // clearest way to observe this: a numeric string is only recognized as a number
+        // after correct unescaping + trimming.
+        let cases = [
+            (r#"{"n": "42\t"}"#, "n", 42),
+            (r#"{"n": "42\n"}"#, "n", 42),
+            (r#"{"n": "42\r"}"#, "n", 42),
+            (r#"{"n": "\t42"}"#, "n", 42),
+            (r#"{"n": "\n\r\t42\n\r\t"}"#, "n", 42),
+        ];
+
+        for (json, key, expected) in cases {
+            let result = JSONTools::new()
+                .flatten()
+                .auto_convert_types(true)
+                .execute(json)
+                .unwrap();
+            let parsed: Value = serde_json::from_str(&extract_single(result)).unwrap();
+            assert_eq!(
+                parsed[key], expected,
+                "failed to auto-convert {json:?} (has_escape must be true for whitespace-only escapes)"
+            );
+        }
+
+        // \uXXXX (unicode escape, not adjacent to a quote) must also be detected and
+        // correctly unescaped when a transform needs the real text: "Café" is the
+        // JSON-escaped form of "Café" and contains a literal backslash nowhere near a
+        // quote character. A literal (non-regex) value_replacement only matches against
+        // the real, unescaped text, so this only succeeds if has_escape was set correctly.
+        let json = "{\"Name\": \"Caf\\u00e9\"}";
+        let result = JSONTools::new()
+            .flatten()
+            .value_replacement("Café", "Kaffee")
+            .execute(json)
+            .unwrap();
+        let parsed: Value = serde_json::from_str(&extract_single(result)).unwrap();
+        assert_eq!(parsed["Name"], "Kaffee");
+    }
+
+    #[test]
     fn test_normal_mode_lowercase_keys() {
         let json = r#"{"UserName": "John", "UserAge": 30, "nested": {"InnerKey": true}}"#;
         let result = JSONTools::new()
