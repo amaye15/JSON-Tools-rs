@@ -7,6 +7,7 @@
 - [Installation](./getting-started/installation.md)
 - [Quick Start (Rust)](./getting-started/quickstart-rust.md)
 - [Quick Start (Python)](./getting-started/quickstart-python.md)
+- [Quick Start (JVM / Spark)](./getting-started/quickstart-jvm.md)
 
 # User Guide
 

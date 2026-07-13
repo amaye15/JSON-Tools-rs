@@ -47,7 +47,7 @@ tools = (jt.JSONTools()
     .lowercase_keys(True)
     .remove_empty_strings(True)
     .remove_nulls(True)
-    .key_replacement("^user_", "")
+    .key_replacement("r'^user_'", "")
     .auto_convert_types(True)
 )
 

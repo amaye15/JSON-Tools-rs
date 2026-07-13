@@ -2,6 +2,13 @@
 
 The Python bindings natively support DataFrame and Series objects from popular data libraries, with perfect type preservation.
 
+> **Note:** PySpark support here means the Python bindings can accept/return a
+> PySpark DataFrame directly (useful when driving a Spark job from a Python script
+> that has the Python bindings installed). For running *inside* a distributed Spark
+> job as a native UDF -- without requiring the Python bindings on every executor,
+> e.g. from a Databricks Lakeflow Declarative Pipeline -- see the
+> [JVM / Spark bindings](../getting-started/quickstart-jvm.md) instead.
+
 ## Supported Libraries
 
 | Library | DataFrame | Series |

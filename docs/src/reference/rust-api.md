@@ -59,8 +59,8 @@ All methods consume `self` and return `Self` for chaining. Marked `#[must_use]`.
 | `.remove_nulls(flag)` | `bool` | `false` | Filter out `null` values |
 | `.remove_empty_objects(flag)` | `bool` | `false` | Filter out `{}` values |
 | `.remove_empty_arrays(flag)` | `bool` | `false` | Filter out `[]` values |
-| `.key_replacement(find, replace)` | `impl Into<String>, impl Into<String>` | -- | Add a key replacement regex pattern |
-| `.value_replacement(find, replace)` | `impl Into<String>, impl Into<String>` | -- | Add a value replacement regex pattern |
+| `.key_replacement(find, replace)` | `impl Into<String>, impl Into<String>` | -- | Add a key replacement pattern (literal by default, `r'...'` for regex) |
+| `.value_replacement(find, replace)` | `impl Into<String>, impl Into<String>` | -- | Add a value replacement pattern (literal by default, `r'...'` for regex) |
 | `.handle_key_collision(flag)` | `bool` | `false` | Collect colliding keys into arrays |
 | `.auto_convert_types(flag)` | `bool` | `false` | Auto-convert string values to native types |
 | `.parallel_threshold(n)` | `usize` | `100` | Min batch size for parallel processing |
@@ -102,7 +102,7 @@ let tools = JSONTools::new()
     .lowercase_keys(true)
     .remove_nulls(true)
     .remove_empty_strings(true)
-    .key_replacement("^user_", "")
+    .key_replacement("r'^user_'", "")
     .auto_convert_types(true)
     .parallel_threshold(50)
     .num_threads(Some(4));
@@ -312,7 +312,7 @@ let config = ProcessingConfig::new()
     .collision(CollisionConfig::new().handle_collisions(true))
     .replacements(
         ReplacementConfig::new()
-            .add_key_replacement("^old_", "new_")
+            .add_key_replacement("r'^old_'", "new_")
     );
 ```
 
@@ -401,8 +401,8 @@ pub struct ReplacementConfig {
 
 | Method | Description |
 |--------|-------------|
-| `.add_key_replacement(find, replace)` | Add a key replacement regex pattern |
-| `.add_value_replacement(find, replace)` | Add a value replacement regex pattern |
+| `.add_key_replacement(find, replace)` | Add a key replacement pattern (literal by default, `r'...'` for regex) |
+| `.add_value_replacement(find, replace)` | Add a value replacement pattern (literal by default, `r'...'` for regex) |
 
 ### Query Methods
 
@@ -415,8 +415,8 @@ pub struct ReplacementConfig {
 use json_tools_rs::ReplacementConfig;
 
 let replacements = ReplacementConfig::new()
-    .add_key_replacement("^user_", "")
-    .add_value_replacement("@old\\.com", "@new.com");
+    .add_key_replacement("r'^user_'", "")
+    .add_value_replacement("@old.com", "@new.com");
 
 assert!(replacements.has_key_replacements());
 assert!(replacements.has_value_replacements());

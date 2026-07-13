@@ -49,7 +49,7 @@ data = {
 result = (jt.JSONTools()
     .normal()
     .lowercase_keys(True)
-    .key_replacement("^user_", "")
+    .key_replacement("r'^user_'", "")
     .value_replacement("@example.com", "@company.org")
     .remove_empty_strings(True)
     .remove_nulls(True)

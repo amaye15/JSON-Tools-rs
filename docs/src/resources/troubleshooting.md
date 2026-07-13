@@ -36,26 +36,28 @@ result = tools.execute({"key": "value"})       # Pass a dict directly
 
 **Message:** `[E002] Regex pattern error: ...`
 
-**Cause:** A key or value replacement pattern failed to compile as a regex.
+**Cause:** Reserved for regex compilation failures. In practice this code is not
+currently reachable through `.key_replacement()` / `.value_replacement()`: patterns
+are **literal by default** (exact substring match, no regex engine involved at all),
+and a pattern explicitly wrapped in `r'...'` that fails to compile as regex is
+**silently treated as "no match"** rather than raised as an error -- so a broken
+`r'...'` pattern won't crash your pipeline, it just won't replace anything. `E002` is
+kept in the error enum for API completeness/forward compatibility.
 
-**Common triggers:**
-- Unescaped special regex characters (`.`, `*`, `+`, `?`, `(`, `)`, `[`, `]`)
-- Unclosed groups or character classes
-- Invalid backreferences
-
-**Solution:**
+**Common mistake this code used to cover, now handled differently:**
 ```python
-# Wrong -- unescaped dot matches any character
-tools.key_replacement("user.name", "username")
+# "user.name" is now a LITERAL pattern -- the dot is not a wildcard.
+# It only matches the exact substring "user.name", not "username".
+tools.key_replacement("user.name", "id")
 
-# Correct -- escape the dot for literal matching
-tools.key_replacement(r"user\.name", "username")
+# To use regex (e.g. so the dot matches any character), wrap in r'...':
+tools.key_replacement("r'user.name'", "id")
 
-# Or use a simpler pattern that won't be misinterpreted
-tools.key_replacement("user_name", "username")
+# To match the literal dot as regex, escape it inside the wrapper:
+tools.key_replacement(r"r'user\.name'", "id")
 ```
 
-Note: If regex compilation fails, the library automatically falls back to literal string matching. This error only surfaces when the pattern is syntactically broken (e.g., unclosed groups).
+See [Key & Value Replacements](../guide/replacements.md) for the full `r'...'` convention.
 
 ### E003: InvalidReplacementPattern
 
@@ -227,21 +229,27 @@ output = tools.execute_to_output({"a": {"b": 1}})
 json_str = output.get_single()  # Returns a JSON string
 ```
 
-### Regex Patterns in Replacements
+### Literal vs. Regex Patterns in Replacements
 
-Replacement patterns use standard regex syntax. Common pitfalls:
+Replacement patterns are **literal (exact substring match) by default**. Wrap a
+pattern in `r'...'` to use standard regex syntax instead:
 
 ```python
-# The dot matches ANY character -- "user.name" matches "username" too
+# Literal: matches the exact substring "user_" anywhere in the key
+tools.key_replacement("user_", "")
+
+# Regex: anchors, character classes, etc. only work inside r'...'
+tools.key_replacement("r'^user_'", "")       # Only at start of key
+tools.key_replacement("r'_suffix$'", "")     # Only at end of key
+tools.key_replacement("r'user.name'", "id")  # Dot matches any character
+
+# A bare pattern with regex metacharacters is still literal --
+# this looks for the exact substring "user.name", not "username"
 tools.key_replacement("user.name", "id")
-
-# Escape dots for literal matching
-tools.key_replacement(r"user\.name", "id")
-
-# Use anchors for precise matching
-tools.key_replacement("^user_", "")       # Only at start of key
-tools.key_replacement("_suffix$", "")      # Only at end of key
 ```
+
+A malformed pattern inside `r'...'` is silently ignored (no match, no error) rather
+than raising `E002` -- see above.
 
 ## Performance Tuning
 

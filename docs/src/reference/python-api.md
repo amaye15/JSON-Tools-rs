@@ -165,18 +165,21 @@ Remove key-value pairs where the value is an empty array `[]`.
 tools.key_replacement(find: str, replace: str) -> JSONTools
 ```
 
-Add a key replacement pattern. Patterns use standard regex syntax. If the regex fails to compile, it falls back to literal string replacement. Multiple replacements can be chained.
+Add a key replacement pattern. Patterns are **literal (exact substring match) by
+default**; wrap a pattern in `r'...'` (e.g. `"r'^user_'"`) to use standard regex
+syntax instead. A malformed `r'...'` pattern is silently treated as "no match" rather
+than raising an error. Multiple replacements can be chained.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `find` | `str` | Regex pattern (or literal string) to match in keys |
-| `replace` | `str` | Replacement string (supports regex capture groups like `$1`) |
+| `find` | `str` | Literal string, or `r'...'`-wrapped regex pattern, to match in keys |
+| `replace` | `str` | Replacement string (supports regex capture groups like `$1` when `find` is a regex) |
 
 ```python
 result = (jt.JSONTools()
     .flatten()
-    .key_replacement("^user_", "")
-    .key_replacement("_name$", "_id")
+    .key_replacement("r'^user_'", "")
+    .key_replacement("r'_name$'", "_id")
     .execute({"user_name": "Alice"}))
 # {"id": "Alice"}
 ```
@@ -187,17 +190,18 @@ result = (jt.JSONTools()
 tools.value_replacement(find: str, replace: str) -> JSONTools
 ```
 
-Add a value replacement pattern. Works the same as key replacements but applies to string values.
+Add a value replacement pattern. Works the same as key replacements (literal by
+default, `r'...'` for regex) but applies to string values.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `find` | `str` | Regex pattern (or literal string) to match in values |
+| `find` | `str` | Literal string, or `r'...'`-wrapped regex pattern, to match in values |
 | `replace` | `str` | Replacement string |
 
 ```python
 result = (jt.JSONTools()
     .flatten()
-    .value_replacement("@example\\.com", "@company.org")
+    .value_replacement("@example.com", "@company.org")
     .execute({"email": "user@example.com"}))
 # {"email": "user@company.org"}
 ```
@@ -571,7 +575,7 @@ tools = (jt.JSONTools()
     .lowercase_keys(True)
     .remove_nulls(True)
     .remove_empty_strings(True)
-    .key_replacement("^user_", "")
+    .key_replacement("r'^user_'", "")
     .auto_convert_types(True)
     .parallel_threshold(50)
     .num_threads(4)
