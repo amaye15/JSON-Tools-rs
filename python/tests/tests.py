@@ -144,7 +144,7 @@ class TestCollisionHandling:
         tools = (
             json_tools_rs.JSONTools()
             .flatten()
-            .key_replacement("(User|Admin|Guest)_", "")
+            .key_replacement("r'(User|Admin|Guest)_'", "")
             .handle_key_collision(True)
         )
 
@@ -164,7 +164,7 @@ class TestCollisionHandling:
         tools = (
             json_tools_rs.JSONTools()
             .flatten()
-            .key_replacement("(User|Admin|Guest)_", "")
+            .key_replacement("r'(User|Admin|Guest)_'", "")
             .remove_empty_strings(True)
             .handle_key_collision(True)
         )
@@ -325,7 +325,7 @@ class TestReplacements:
     def test_regex_key_replacement(self):
         """Test regex key replacement"""
         tools = (
-            json_tools_rs.JSONTools().flatten().key_replacement("^(user|admin)_", "")
+            json_tools_rs.JSONTools().flatten().key_replacement("r'^(user|admin)_'", "")
         )
         input_data = {
             "user_name": "John",
@@ -363,7 +363,7 @@ class TestReplacements:
         tools = (
             json_tools_rs.JSONTools()
             .flatten()
-            .value_replacement("@example\\.com", "@company.org")
+            .value_replacement("r'@example\\.com'", "@company.org")
         )
         input_data = {
             "user1": {"email": "john@example.com"},
@@ -383,9 +383,9 @@ class TestReplacements:
             json_tools_rs.JSONTools()
             .flatten()
             .key_replacement("user_", "person_")
-            .key_replacement("^admin_", "manager_")
+            .key_replacement("r'^admin_'", "manager_")
             .value_replacement("@example.com", "@company.org")
-            .value_replacement("^inactive$", "disabled")
+            .value_replacement("r'^inactive$'", "disabled")
         )
 
         input_data = {
@@ -405,7 +405,7 @@ class TestReplacements:
         tools = (
             json_tools_rs.JSONTools()
             .flatten()
-            .key_replacement("^field_(\\d+)_(.+)", "$2_id_$1")
+            .key_replacement("r'^field_(\\d+)_(.+)'", "$2_id_$1")
         )
         input_data = {
             "field_123_name": "John",
@@ -646,27 +646,47 @@ class TestErrorHandling:
         with pytest.raises(ValueError):
             tools.execute([123, object()])  # Contains invalid object type
 
-    def test_invalid_regex_pattern(self):
-        """Test invalid regex patterns fall back to literal matching"""
-        # Invalid regex in key replacement - should fall back to literal matching
+    def test_bare_pattern_with_regex_metacharacters_is_literal(self):
+        """A bare (non-r'...') pattern is always literal, even with regex-looking chars"""
+        # "[invalid" has no closing bracket -- invalid regex syntax, but since it's not
+        # wrapped in r'...' it's never compiled as regex at all; it's just literal text
+        # that doesn't appear in the data, so nothing matches (no error either way).
         tools = (
             json_tools_rs.JSONTools()
             .flatten()
             .key_replacement("[invalid", "replacement")
         )
         result = tools.execute('{"test": "value"}')
-        # Should not raise error, just treat as literal string (no match)
         assert isinstance(result, str)
         assert '"test"' in result and '"value"' in result
 
-        # Invalid regex in value replacement - should fall back to literal matching
         tools = (
             json_tools_rs.JSONTools()
             .flatten()
             .value_replacement("*invalid", "replacement")
         )
         result = tools.execute('{"test": "value"}')
-        # Should not raise error, just treat as literal string (no match)
+        assert isinstance(result, str)
+        assert '"test"' in result and '"value"' in result
+
+    def test_malformed_regex_pattern_is_silently_ignored(self):
+        """An r'...'-wrapped pattern that fails to compile as regex is treated as no match,
+        not an error -- there's no way to validate patterns ahead of execute()."""
+        tools = (
+            json_tools_rs.JSONTools()
+            .flatten()
+            .key_replacement("r'[invalid'", "replacement")
+        )
+        result = tools.execute('{"test": "value"}')
+        assert isinstance(result, str)
+        assert '"test"' in result and '"value"' in result
+
+        tools = (
+            json_tools_rs.JSONTools()
+            .flatten()
+            .value_replacement("r'*invalid'", "replacement")
+        )
+        result = tools.execute('{"test": "value"}')
         assert isinstance(result, str)
         assert '"test"' in result and '"value"' in result
 
@@ -1133,8 +1153,8 @@ class TestPerformance:
             .remove_nulls(True)
             .remove_empty_objects(True)
             .remove_empty_arrays(True)
-            .key_replacement("^user_", "person_")
-            .value_replacement("@example\\.com", "@company.org")
+            .key_replacement("r'^user_'", "person_")
+            .value_replacement("r'@example\\.com'", "@company.org")
             .separator("_")
             .lowercase_keys(True)
         )
@@ -1233,8 +1253,8 @@ class TestPerformance:
         regex_tools = (
             json_tools_rs.JSONTools()
             .flatten()
-            .key_replacement("^user_", "person_")
-            .value_replacement("@example\\.com", "@company.org")
+            .key_replacement("r'^user_'", "person_")
+            .value_replacement("r'@example\\.com'", "@company.org")
         )
         start_time = time.time()
         for _ in range(iterations):
@@ -1672,7 +1692,7 @@ class TestRealWorldScenarios:
             .remove_empty_strings(True)
             .remove_nulls(True)
             .key_replacement(
-                "^(customer_data|account_info|usage_statistics|billing_details)_",
+                "r'^(customer_data|account_info|usage_statistics|billing_details)_'",
                 "",
             )
             .separator("_")
@@ -1870,7 +1890,7 @@ class TestJsonUnflattenerBuilderPattern:
         tools = (
             json_tools_rs.JSONTools()
             .unflatten()
-            .key_replacement("^(user|admin)_", "$1.")
+            .key_replacement("r'^(user|admin)_'", "$1.")
         )
         result = tools.execute(flattened)
 
@@ -2443,7 +2463,7 @@ class TestParallelProcessing:
             json_tools_rs.JSONTools()
             .flatten()
             .parallel_threshold(5)
-            .key_replacement("(user|admin)_", "")
+            .key_replacement("r'(user|admin)_'", "")
             .handle_key_collision(True)
         )
         batch = [
@@ -3699,7 +3719,7 @@ class TestNormalModeComprehensive:
         tools = (
             json_tools_rs.JSONTools()
             .normal()
-            .value_replacement("@example\\.com", "@company.org")
+            .value_replacement("r'@example\\.com'", "@company.org")
         )
         result = tools.execute({"email": "user@example.com"})
         assert result["email"] == "user@company.org"

@@ -472,7 +472,7 @@ fn stress_07_long_strings(c: &mut Criterion) {
         b.iter(|| {
             let result = JSONTools::new()
                 .flatten()
-                .value_replacement("regex:Lorem.*?\\.", "Shortened.")
+                .value_replacement("r'Lorem.*?\\.'", "Shortened.")
                 .execute(black_box(json.as_str()))
                 .expect("Failed");
             black_box(result);
@@ -562,7 +562,7 @@ fn stress_09_regex_heavy(c: &mut Criterion) {
         b.iter(|| {
             let result = JSONTools::new()
                 .flatten()
-                .key_replacement("regex:_id_", "_")
+                .key_replacement("r'_id_'", "_")
                 .execute(black_box(json.as_str()))
                 .expect("Failed");
             black_box(result);
@@ -574,8 +574,8 @@ fn stress_09_regex_heavy(c: &mut Criterion) {
         b.iter(|| {
             let result = JSONTools::new()
                 .flatten()
-                .key_replacement("regex:(user|admin|guest)_", "")
-                .value_replacement("regex:@example\\.com$", "@company.org")
+                .key_replacement("r'(user|admin|guest)_'", "")
+                .value_replacement("r'@example\\.com$'", "@company.org")
                 .execute(black_box(json.as_str()))
                 .expect("Failed");
             black_box(result);
@@ -587,7 +587,7 @@ fn stress_09_regex_heavy(c: &mut Criterion) {
         b.iter(|| {
             let result = JSONTools::new()
                 .flatten()
-                .key_replacement("regex:(user|admin|guest)_(id|email|name)_\\d+", "$2")
+                .key_replacement("r'(user|admin|guest)_(id|email|name)_\\d+'", "$2")
                 .handle_key_collision(true)
                 .execute(black_box(json.as_str()))
                 .expect("Failed");

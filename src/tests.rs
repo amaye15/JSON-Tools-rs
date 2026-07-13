@@ -139,8 +139,8 @@ mod unit_tests {
         let json = r#"{"user_name": "John", "admin_role": "super", "temp_data": "test"}"#;
         let result = JSONTools::new()
             .flatten()
-            .key_replacement("^(user|admin)_", "")
-            .value_replacement("^super$", "administrator")
+            .key_replacement("r'^(user|admin)_'", "")
+            .value_replacement("r'^super$'", "administrator")
             .execute(json)
             .unwrap();
         let flattened = extract_single(result);
@@ -149,6 +149,85 @@ mod unit_tests {
         assert_eq!(parsed["name"], "John");
         assert_eq!(parsed["role"], "administrator");
         assert_eq!(parsed["temp_data"], "test");
+    }
+
+    #[test]
+    fn test_bare_pattern_with_regex_metacharacters_is_literal() {
+        // Regression test: patterns are only regex when explicitly wrapped in r'...'.
+        // A bare pattern containing regex metacharacters (. $ ( ) etc.) must match those
+        // characters literally, not as regex syntax -- e.g. "." must not match "any char".
+        let json = r#"{"price": "$100", "note": "a.b.c", "status": "end$"}"#;
+        let result = JSONTools::new()
+            .flatten()
+            // "$" is a regex end-anchor if compiled as regex; as a literal it must match
+            // the literal dollar sign in "$100" and nowhere else.
+            .value_replacement("$100", "USD 100")
+            // "." is "any character" as regex; as a literal it must only match a real dot.
+            .key_replacement("note", "dotted")
+            .execute(json)
+            .unwrap();
+        let parsed: Value = serde_json::from_str(&extract_single(result)).unwrap();
+
+        assert_eq!(parsed["price"], "USD 100");
+        assert_eq!(parsed["dotted"], "a.b.c");
+        // "end$" is untouched: the literal pattern "$100" doesn't appear in it.
+        assert_eq!(parsed["status"], "end$");
+    }
+
+    #[test]
+    fn test_r_quote_wrapped_pattern_is_regex() {
+        let json = r#"{"a.b.c": "x"}"#;
+        // "." unwrapped would only match a literal dot; r'.' means "any character".
+        let result = JSONTools::new()
+            .unflatten()
+            .value_replacement("r'.'", "Y")
+            .execute(json)
+            .unwrap();
+        let parsed: Value = serde_json::from_str(&extract_single(result)).unwrap();
+        // Every character of "x" (just one char) gets replaced -- confirms regex semantics.
+        assert_eq!(parsed["a"]["b"]["c"], "Y");
+    }
+
+    #[test]
+    fn test_malformed_r_quote_regex_is_silently_ignored() {
+        // An r'...'-wrapped pattern that fails to compile as regex is treated as "no
+        // match" for that pattern rather than erroring -- there's no config-time
+        // validation point for replacement patterns.
+        let json = r#"{"key": "value"}"#;
+        let result = JSONTools::new()
+            .flatten()
+            .key_replacement("r'[invalid'", "replacement")
+            .value_replacement("r'*invalid'", "replacement")
+            .execute(json)
+            .unwrap();
+        let parsed: Value = serde_json::from_str(&extract_single(result)).unwrap();
+        assert_eq!(parsed["key"], "value");
+    }
+
+    #[test]
+    fn test_r_quote_pattern_edge_cases() {
+        // Too short to be a valid r'...' wrapper (would panic on naive slicing if the
+        // length guard were missing) -- both fall back to being literal 2-character text.
+        let json = r#"{"a": "r'", "b": "not it"}"#;
+        let result = JSONTools::new()
+            .flatten()
+            .value_replacement("r'", "X")
+            .execute(json)
+            .unwrap();
+        let parsed: Value = serde_json::from_str(&extract_single(result)).unwrap();
+        assert_eq!(parsed["a"], "X"); // literal "r'" matched and replaced
+        assert_eq!(parsed["b"], "not it");
+
+        // r''  (empty regex) is a valid, if unusual, wrapped pattern -- matches everywhere,
+        // inserting the replacement before every character (and at the end).
+        let json2 = r#"{"a": "hi"}"#;
+        let result2 = JSONTools::new()
+            .flatten()
+            .value_replacement("r''", "-")
+            .execute(json2)
+            .unwrap();
+        let parsed2: Value = serde_json::from_str(&extract_single(result2)).unwrap();
+        assert_eq!(parsed2["a"], "-h-i-");
     }
 
     // ===== FILTERING TESTS =====
@@ -557,7 +636,7 @@ mod unit_tests {
         let result = JSONTools::new()
             .flatten()
             .separator("::")
-            .key_replacement("(User|Admin|Guest)_", "")
+            .key_replacement("r'(User|Admin|Guest)_'", "")
             .handle_key_collision(true)
             .execute(json)
             .unwrap();
@@ -577,7 +656,7 @@ mod unit_tests {
         let json = r#"{"User_name": "John", "Admin_name": "Jane", "Guest_name": "Bob"}"#;
         let result = JSONTools::new()
             .flatten()
-            .key_replacement("(User|Admin|Guest)_", "")
+            .key_replacement("r'(User|Admin|Guest)_'", "")
             .handle_key_collision(true)
             .execute(json)
             .unwrap();
@@ -602,7 +681,7 @@ mod unit_tests {
         let result = JSONTools::new()
             .unflatten()
             .separator("::")
-            .key_replacement("name::\\d+", "user_name")
+            .key_replacement("r'name::\\d+'", "user_name")
             .handle_key_collision(true)
             .execute(flattened)
             .unwrap();
@@ -627,7 +706,7 @@ mod unit_tests {
         let json = r#"{"User_name": "John", "Admin_name": "Jane"}"#;
         let result = JSONTools::new()
             .flatten()
-            .key_replacement("(User|Admin)_", "")
+            .key_replacement("r'(User|Admin)_'", "")
             .handle_key_collision(true)
             .execute(json)
             .unwrap();
@@ -654,7 +733,7 @@ mod unit_tests {
         let json = r#"{"User_name": "John", "Admin_email": "jane@example.com"}"#;
         let result = JSONTools::new()
             .flatten()
-            .key_replacement("(User|Admin)_", "")
+            .key_replacement("r'(User|Admin)_'", "")
             .handle_key_collision(true)
             .execute(json)
             .unwrap();
@@ -672,7 +751,7 @@ mod unit_tests {
         let result = JSONTools::new()
             .flatten()
             .separator("__")
-            .key_replacement("(User|Admin)_", "")
+            .key_replacement("r'(User|Admin)_'", "")
             .handle_key_collision(true)
             .execute(json)
             .unwrap();
@@ -697,7 +776,7 @@ mod unit_tests {
         let json = r#"{"User_name": "John", "Admin_name": 42, "Guest_name": true}"#;
         let result = JSONTools::new()
             .flatten()
-            .key_replacement("(User|Admin|Guest)_", "")
+            .key_replacement("r'(User|Admin|Guest)_'", "")
             .handle_key_collision(true)
             .execute(json)
             .unwrap();
@@ -726,7 +805,7 @@ mod unit_tests {
         let json = r#"{"User_name": "John", "Admin_name": "", "Guest_name": "Bob"}"#;
         let result = JSONTools::new()
             .flatten()
-            .key_replacement("(User|Admin|Guest)_", "")
+            .key_replacement("r'(User|Admin|Guest)_'", "")
             .remove_empty_strings(true)
             .handle_key_collision(true)
             .execute(json)
@@ -1631,8 +1710,8 @@ mod parallel_regex_cache_tests {
         // Process with parallel threshold = 10 (should use parallel processing)
         let result = JSONTools::new()
             .flatten()
-            .key_replacement("(user|admin|guest)_", "")
-            .value_replacement("@example\\.com", "@company.org")
+            .key_replacement("r'(user|admin|guest)_'", "")
+            .value_replacement("r'@example\\.com'", "@company.org")
             .parallel_threshold(10)
             .execute(json_refs)
             .expect("Parallel processing failed");
@@ -1690,7 +1769,7 @@ mod parallel_regex_cache_tests {
         // Sequential processing
         let sequential_result = JSONTools::new()
             .flatten()
-            .key_replacement("^(temp|old|user)_", "new_")
+            .key_replacement("r'^(temp|old|user)_'", "new_")
             .value_replacement("^test", "updated")
             .parallel_threshold(usize::MAX) // Force sequential
             .execute(json_refs.clone())
@@ -1699,7 +1778,7 @@ mod parallel_regex_cache_tests {
         // Parallel processing
         let parallel_result = JSONTools::new()
             .flatten()
-            .key_replacement("^(temp|old|user)_", "new_")
+            .key_replacement("r'^(temp|old|user)_'", "new_")
             .value_replacement("^test", "updated")
             .parallel_threshold(1) // Force parallel
             .execute(json_refs)
@@ -1739,9 +1818,9 @@ mod parallel_regex_cache_tests {
         // Process with multiple regex patterns
         let result = JSONTools::new()
             .flatten()
-            .key_replacement("field_[0-9]+_", "f_")
-            .key_replacement("data_[0-9]+_", "d_")
-            .value_replacement("value([0-9]+)", "val_$1")
+            .key_replacement("r'field_[0-9]+_'", "f_")
+            .key_replacement("r'data_[0-9]+_'", "d_")
+            .value_replacement("r'value([0-9]+)'", "val_$1")
             .parallel_threshold(10)
             .execute(json_refs)
             .expect("Processing failed");

@@ -31,7 +31,7 @@
 //!     .flatten()
 //!     .separator("::")
 //!     .lowercase_keys(true)
-//!     .key_replacement("(User|Admin)_", "")
+//!     .key_replacement("r'(User|Admin)_'", "")
 //!     .value_replacement("@example.com", "@company.org")
 //!     .remove_empty_strings(true)
 //!     .remove_nulls(true)
@@ -58,7 +58,7 @@
 //!     .unflatten()
 //!     .separator("::")
 //!     .lowercase_keys(true)
-//!     .key_replacement("(User|Admin)_", "")
+//!     .key_replacement("r'(User|Admin)_'", "")
 //!     .value_replacement("@company.org", "@example.com")
 //!     .remove_empty_strings(true)
 //!     .remove_nulls(true)
@@ -193,7 +193,7 @@
 //! let json = r#"{"user_name": "John", "admin_name": "Jane", "guest_name": "Bob"}"#;
 //! let result = JSONTools::new()
 //!     .flatten()
-//!     .key_replacement("(user|admin)_", "person_") // Regex pattern
+//!     .key_replacement("r'(user|admin)_'", "person_") // Regex pattern
 //!     .execute(json).unwrap();
 //!
 //! match result {
@@ -238,7 +238,7 @@
 //! let json = r#"{"role": "super", "level": "admin", "type": "user"}"#;
 //! let result = JSONTools::new()
 //!     .flatten()
-//!     .value_replacement("^(super|admin)$", "administrator") // Regex pattern
+//!     .value_replacement("r'^(super|admin)$'", "administrator") // Regex pattern
 //!     .execute(json).unwrap();
 //!
 //! match result {
@@ -332,7 +332,7 @@
 //! let json = r#"{"user_name": "John", "admin_name": "Jane"}"#;
 //! let result = JSONTools::new()
 //!     .flatten()
-//!     .key_replacement("(user|admin)_", "") // This creates collision: both become "name"
+//!     .key_replacement("r'(user|admin)_'", "") // This creates collision: both become "name"
 //!     .handle_key_collision(true) // Collect values into array
 //!     .execute(json).unwrap();
 //!
@@ -379,10 +379,10 @@
 //!     .flatten()
 //!     .separator("::") // Use custom separator
 //!     .lowercase_keys(true) // Convert all keys to lowercase
-//!     .key_replacement("(user|admin)_profile::", "person::") // Normalize profile keys
+//!     .key_replacement("r'(user|admin)_profile::'", "person::") // Normalize profile keys
 //!     .key_replacement("personal_info::", "info::") // Simplify nested keys
 //!     .value_replacement("@example.com", "@company.org") // Update email domain
-//!     .value_replacement("^super$", "administrator") // Normalize role values
+//!     .value_replacement("r'^super$'", "administrator") // Normalize role values
 //!     .remove_empty_strings(true) // Remove empty string values
 //!     .remove_nulls(true) // Remove null values
 //!     .remove_empty_objects(true) // Remove empty objects

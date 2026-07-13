@@ -150,7 +150,7 @@ fn combo_2f_02_lowercase_key_replacement(c: &mut Criterion) {
         b.iter(|| {
             let result = JSONTools::new()
                 .flatten()
-                .key_replacement("regex:(first|last)Name", "name")
+                .key_replacement("r'(first|last)Name'", "name")
                 .execute(black_box(json))
                 .expect("Failed");
             black_box(result);
@@ -162,7 +162,7 @@ fn combo_2f_02_lowercase_key_replacement(c: &mut Criterion) {
             let result = JSONTools::new()
                 .flatten()
                 .lowercase_keys(true)
-                .key_replacement("regex:(first|last)name", "name")
+                .key_replacement("r'(first|last)name'", "name")
                 .execute(black_box(json))
                 .expect("Failed");
             black_box(result);
@@ -193,7 +193,7 @@ fn combo_2f_03_key_value_replacement(c: &mut Criterion) {
         b.iter(|| {
             let result = JSONTools::new()
                 .flatten()
-                .key_replacement("regex:_id$", "Id")
+                .key_replacement("r'_id$'", "Id")
                 .execute(black_box(json))
                 .expect("Failed");
             black_box(result);
@@ -215,7 +215,7 @@ fn combo_2f_03_key_value_replacement(c: &mut Criterion) {
         b.iter(|| {
             let result = JSONTools::new()
                 .flatten()
-                .key_replacement("regex:_id$", "Id")
+                .key_replacement("r'_id$'", "Id")
                 .value_replacement("@example.com", "@company.org")
                 .execute(black_box(json))
                 .expect("Failed");
@@ -390,7 +390,7 @@ fn combo_3f_01_sep_lower_keyrep(c: &mut Criterion) {
         b.iter(|| {
             let result = JSONTools::new()
                 .flatten()
-                .key_replacement("regex:_id$", "Id")
+                .key_replacement("r'_id$'", "Id")
                 .execute(black_box(json))
                 .expect("Failed");
             black_box(result);
@@ -415,7 +415,7 @@ fn combo_3f_01_sep_lower_keyrep(c: &mut Criterion) {
             let result = JSONTools::new()
                 .flatten()
                 .separator("::")
-                .key_replacement("regex:_id$", "Id")
+                .key_replacement("r'_id$'", "Id")
                 .execute(black_box(json))
                 .expect("Failed");
             black_box(result);
@@ -427,7 +427,7 @@ fn combo_3f_01_sep_lower_keyrep(c: &mut Criterion) {
             let result = JSONTools::new()
                 .flatten()
                 .lowercase_keys(true)
-                .key_replacement("regex:_id$", "id")
+                .key_replacement("r'_id$'", "id")
                 .execute(black_box(json))
                 .expect("Failed");
             black_box(result);
@@ -441,7 +441,7 @@ fn combo_3f_01_sep_lower_keyrep(c: &mut Criterion) {
                 .flatten()
                 .separator("::")
                 .lowercase_keys(true)
-                .key_replacement("regex:_id$", "id")
+                .key_replacement("r'_id$'", "id")
                 .execute(black_box(json))
                 .expect("Failed");
             black_box(result);
@@ -468,7 +468,7 @@ fn combo_3f_02_filters_convert_collision(c: &mut Criterion) {
         b.iter(|| {
             let result = JSONTools::new()
                 .flatten()
-                .key_replacement("regex:(user|admin)_", "")
+                .key_replacement("r'(user|admin)_'", "")
                 .execute(black_box(collision_json))
                 .expect("Failed");
             black_box(result);
@@ -480,7 +480,7 @@ fn combo_3f_02_filters_convert_collision(c: &mut Criterion) {
         b.iter(|| {
             let result = JSONTools::new()
                 .flatten()
-                .key_replacement("regex:(user|admin)_", "")
+                .key_replacement("r'(user|admin)_'", "")
                 .remove_empty_strings(true)
                 .remove_nulls(true)
                 .execute(black_box(collision_json))
@@ -493,7 +493,7 @@ fn combo_3f_02_filters_convert_collision(c: &mut Criterion) {
         b.iter(|| {
             let result = JSONTools::new()
                 .flatten()
-                .key_replacement("regex:(user|admin)_", "")
+                .key_replacement("r'(user|admin)_'", "")
                 .auto_convert_types(true)
                 .execute(black_box(collision_json))
                 .expect("Failed");
@@ -505,7 +505,7 @@ fn combo_3f_02_filters_convert_collision(c: &mut Criterion) {
         b.iter(|| {
             let result = JSONTools::new()
                 .flatten()
-                .key_replacement("regex:(user|admin)_", "")
+                .key_replacement("r'(user|admin)_'", "")
                 .handle_key_collision(true)
                 .execute(black_box(collision_json))
                 .expect("Failed");
@@ -518,7 +518,7 @@ fn combo_3f_02_filters_convert_collision(c: &mut Criterion) {
         b.iter(|| {
             let result = JSONTools::new()
                 .flatten()
-                .key_replacement("regex:(user|admin)_", "")
+                .key_replacement("r'(user|admin)_'", "")
                 .remove_empty_strings(true)
                 .remove_nulls(true)
                 .auto_convert_types(true)
@@ -555,7 +555,7 @@ fn combo_3f_03_key_value_filters(c: &mut Criterion) {
             let result = JSONTools::new()
                 .flatten()
                 .lowercase_keys(true)
-                .key_replacement("regex:_id$", "id")
+                .key_replacement("r'_id$'", "id")
                 .execute(black_box(json))
                 .expect("Failed");
             black_box(result);
@@ -567,7 +567,7 @@ fn combo_3f_03_key_value_filters(c: &mut Criterion) {
             let result = JSONTools::new()
                 .flatten()
                 .value_replacement("@example.com", "@company.org")
-                .value_replacement("regex:^\\$", "USD ")
+                .value_replacement("r'^\\$'", "USD ")
                 .execute(black_box(json))
                 .expect("Failed");
             black_box(result);
@@ -592,9 +592,9 @@ fn combo_3f_03_key_value_filters(c: &mut Criterion) {
             let result = JSONTools::new()
                 .flatten()
                 .lowercase_keys(true)
-                .key_replacement("regex:_id$", "id")
+                .key_replacement("r'_id$'", "id")
                 .value_replacement("@example.com", "@company.org")
-                .value_replacement("regex:^\\$", "USD ")
+                .value_replacement("r'^\\$'", "USD ")
                 .remove_empty_strings(true)
                 .remove_nulls(true)
                 .execute(black_box(json))
@@ -632,10 +632,10 @@ fn combo_max_all_features(c: &mut Criterion) {
                 .flatten()
                 .separator("::")
                 .lowercase_keys(true)
-                .key_replacement("regex:_id$", "id")
+                .key_replacement("r'_id$'", "id")
                 .key_replacement("name", "fullname")
                 .value_replacement("@example.com", "@company.org")
-                .value_replacement("regex:^\\$", "USD ")
+                .value_replacement("r'^\\$'", "USD ")
                 .remove_empty_strings(true)
                 .remove_nulls(true)
                 .remove_empty_objects(true)

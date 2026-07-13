@@ -208,7 +208,7 @@ impl JSONTools {
     /// let json = r#"{"user_name": "John", "admin_name": "Jane"}"#;
     /// let result = JSONTools::new()
     ///     .flatten()
-    ///     .key_replacement("(user|admin)_", "person_")
+    ///     .key_replacement("r'(user|admin)_'", "person_")
     ///     .execute(json).unwrap();
     ///
     /// // Literal pattern (if regex compilation fails)
@@ -238,7 +238,7 @@ impl JSONTools {
     /// let json = r#"{"role": "super", "level": "admin"}"#;
     /// let result = JSONTools::new()
     ///     .flatten()
-    ///     .value_replacement("^(super|admin)$", "administrator")
+    ///     .value_replacement("r'^(super|admin)$'", "administrator")
     ///     .execute(json).unwrap();
     ///
     /// // Literal pattern (if regex compilation fails)

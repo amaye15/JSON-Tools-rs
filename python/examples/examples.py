@@ -88,7 +88,7 @@ def main() -> None:
     replacement_tools = (
         json_tools_rs.JSONTools()
         .flatten()
-        .key_replacement("^(user|admin)_", "")  # Standard Rust regex syntax
+        .key_replacement("r'^(user|admin)_'", "")  # Standard Rust regex syntax
         .value_replacement("@example.com", "@company.org")
     )
 
@@ -236,7 +236,7 @@ def main() -> None:
     handle_collision_tools = (
         json_tools_rs.JSONTools()
         .flatten()
-        .key_replacement("(user|admin|guest)_", "")  # Standard Rust regex syntax
+        .key_replacement("r'(user|admin|guest)_'", "")  # Standard Rust regex syntax
         .handle_key_collision(True)
     )
 
@@ -313,7 +313,7 @@ def main() -> None:
         json_tools_rs.JSONTools()
         .normal()
         .lowercase_keys(True)
-        .key_replacement("^user_", "")
+        .key_replacement("r'^user_'", "")
         .value_replacement("@example.com", "@company.org")
         .remove_empty_strings(True)
         .remove_nulls(True)

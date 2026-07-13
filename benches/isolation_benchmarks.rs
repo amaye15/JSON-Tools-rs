@@ -233,7 +233,7 @@ fn iso_04_key_replacement_only(c: &mut Criterion) {
         b.iter(|| {
             let result = JSONTools::new()
                 .flatten()
-                .key_replacement("regex:(first|last)Name", "name")
+                .key_replacement("r'(first|last)Name'", "name")
                 .execute(black_box(json))
                 .expect("Failed");
             black_box(result);
@@ -245,9 +245,9 @@ fn iso_04_key_replacement_only(c: &mut Criterion) {
         b.iter(|| {
             let result = JSONTools::new()
                 .flatten()
-                .key_replacement("regex:(first|last)Name", "name")
-                .key_replacement("regex:_id$", "Id")
-                .key_replacement("regex:^product", "prod")
+                .key_replacement("r'(first|last)Name'", "name")
+                .key_replacement("r'_id$'", "Id")
+                .key_replacement("r'^product'", "prod")
                 .execute(black_box(json))
                 .expect("Failed");
             black_box(result);
@@ -309,7 +309,7 @@ fn iso_05_value_replacement_only(c: &mut Criterion) {
         b.iter(|| {
             let result = JSONTools::new()
                 .flatten()
-                .value_replacement("regex:@example\\.com$", "@company.org")
+                .value_replacement("r'@example\\.com$'", "@company.org")
                 .execute(black_box(json))
                 .expect("Failed");
             black_box(result);
@@ -321,9 +321,9 @@ fn iso_05_value_replacement_only(c: &mut Criterion) {
         b.iter(|| {
             let result = JSONTools::new()
                 .flatten()
-                .value_replacement("regex:@example\\.com$", "@company.org")
-                .value_replacement("regex:^\\+1-555-", "+1-800-")
-                .value_replacement("regex:^\\$", "USD ")
+                .value_replacement("r'@example\\.com$'", "@company.org")
+                .value_replacement("r'^\\+1-555-'", "+1-800-")
+                .value_replacement("r'^\\$'", "USD ")
                 .execute(black_box(json))
                 .expect("Failed");
             black_box(result);
@@ -466,7 +466,7 @@ fn iso_08_key_collision_only(c: &mut Criterion) {
         b.iter(|| {
             let result = JSONTools::new()
                 .flatten()
-                .key_replacement("regex:(user|admin|guest)_", "")
+                .key_replacement("r'(user|admin|guest)_'", "")
                 .execute(black_box(collision_json))
                 .expect("Failed");
             black_box(result);
@@ -478,7 +478,7 @@ fn iso_08_key_collision_only(c: &mut Criterion) {
         b.iter(|| {
             let result = JSONTools::new()
                 .flatten()
-                .key_replacement("regex:(user|admin|guest)_", "")
+                .key_replacement("r'(user|admin|guest)_'", "")
                 .handle_key_collision(true)
                 .execute(black_box(collision_json))
                 .expect("Failed");

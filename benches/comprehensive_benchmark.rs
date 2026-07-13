@@ -544,8 +544,8 @@ fn bench_key_replacement(c: &mut Criterion) {
             b.iter(|| {
                 let result = JSONTools::new()
                     .flatten()
-                    .key_replacement("regex:(first|last)Name", "name")
-                    .key_replacement("regex:_id$", "Id")
+                    .key_replacement("r'(first|last)Name'", "name")
+                    .key_replacement("r'_id$'", "Id")
                     .execute(black_box(json.as_str()))
                     .expect("Flatten failed");
                 black_box(result);
@@ -587,8 +587,8 @@ fn bench_value_replacement(c: &mut Criterion) {
             b.iter(|| {
                 let result = JSONTools::new()
                     .flatten()
-                    .value_replacement("regex:@example\\.com$", "@company.org")
-                    .value_replacement("regex:^\\+1-555-", "+1-800-")
+                    .value_replacement("r'@example\\.com$'", "@company.org")
+                    .value_replacement("r'^\\+1-555-'", "+1-800-")
                     .execute(black_box(json.as_str()))
                     .expect("Flatten failed");
                 black_box(result);
@@ -725,7 +725,7 @@ fn bench_key_collision(c: &mut Criterion) {
         b.iter(|| {
             let result = JSONTools::new()
                 .flatten()
-                .key_replacement("regex:(user|admin|guest)_", "")
+                .key_replacement("r'(user|admin|guest)_'", "")
                 .execute(black_box(collision_json))
                 .expect("Flatten failed");
             black_box(result);
@@ -736,7 +736,7 @@ fn bench_key_collision(c: &mut Criterion) {
         b.iter(|| {
             let result = JSONTools::new()
                 .flatten()
-                .key_replacement("regex:(user|admin|guest)_", "")
+                .key_replacement("r'(user|admin|guest)_'", "")
                 .handle_key_collision(true)
                 .execute(black_box(collision_json))
                 .expect("Flatten failed");
@@ -804,7 +804,7 @@ fn bench_all_key_transformations(c: &mut Criterion) {
                     .flatten()
                     .separator("::")
                     .lowercase_keys(true)
-                    .key_replacement("regex:_id$", "Id")
+                    .key_replacement("r'_id$'", "Id")
                     .key_replacement("name", "fullName")
                     .execute(black_box(json.as_str()))
                     .expect("Flatten failed");
@@ -834,8 +834,8 @@ fn bench_all_value_transformations(c: &mut Criterion) {
                 let result = JSONTools::new()
                     .flatten()
                     .value_replacement("@example.com", "@company.org")
-                    .value_replacement("regex:^USA$", "United States")
-                    .value_replacement("regex:^\\+1-555-", "+1-800-")
+                    .value_replacement("r'^USA$'", "United States")
+                    .value_replacement("r'^\\+1-555-'", "+1-800-")
                     .execute(black_box(json.as_str()))
                     .expect("Flatten failed");
                 black_box(result);
@@ -865,10 +865,10 @@ fn bench_comprehensive(c: &mut Criterion) {
                     .flatten()
                     .separator("::")
                     .lowercase_keys(true)
-                    .key_replacement("regex:_id$", "Id")
+                    .key_replacement("r'_id$'", "Id")
                     .key_replacement("name", "fullName")
                     .value_replacement("@example.com", "@company.org")
-                    .value_replacement("regex:^USA$", "United States")
+                    .value_replacement("r'^USA$'", "United States")
                     .remove_empty_strings(true)
                     .remove_nulls(true)
                     .remove_empty_objects(true)

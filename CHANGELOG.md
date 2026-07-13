@@ -5,6 +5,40 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed (BREAKING)
+- **`key_replacement`/`value_replacement` pattern syntax**: patterns are now literal
+  (exact substring match) by default; wrap a pattern in `r'...'` (e.g. `r'^admin_'`) to
+  use it as a regex. Previously *every* pattern was always compiled as regex regardless
+  of content, with silent fallback to literal matching only on a regex syntax error --
+  meaning a pattern with regex metacharacters (`.`, `$`, `(`, etc.) could never be matched
+  literally, and the documented `regex:` prefix (see Fixed, below) never actually worked.
+  **Action needed**: any pattern relying on regex syntax (anchors, character classes,
+  alternation, capture groups, etc.) must now be wrapped in `r'...'`.
+
+### Fixed
+- **`has_escape` scanner bug**: the tape scanner's detection of "does this key/value
+  contain a JSON escape sequence" only recognized escaped quotes (`\"`) and backslash
+  runs immediately before a matched quote character. Any escape not adjacent to a quote
+  -- a lone `\n`, `\t`, `\r`, `\b`, `\f`, `\/`, or `\uXXXX` -- was invisible to it, so
+  `auto_convert_types`, `value_replacement`, `key_replacement`, `lowercase_keys`, and
+  collision handling would silently operate on the still-escaped text for such strings
+  (e.g. `.auto_convert_types(true)` failing to convert `"123\t"` to a number).
+- The documented `regex:` prefix for replacement patterns was never implemented -- no
+  code anywhere recognized it, so patterns written the documented way silently never
+  matched anything. Replaced by the `r'...'` syntax described above.
+- `value_replacement` + `auto_convert_types` together unescaped the same string twice
+  when the replacement pattern didn't match.
+- `batch_flatten`'s parallel dispatch (`std::thread::scope`) spawned fresh OS threads on
+  every `.execute()` call; at the default `parallel_threshold` this was measurably
+  *slower* than sequential processing on Windows and Linux for small-to-medium batches.
+  Replaced with `rayon`'s persistent work-stealing pool.
+- `unflatten`'s object tree used a hash map plus a full key sort at every serialized
+  object node purely to get deterministic output; switched to an order-preserving map
+  (no sort needed, and no more O(n) lookup degrading to O(n^2) for JSON objects used as
+  wide keyed maps, e.g. many `"user_<id>.field"` entries).
+
 ## [0.9.0] - 2026-03-09
 
 ### Added

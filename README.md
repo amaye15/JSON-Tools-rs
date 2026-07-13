@@ -83,7 +83,7 @@ let result = JSONTools::new()
     .flatten()
     .separator("::")
     .lowercase_keys(true)
-    .key_replacement("(User|Admin)_", "")
+    .key_replacement("r'(User|Admin)_'", "")
     .value_replacement("@example.com", "@company.org")
     .remove_empty_strings(true)
     .remove_nulls(true)
@@ -209,8 +209,8 @@ print(type(result))  # <class 'pandas.core.frame.DataFrame'>
 | `.remove_nulls(bool)` | Remove null values | `.remove_nulls(true)` |
 | `.remove_empty_objects(bool)` | Remove empty objects `{}` | `.remove_empty_objects(true)` |
 | `.remove_empty_arrays(bool)` | Remove empty arrays `[]` | `.remove_empty_arrays(true)` |
-| `.key_replacement(find, repl)` | Replace key patterns (regex) | `.key_replacement("user_", "")` |
-| `.value_replacement(find, repl)` | Replace value patterns (regex) | `.value_replacement("@old.com", "@new.com")` |
+| `.key_replacement(find, repl)` | Replace key patterns (literal, or regex via `r'...'`) | `.key_replacement("r'user_'", "")` |
+| `.value_replacement(find, repl)` | Replace value patterns (literal, or regex via `r'...'`) | `.value_replacement("@old.com", "@new.com")` |
 | `.handle_key_collision(bool)` | Collect colliding keys into arrays | `.handle_key_collision(true)` |
 | `.auto_convert_types(bool)` | Convert types (nums, bools, dates) | `.auto_convert_types(true)` |
 | `.parallel_threshold(n)` | Min batch size for parallelism | `.parallel_threshold(500)` |

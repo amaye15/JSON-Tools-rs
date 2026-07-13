@@ -7,7 +7,7 @@ When key replacements or transformations cause multiple keys to map to the same 
 ```rust
 let result = JSONTools::new()
     .flatten()
-    .key_replacement("regex:(User|Admin)_", "")
+    .key_replacement("r'(User|Admin)_'", "")
     .handle_key_collision(true)
     .execute(json)?;
 ```
@@ -15,7 +15,7 @@ let result = JSONTools::new()
 ```python
 result = (jt.JSONTools()
     .flatten()
-    .key_replacement("regex:(User|Admin)_", "")
+    .key_replacement("r'(User|Admin)_'", "")
     .handle_key_collision(True)
     .execute(data)
 )
@@ -29,7 +29,7 @@ With `.handle_key_collision(true)`, when two keys collide after transformation, 
 // Input
 {"User_name": "John", "Admin_name": "Jane"}
 
-// With key_replacement("regex:(User|Admin)_", "") + handle_key_collision(true)
+// With key_replacement("r'(User|Admin)_'", "") + handle_key_collision(true)
 // Output
 {"name": ["John", "Jane"]}
 ```

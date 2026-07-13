@@ -15,9 +15,9 @@ fn main() {
 
     match JSONTools::new()
         .flatten()
-        .key_replacement("regex:(user|admin)_profile_", "person_")
+        .key_replacement("r'(user|admin)_profile_'", "person_")
         .value_replacement("@example.com", "@company.org")
-        .value_replacement("regex:^super$", "administrator")
+        .value_replacement("r'^super$'", "administrator")
         .execute(complex_json)
     {
         Ok(JsonOutput::Single(result)) => {
@@ -39,7 +39,7 @@ fn main() {
     match JSONTools::new()
         .flatten()
         .separator("::")
-        .key_replacement("regex:(user|admin|guest)_", "")
+        .key_replacement("r'(user|admin|guest)_'", "")
         .handle_key_collision(true)
         .execute(collision_json)
     {
@@ -56,7 +56,7 @@ fn main() {
     println!("3. Key Collision Handling - Collect Strategy:");
     match JSONTools::new()
         .flatten()
-        .key_replacement("regex:(user|admin|guest)_", "")
+        .key_replacement("r'(user|admin|guest)_'", "")
         .handle_key_collision(true)
         .execute(collision_json)
     {
@@ -164,7 +164,7 @@ fn main() {
         .separator("::")
         .lowercase_keys(true)
         .key_replacement(
-            "regex:(api_response|user_data|personal_info|account_settings)::",
+            "r'(api_response|user_data|personal_info|account_settings)::'",
             "",
         )
         .key_replacement("_", ".")

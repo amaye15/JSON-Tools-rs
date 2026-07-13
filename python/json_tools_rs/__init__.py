@@ -37,7 +37,7 @@ Advanced Features:
     ...     .separator("::")
     ...     .remove_empty_strings(True)
     ...     .remove_nulls(True)
-    ...     .key_replacement("(User|Admin)_", "")  # Standard Rust regex syntax
+    ...     .key_replacement("r'(User|Admin)_'", "")  # Wrap in r'...' for regex
     ...     .handle_key_collision(True))
     >>>
     >>> data = {"User_name": "John", "Admin_name": "", "Guest_name": "Bob"}

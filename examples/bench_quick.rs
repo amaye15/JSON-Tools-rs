@@ -201,10 +201,10 @@ fn run_scenarios() -> Vec<Row> {
             .flatten()
             .separator("::")
             .lowercase_keys(true)
-            .key_replacement("regex:_id$", "id")
+            .key_replacement("r'_id$'", "id")
             .key_replacement("name", "fullname")
             .value_replacement("@example.com", "@company.org")
-            .value_replacement("regex:^\\$", "USD ")
+            .value_replacement("r'^\\$'", "USD ")
             .remove_empty_strings(true)
             .remove_nulls(true)
             .remove_empty_objects(true)
@@ -219,8 +219,8 @@ fn run_scenarios() -> Vec<Row> {
     secs("flatten", "regex_replacements", "medium", &mut || {
         JSONTools::new()
             .flatten()
-            .key_replacement("regex:_id$", "id")
-            .value_replacement("regex:^\\$", "USD ")
+            .key_replacement("r'_id$'", "id")
+            .value_replacement("r'^\\$'", "USD ")
             .execute(medium)
             .unwrap();
     });

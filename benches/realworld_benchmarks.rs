@@ -416,7 +416,7 @@ fn realworld_01_aws_cloudtrail(c: &mut Criterion) {
         b.iter(|| {
             let result = JSONTools::new()
                 .flatten()
-                .key_replacement("regex:^Records\\.0\\.", "")
+                .key_replacement("r'^Records\\.0\\.'", "")
                 .remove_empty_objects(true)
                 .remove_empty_arrays(true)
                 .execute(black_box(json))
@@ -450,7 +450,7 @@ fn realworld_02_github_api(c: &mut Criterion) {
         b.iter(|| {
             let result = JSONTools::new()
                 .flatten()
-                .key_replacement("regex:_([a-z])", "${1}")
+                .key_replacement("r'_([a-z])'", "${1}")
                 .remove_nulls(true)
                 .auto_convert_types(true)
                 .execute(black_box(json))
@@ -512,7 +512,7 @@ fn realworld_03_kubernetes(c: &mut Criterion) {
         b.iter(|| {
             let result = JSONTools::new()
                 .flatten()
-                .key_replacement("regex:^metadata\\.(labels|annotations)\\.", "$1_")
+                .key_replacement("r'^metadata\\.(labels|annotations)\\.'", "$1_")
                 .execute(black_box(json))
                 .expect("Failed");
             black_box(result);
@@ -544,7 +544,7 @@ fn realworld_04_elasticsearch(c: &mut Criterion) {
         b.iter(|| {
             let result = JSONTools::new()
                 .flatten()
-                .key_replacement("regex:^_source\\.", "")
+                .key_replacement("r'^_source\\.'", "")
                 .remove_nulls(true)
                 .auto_convert_types(true)
                 .execute(black_box(json))
@@ -607,7 +607,7 @@ fn realworld_05_stripe_api(c: &mut Criterion) {
         b.iter(|| {
             let result = JSONTools::new()
                 .flatten()
-                .key_replacement("regex:^charges\\.data\\.0\\.", "charge_")
+                .key_replacement("r'^charges\\.data\\.0\\.'", "charge_")
                 .remove_nulls(true)
                 .execute(black_box(json))
                 .expect("Failed");
@@ -641,7 +641,7 @@ fn realworld_06_twitter_api(c: &mut Criterion) {
             let result = JSONTools::new()
                 .flatten()
                 .separator("_")
-                .key_replacement("regex:^data\\.", "tweet_")
+                .key_replacement("r'^data\\.'", "tweet_")
                 .auto_convert_types(true)
                 .execute(black_box(json))
                 .expect("Failed");
@@ -654,7 +654,7 @@ fn realworld_06_twitter_api(c: &mut Criterion) {
         b.iter(|| {
             let result = JSONTools::new()
                 .normal()
-                .key_replacement("regex:public_metrics\\.", "")
+                .key_replacement("r'public_metrics\\.'", "")
                 .auto_convert_types(true)
                 .remove_empty_arrays(true)
                 .execute(black_box(json))

@@ -7,7 +7,7 @@
 //! `scan_and_fixup`, then walk the tape writing directly to output with inline
 //! value transforms, key transforms, and rollback-based filtering.
 
-use crate::cache::get_cached_regex;
+use crate::cache::{get_cached_regex, parse_pattern, ParsedPattern};
 use crate::config::ProcessingConfig;
 use crate::convert::try_convert_string_to_json_bytes;
 use crate::error::JsonToolsError;
@@ -31,8 +31,10 @@ use std::borrow::Cow;
 /// This eliminates duplication between flatten and unflatten key replacement functions
 /// Optimized to minimize string allocations by using efficient Cow operations
 ///
-/// Patterns are treated as regex patterns. If a pattern fails to compile as regex,
-/// it falls back to literal string replacement.
+/// A pattern wrapped as `r'...'` (e.g. `r'^admin_'`) is a regex; a bare pattern is matched
+/// literally. See `crate::cache::ParsedPattern`. A malformed r'...' regex is silently
+/// skipped (treated as no match) rather than propagating a compile error through this
+/// hot path -- there's no config-time validation point for replacement patterns today.
 #[inline(always)]
 pub(crate) fn apply_key_replacement_patterns(
     key: &str,
@@ -43,21 +45,21 @@ pub(crate) fn apply_key_replacement_patterns(
 
     // Apply each replacement pattern
     for (pattern, replacement) in patterns {
-        // Try to compile as regex first
-        match get_cached_regex(pattern) {
-            Ok(regex) => {
-                // Use replace_all's Cow return to detect matches without a separate is_match()
-                // scan -- Cow::Owned means replacement happened, Cow::Borrowed means no match.
-                if let Cow::Owned(s) = regex.replace_all(&new_key, replacement.as_str()) {
-                    new_key = Cow::Owned(s);
-                    changed = true;
+        match parse_pattern(pattern) {
+            ParsedPattern::Regex(inner) => {
+                if let Ok(regex) = get_cached_regex(inner) {
+                    // Use replace_all's Cow return to detect matches without a separate
+                    // is_match() scan -- Owned means replacement happened, Borrowed means not.
+                    if let Cow::Owned(s) = regex.replace_all(&new_key, replacement.as_str()) {
+                        new_key = Cow::Owned(s);
+                        changed = true;
+                    }
                 }
             }
-            Err(_) => {
-                // Failed to compile as regex - fall back to literal replacement
-                // Use SIMD-accelerated memmem::find instead of str::contains
-                if memmem::find(new_key.as_bytes(), pattern.as_bytes()).is_some() {
-                    new_key = Cow::Owned(new_key.replace(pattern, replacement));
+            ParsedPattern::Literal(lit) => {
+                // SIMD-accelerated memmem::find instead of str::contains
+                if memmem::find(new_key.as_bytes(), lit.as_bytes()).is_some() {
+                    new_key = Cow::Owned(new_key.replace(lit, replacement));
                     changed = true;
                 }
             }

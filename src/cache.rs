@@ -151,6 +151,26 @@ fn insert_thread_local(pattern: &str, regex: &Arc<Regex>) {
     });
 }
 
+/// A key/value replacement pattern is either a regex (explicitly marked by wrapping it in
+/// `r'...'`, e.g. `r'^admin_'`) or a literal string to match exactly. Bare patterns are
+/// literal -- there is no implicit "try regex, fall back to literal" behavior, so a pattern
+/// containing characters that happen to be regex metacharacters (`.`, `$`, `(`, etc.) always
+/// matches literally unless explicitly wrapped.
+pub(crate) enum ParsedPattern<'a> {
+    Regex(&'a str),
+    Literal(&'a str),
+}
+
+/// Parse a replacement pattern into its literal or regex form. See `ParsedPattern`.
+#[inline]
+pub(crate) fn parse_pattern(pattern: &str) -> ParsedPattern<'_> {
+    if pattern.len() >= 3 && pattern.starts_with("r'") && pattern.ends_with('\'') {
+        ParsedPattern::Regex(&pattern[2..pattern.len() - 1])
+    } else {
+        ParsedPattern::Literal(pattern)
+    }
+}
+
 /// Get a cached regex, using Arc<Regex> for O(1) cloning
 ///
 /// Three-tier caching strategy (optimized for both latency and concurrency):

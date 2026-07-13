@@ -16,7 +16,7 @@ use rayon::prelude::*;
 use smallvec::SmallVec;
 use std::borrow::Cow;
 
-use crate::cache::get_cached_regex;
+use crate::cache::{get_cached_regex, parse_pattern, ParsedPattern};
 use crate::config::ProcessingConfig;
 use crate::convert::try_convert_string_to_json_bytes;
 use crate::error::JsonToolsError;
@@ -1447,6 +1447,11 @@ pub(crate) fn trim_ascii(bytes: &[u8]) -> &[u8] {
 }
 
 /// Apply value replacement patterns. Returns Some(replaced) if any change occurred.
+///
+/// A pattern wrapped as `r'...'` (e.g. `r'^admin_'`) is a regex; a bare pattern is matched
+/// literally. See `crate::cache::ParsedPattern`. A malformed r'...' regex is silently
+/// skipped (treated as no match) rather than propagating a compile error through this
+/// hot path -- there's no config-time validation point for replacement patterns today.
 #[inline(always)]
 pub(crate) fn apply_value_replacement_cow(
     value: &str,
@@ -1456,17 +1461,18 @@ pub(crate) fn apply_value_replacement_cow(
     let mut changed = false;
 
     for (pattern, replacement) in replacements {
-        match get_cached_regex(pattern) {
-            Ok(regex) => {
-                if let Cow::Owned(s) = regex.replace_all(&current, replacement.as_str()) {
-                    current = Cow::Owned(s);
-                    changed = true;
+        match parse_pattern(pattern) {
+            ParsedPattern::Regex(inner) => {
+                if let Ok(regex) = get_cached_regex(inner) {
+                    if let Cow::Owned(s) = regex.replace_all(&current, replacement.as_str()) {
+                        current = Cow::Owned(s);
+                        changed = true;
+                    }
                 }
             }
-            Err(_) => {
-                // Literal fallback
-                if memchr::memmem::find(current.as_bytes(), pattern.as_bytes()).is_some() {
-                    current = Cow::Owned(current.replace(pattern, replacement));
+            ParsedPattern::Literal(lit) => {
+                if memchr::memmem::find(current.as_bytes(), lit.as_bytes()).is_some() {
+                    current = Cow::Owned(current.replace(lit, replacement));
                     changed = true;
                 }
             }
