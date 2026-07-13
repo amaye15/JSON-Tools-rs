@@ -8,7 +8,7 @@
 
 use std::borrow::Cow;
 
-use crate::fxhash::FxHashMap;
+use crate::fxhash::{FxHashMap, FxIndexMap};
 use memchr::{memchr, memmem};
 use smallvec::SmallVec;
 
@@ -27,6 +27,14 @@ use crate::transform::{apply_key_replacement_patterns, apply_value_replacement_p
 // UnflatNode — Lightweight Tree with Zero-Copy Leaves
 // ================================================================================================
 
+/// Object node's map type: O(1) average lookup (like the old `FxHashMap`) *and* insertion
+/// order preserved for iteration (so serialization needs no per-node sort). A hand-rolled
+/// `Vec<(String, UnflatNode)>` was tried here first but has real O(n) lookup per key --
+/// fine for typical narrow objects, but a JSON object used as a keyed map (e.g. many
+/// `"user_<id>.field"` entries, each a distinct top-level key) turns that into O(n^2)
+/// overall (empirically: 20K such entries went from a few ms to over a second).
+type ObjectMap<'a> = FxIndexMap<String, UnflatNode<'a>>;
+
 /// Lightweight tree node for unflattened JSON. Leaf values stay as zero-copy
 /// byte ranges from the original input via `ValueRef`.
 enum UnflatNode<'a> {
@@ -34,8 +42,8 @@ enum UnflatNode<'a> {
     Leaf(ValueRef<'a>),
     /// Null placeholder for array gaps
     Null,
-    /// Object node — keys sorted at serialization time for deterministic output
-    Object(FxHashMap<String, UnflatNode<'a>>),
+    /// Object node — see `ObjectMap`'s doc comment.
+    Object(ObjectMap<'a>),
     /// Array with indexed elements
     Array(Vec<UnflatNode<'a>>),
 }
@@ -498,11 +506,11 @@ fn build_unflatten_tree<'a>(
     max_array_index: usize,
 ) -> Result<UnflatNode<'a>, JsonToolsError> {
     if entries.is_empty() {
-        return Ok(UnflatNode::Object(FxHashMap::default()));
+        return Ok(UnflatNode::Object(ObjectMap::default()));
     }
 
     let path_types = analyze_path_types(&entries, separator);
-    let mut root = FxHashMap::default();
+    let mut root: ObjectMap<'a> = ObjectMap::default();
 
     for (key, value) in entries {
         set_nested_value(
@@ -520,7 +528,7 @@ fn build_unflatten_tree<'a>(
 
 /// Entry point for recursively setting a value at a nested path.
 fn set_nested_value<'a>(
-    result: &mut FxHashMap<String, UnflatNode<'a>>,
+    result: &mut ObjectMap<'a>,
     key_path: &str,
     value: ValueRef<'a>,
     separator: &str,
@@ -535,6 +543,8 @@ fn set_nested_value<'a>(
     }
 
     if parts.len() == 1 {
+        // Flat keys are already unique at this point (collision handling ran in
+        // Phase 3), so no two entries ever target the same leaf slot -- safe to insert.
         result.insert(parts[0].to_string(), UnflatNode::Leaf(value));
         return Ok(());
     }
@@ -555,7 +565,7 @@ fn set_nested_value<'a>(
 /// Recursive helper that reuses a path buffer to avoid allocations.
 #[allow(clippy::too_many_arguments)]
 fn set_nested_value_recursive<'a>(
-    current: &mut FxHashMap<String, UnflatNode<'a>>,
+    current: &mut ObjectMap<'a>,
     parts: &[&str],
     index: usize,
     value: ValueRef<'a>,
@@ -567,6 +577,8 @@ fn set_nested_value_recursive<'a>(
     let part = parts[index];
 
     if index == parts.len() - 1 {
+        // Flat keys are already unique (collision handling ran in Phase 3), so no two
+        // entries ever target the same leaf slot within this object -- safe to insert.
         current.insert(part.to_string(), UnflatNode::Leaf(value));
         return Ok(());
     }
@@ -587,7 +599,7 @@ fn set_nested_value_recursive<'a>(
         let node = if should_be_array {
             UnflatNode::Array(vec![])
         } else {
-            UnflatNode::Object(FxHashMap::default())
+            UnflatNode::Object(ObjectMap::default())
         };
         current.insert(part.to_string(), node);
     }
@@ -634,7 +646,7 @@ fn set_nested_value_recursive<'a>(
                         arr[array_index] = if next_should_be_array {
                             UnflatNode::Array(vec![])
                         } else {
-                            UnflatNode::Object(FxHashMap::default())
+                            UnflatNode::Object(ObjectMap::default())
                         };
                     }
 
@@ -667,7 +679,7 @@ fn set_nested_value_recursive<'a>(
                 }
             } else {
                 // Non-numeric key in array context — convert array to object
-                let mut obj = FxHashMap::default();
+                let mut obj: ObjectMap<'a> = ObjectMap::default();
                 for (i, item) in arr.iter_mut().enumerate() {
                     if !matches!(item, UnflatNode::Null) {
                         let taken = std::mem::replace(item, UnflatNode::Null);
@@ -755,7 +767,7 @@ fn set_nested_array_value<'a>(
                 arr[array_index] = if next_should_be_array {
                     UnflatNode::Array(vec![])
                 } else {
-                    UnflatNode::Object(FxHashMap::default())
+                    UnflatNode::Object(ObjectMap::default())
                 };
             }
 
@@ -836,8 +848,8 @@ fn serialize_node(node: &UnflatNode<'_>, output: &mut String, filtering: &Filter
             output.push_str("null");
             true
         }
-        UnflatNode::Object(map) => {
-            if map.is_empty() {
+        UnflatNode::Object(obj) => {
+            if obj.is_empty() {
                 if filtering.remove_empty_objects {
                     return false;
                 }
@@ -849,12 +861,8 @@ fn serialize_node(node: &UnflatNode<'_>, output: &mut String, filtering: &Filter
             output.push('{');
             let mut first = true;
 
-            // Sort keys for deterministic output (replaces BTreeMap's implicit ordering)
-            let mut keys: Vec<&String> = map.keys().collect();
-            keys.sort_unstable();
-
-            for key in keys {
-                let child = &map[key];
+            // Insertion order, not sorted -- see UnflatNode::Object's doc comment.
+            for (key, child) in obj {
                 let child_saved = output.len();
                 if !first {
                     output.push(',');

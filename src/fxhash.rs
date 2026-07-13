@@ -59,3 +59,4 @@ impl BuildHasher for FxBuildHasher {
 }
 
 pub(crate) type FxHashMap<K, V> = HashMap<K, V, FxBuildHasher>;
+pub(crate) type FxIndexMap<K, V> = indexmap::IndexMap<K, V, FxBuildHasher>;

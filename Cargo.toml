@@ -3,7 +3,7 @@ name = "json-tools-rs"
 version = "0.9.0"
 edition = "2021"
 rust-version = "1.80"
-description = "A high-performance Rust library for advanced JSON manipulation with SIMD-accelerated parsing, Crossbeam parallelism, and Python bindings with DataFrame/Series support"
+description = "A high-performance Rust library for advanced JSON manipulation with SIMD-accelerated parsing, Rayon parallelism, and Python bindings with DataFrame/Series support"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/amaye15/json-tools-rs"
 keywords = ["json", "flatten", "manipulation", "simd"]
@@ -32,6 +32,11 @@ smallvec = "1.15.1"  # Stack-allocated vectors for small buffers
 pythonize = { version = "0.29.0", optional = true }
 chrono = { version = "0.4.44", default-features = false, features = ["std", "clock"] }
 mimalloc = { version = "0.1.48", default-features = false, optional = true }  # High-performance allocator (~5-10% speedup)
+rayon = "1.12.0"  # Persistent work-stealing thread pool: avoids per-call OS thread spawn cost of std::thread::scope
+# O(1) lookup + insertion order, for unflatten's object tree (no per-node sort needed).
+# Pinned <2.12: indexmap 2.12.0 raised its own rust-version to 1.82, and 2.14.0 requires
+# edition2024 (~1.85) -- both above this crate's MSRV of 1.80. 2.11.x's MSRV is 1.63.
+indexmap = ">=2.11, <2.12"
 
 [target.'cfg(target_pointer_width = "64")'.dependencies]
 # sonic-rs is fastest but only works on 64-bit architectures

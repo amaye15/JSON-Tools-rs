@@ -4,6 +4,7 @@
 //! and orchestrates flattening, unflattening, transformations, and parallel
 //! batch processing.
 
+use rayon::prelude::*;
 use smallvec::SmallVec;
 
 use crate::config::{
@@ -522,34 +523,29 @@ impl JSONTools {
         F: Fn(&str, &ProcessingConfig) -> Result<String, JsonToolsError> + Sync + Send,
     {
         if items.len() >= config.parallel_threshold {
-            let n_threads = config.effective_thread_count(items.len());
-            let chunk_size = items.len().div_ceil(n_threads);
+            let map_item = |(index, item): (usize, &I)| {
+                processor(item.as_ref(), config)
+                    .map_err(|e| JsonToolsError::batch_processing_error(index, e))
+            };
 
-            // Pre-allocate result slots; each thread writes to its own non-overlapping slice,
-            // preserving input order without sorting or channels.
-            let mut slots: Vec<Option<Result<String, JsonToolsError>>> =
-                (0..items.len()).map(|_| None).collect();
-
-            std::thread::scope(|s| {
-                for (chunk_idx, (inputs, outputs)) in items
-                    .chunks(chunk_size)
-                    .zip(slots.chunks_mut(chunk_size))
-                    .enumerate()
-                {
-                    let base = chunk_idx * chunk_size;
-                    s.spawn(move || {
-                        for (i, (item, slot)) in inputs.iter().zip(outputs.iter_mut()).enumerate() {
-                            *slot =
-                                Some(processor(item.as_ref(), config).map_err(|e| {
-                                    JsonToolsError::batch_processing_error(base + i, e)
-                                }));
-                        }
-                    });
+            // rayon's global pool is already sized to available_parallelism() and persists
+            // across calls -- reuse it directly unless the caller explicitly overrode the
+            // thread count, in which case a dedicated scoped pool is built for this call only
+            // (that override is rare; the common None case stays on the fast persistent pool).
+            return match config.num_threads {
+                None => items.par_iter().enumerate().map(map_item).collect(),
+                Some(n) => {
+                    let pool = rayon::ThreadPoolBuilder::new()
+                        .num_threads(n)
+                        .build()
+                        .map_err(|e| {
+                            JsonToolsError::configuration_error(format!(
+                                "failed to build thread pool with {n} threads: {e}"
+                            ))
+                        })?;
+                    pool.install(|| items.par_iter().enumerate().map(map_item).collect())
                 }
-            });
-
-            let results: Result<Vec<_>, _> = slots.into_iter().map(|s| s.unwrap()).collect();
-            return results;
+            };
         }
 
         // Sequential processing (default or below threshold)

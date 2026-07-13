@@ -12,6 +12,7 @@
 
 use crate::fxhash::FxHashMap;
 use memchr::memchr;
+use rayon::prelude::*;
 use smallvec::SmallVec;
 use std::borrow::Cow;
 
@@ -1593,66 +1594,64 @@ fn flatten_collecting_parallel<'a>(
     let n_threads = config.effective_thread_count(ranges.len());
     let chunk_size = ranges.len().div_ceil(n_threads);
 
-    let mut all_entries: Vec<Option<Vec<CollectedEntry<'a>>>> =
-        (0..n_threads).map(|_| None).collect();
+    let process_chunks = || -> Vec<CollectedEntry<'a>> {
+        ranges
+            .par_chunks(chunk_size)
+            .flat_map(|range_chunk| {
+                let sep = SeparatorCache::new(&separator.separator);
+                let mut walker =
+                    CollectingWalker::new(input, tape, config, sep, range_chunk.len() * 4);
 
-    std::thread::scope(|s| {
-        let handles: Vec<_> = ranges
-            .chunks(chunk_size)
-            .zip(all_entries.iter_mut())
-            .map(|(range_chunk, slot)| {
-                s.spawn(move || {
-                    let sep = SeparatorCache::new(&separator.separator);
-                    let mut walker =
-                        CollectingWalker::new(input, tape, config, sep, range_chunk.len() * 4);
+                for &(key_idx, val_idx, arr_idx) in range_chunk {
+                    // Reset path (reuse buffer allocation)
+                    walker.path.buffer.clear();
+                    walker.path.stack.clear();
 
-                    for &(key_idx, val_idx, arr_idx) in range_chunk {
-                        // Reset path (reuse buffer allocation)
-                        walker.path.buffer.clear();
-                        walker.path.stack.clear();
+                    if is_root_object {
+                        // Extract key from tape
+                        let key_entry = tape[key_idx];
+                        let key_offset = key_entry.offset() + 1;
+                        let key_len = key_entry.string_content_len();
+                        let key_bytes = &input[key_offset..key_offset + key_len];
+                        let key_str = unsafe { std::str::from_utf8_unchecked(key_bytes) };
 
-                        if is_root_object {
-                            // Extract key from tape
-                            let key_entry = tape[key_idx];
-                            let key_offset = key_entry.offset() + 1;
-                            let key_len = key_entry.string_content_len();
-                            let key_bytes = &input[key_offset..key_offset + key_len];
-                            let key_str = unsafe { std::str::from_utf8_unchecked(key_bytes) };
-
-                            walker.path.push_level();
-                            if key_entry.string_has_escapes() {
-                                let key = unescape_json_string(key_str);
-                                walker.path.append_key_raw(key.as_ref(), &walker.separator);
-                            } else {
-                                walker.path.append_key_raw(key_str, &walker.separator);
-                            }
+                        walker.path.push_level();
+                        if key_entry.string_has_escapes() {
+                            let key = unescape_json_string(key_str);
+                            walker.path.append_key_raw(key.as_ref(), &walker.separator);
                         } else {
-                            walker.path.push_level();
-                            walker.path.append_index(arr_idx, &walker.separator);
+                            walker.path.append_key_raw(key_str, &walker.separator);
                         }
-
-                        walker.walk_value(val_idx);
-                        walker.path.pop_level();
+                    } else {
+                        walker.path.push_level();
+                        walker.path.append_index(arr_idx, &walker.separator);
                     }
 
-                    *slot = Some(std::mem::take(&mut walker.entries));
-                })
+                    walker.walk_value(val_idx);
+                    walker.path.pop_level();
+                }
+
+                walker.entries
             })
-            .collect();
+            .collect()
+    };
 
-        for handle in handles {
-            handle.join().expect("streaming flatten thread panicked");
+    // rayon's global pool is already sized to available_parallelism() and persists across
+    // calls -- reuse it directly unless the caller explicitly overrode the thread count.
+    let merged = match config.num_threads {
+        None => process_chunks(),
+        Some(n) => {
+            let pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(n)
+                .build()
+                .map_err(|e| {
+                    JsonToolsError::configuration_error(format!(
+                        "failed to build thread pool with {n} threads: {e}"
+                    ))
+                })?;
+            pool.install(process_chunks)
         }
-    });
-
-    let total: usize = all_entries
-        .iter()
-        .map(|e| e.as_ref().map(|v| v.len()).unwrap_or(0))
-        .sum();
-    let mut merged = Vec::with_capacity(total);
-    for entries in all_entries.into_iter().flatten() {
-        merged.extend(entries);
-    }
+    };
 
     Ok(merged)
 }
