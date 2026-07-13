@@ -28,6 +28,21 @@
     </license>
   </licenses>
 
+  <developers>
+    <developer>
+      <name>Andrew Mayes</name>
+      <id>amaye15</id>
+      <url>https://github.com/amaye15</url>
+    </developer>
+  </developers>
+
+  <scm>
+    <connection>scm:git:https://github.com/amaye15/json-tools-rs.git</connection>
+    <developerConnection>scm:git:https://github.com/amaye15/json-tools-rs.git</developerConnection>
+    <url>https://github.com/amaye15/json-tools-rs</url>
+    <tag>HEAD</tag>
+  </scm>
+
   <properties>
     <maven.compiler.release>17</maven.compiler.release>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
@@ -96,4 +111,88 @@
       </plugin>
     </plugins>
   </build>
+
+  <!--
+    Everything Maven Central requires beyond a plain jar (sources jar, javadoc jar,
+    GPG signatures, the Central Portal publish step) lives behind this profile rather
+    than the default build, so a contributor running `mvn test`/`mvn package` locally
+    never needs a GPG key or a clean javadoc run. Activated explicitly in CI via
+    `mvn -P release deploy`, only on a tag push; see ../.github/workflows/jvm-ci.yml.
+  -->
+  <profiles>
+    <profile>
+      <id>release</id>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-source-plugin</artifactId>
+            <version>3.3.1</version>
+            <configuration>
+              <!-- Otherwise the multi-megabyte native libs under
+                   src/main/resources/native/ get duplicated into the "sources" jar,
+                   which should contain only Java source. -->
+              <excludeResources>true</excludeResources>
+            </configuration>
+            <executions>
+              <execution>
+                <id>attach-sources</id>
+                <goals>
+                  <goal>jar-no-fork</goal>
+                </goals>
+              </execution>
+            </executions>
+          </plugin>
+          <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-javadoc-plugin</artifactId>
+            <version>3.11.2</version>
+            <executions>
+              <execution>
+                <id>attach-javadocs</id>
+                <goals>
+                  <goal>jar</goal>
+                </goals>
+              </execution>
+            </executions>
+          </plugin>
+          <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-gpg-plugin</artifactId>
+            <version>3.2.7</version>
+            <executions>
+              <execution>
+                <id>sign-artifacts</id>
+                <phase>verify</phase>
+                <goals>
+                  <goal>sign</goal>
+                </goals>
+              </execution>
+            </executions>
+            <configuration>
+              <!-- Non-interactive signing in CI: no terminal to prompt for a
+                   passphrase, so loopback pinentry + an explicit passphrase
+                   (injected via GPG_PASSPHRASE, see jvm-ci.yml) are required. -->
+              <gpgArguments>
+                <arg>--pinentry-mode</arg>
+                <arg>loopback</arg>
+              </gpgArguments>
+            </configuration>
+          </plugin>
+          <plugin>
+            <!-- Sonatype's current official Central Portal publishing plugin
+                 (the older nexus-staging-maven-plugin/OSSRH path is deprecated). -->
+            <groupId>org.sonatype.central</groupId>
+            <artifactId>central-publishing-maven-plugin</artifactId>
+            <version>0.7.0</version>
+            <extensions>true</extensions>
+            <configuration>
+              <publishingServerId>central</publishingServerId>
+              <autoPublish>true</autoPublish>
+            </configuration>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+  </profiles>
 </project>

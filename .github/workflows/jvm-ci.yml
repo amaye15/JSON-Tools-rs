@@ -3,6 +3,7 @@ name: JVM Bindings CI
 on:
   push:
     branches: [main, master]
+    tags: ['*']
   pull_request:
     branches: [main, master]
   workflow_dispatch:
@@ -118,3 +119,49 @@ jobs:
         with:
           name: json-tools-rs-spark-jar
           path: jvm/target/json-tools-rs-spark-*.jar
+
+  release:
+    name: Release to Maven Central
+    # Depends on `package` (not just native-build/mvn-test) so the version-sync
+    # check it runs gates this too -- a Cargo.toml/pom.xml mismatch should never
+    # reach a Maven Central publish, which can't be undone.
+    needs: [native-build, mvn-test, package]
+    # Tag pushes only -- deliberately narrower than maturin-ci.yml's Release job
+    # (which also allows workflow_dispatch reruns): a Maven Central publish is
+    # permanent, so there's no "just rerun it manually" safety net worth having here.
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: maven
+          cache-dependency-path: jvm/pom.xml
+          # Configures ~/.m2/settings.xml: a <server id="central"> entry (matching
+          # <publishingServerId>central</publishingServerId> in jvm/pom.xml's release
+          # profile) sourced from the env vars below, plus GPG key import and a
+          # gpg.passphrase property sourced from GPG_PASSPHRASE.
+          server-id: central
+          server-username: MAVEN_CENTRAL_USERNAME
+          server-password: MAVEN_CENTRAL_PASSWORD
+          gpg-private-key: ${{ secrets.GPG_PRIVATE_KEY }}
+          gpg-passphrase: GPG_PASSPHRASE
+      - uses: actions/download-artifact@v4
+        with:
+          name: jvm-native-x86_64-unknown-linux-gnu
+          path: jvm/src/main/resources/native/linux-x86_64
+      - uses: actions/download-artifact@v4
+        with:
+          name: jvm-native-aarch64-unknown-linux-gnu
+          path: jvm/src/main/resources/native/linux-aarch64
+      - name: Deploy to Maven Central (signed, sources + javadoc, auto-publish)
+        working-directory: jvm
+        env:
+          MAVEN_CENTRAL_USERNAME: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
+          MAVEN_CENTRAL_PASSWORD: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: mvn -B -P release deploy -DskipTests

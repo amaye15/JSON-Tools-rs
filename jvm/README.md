@@ -55,13 +55,33 @@ export JAVA_HOME=$(/usr/libexec/java_home -v 17)   # or your platform's equivale
 
 ## Distribution to Databricks
 
-Download the `json-tools-rs-spark-jar` artifact from a `jvm-ci.yml` CI run (or build
-it locally per above), then:
+**Via CI artifact (any commit):** download the `json-tools-rs-spark-jar` artifact
+from a `jvm-ci.yml` CI run (or build it locally per above), then:
 
 1. Upload the jar to a Unity Catalog Volume or a workspace path.
 2. Attach it as a cluster-scoped or pipeline-scoped library.
 
-No Maven Central publishing yet -- this is a manual-upload workflow for now.
+**Via Maven Central (tagged releases only):** pushing a git tag (e.g. `v0.10.0`)
+triggers `jvm-ci.yml`'s `release` job, which builds, GPG-signs, and publishes
+`io.github.amaye15:json-tools-rs-spark` to Maven Central automatically. Add it as a
+normal Maven/Gradle/sbt dependency once published:
+
+```xml
+<dependency>
+  <groupId>io.github.amaye15</groupId>
+  <artifactId>json-tools-rs-spark</artifactId>
+  <version>0.10.0</version>
+</dependency>
+```
+
+A Maven Central publish is **permanent** (versions can be deprecated but not
+deleted) -- the release job deliberately only triggers on an actual tag push (not
+`workflow_dispatch`), and depends on the same version-sync check (`Cargo.toml` vs.
+`jvm/pom.xml`) that gates the `package` job. See `jvm/pom.xml`'s `release` Maven
+profile for what it does (attaches `-sources`/`-javadoc` jars, GPG-signs everything,
+publishes via Sonatype's `central-publishing-maven-plugin`) -- everything in that
+profile is opt-in and only runs when explicitly activated (`-P release`), so a plain
+`mvn test`/`mvn package` never needs a GPG key.
 
 ## Usage from a Python Lakeflow Declarative Pipeline
 

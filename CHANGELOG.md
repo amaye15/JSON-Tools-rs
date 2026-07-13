@@ -18,6 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   per native call. Packaged as a multi-platform (`linux-x86_64`, `linux-aarch64`) fat
   jar built by a new `jvm-ci.yml` CI workflow, intended for Databricks Lakeflow
   Declarative Pipelines (formerly Delta Live Tables) and other Spark workloads.
+  Tagged releases (`git tag vX.Y.Z`) now also publish `io.github.amaye15:json-tools-rs-spark`
+  to Maven Central automatically (GPG-signed, via Sonatype's Central Portal).
 
 ### Changed (BREAKING)
 - **`key_replacement`/`value_replacement` pattern syntax**: patterns are now literal
