@@ -62,6 +62,16 @@ Thumbs.db
 /book/
 docs/book/
 
+# JVM bindings (jvm/)
+jvm/target/
+jvm/src/main/resources/native/*/*.so
+jvm/src/main/resources/native/*/*.dylib
+jvm/src/main/resources/native/*/*.dll
+jvm/spark-warehouse/
+jvm/metastore_db/
+jvm/derby.log
+jvm/artifacts/
+
 # Temporary files
 *.tmp
 *.temp

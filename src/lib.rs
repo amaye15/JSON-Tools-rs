@@ -451,6 +451,9 @@ pub(crate) mod unflatten;
 #[cfg(feature = "python")]
 mod python;
 
+#[cfg(feature = "jvm")]
+mod jvm;
+
 #[cfg(test)]
 mod tests;
 

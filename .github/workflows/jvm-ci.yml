@@ -1,0 +1,120 @@
+name: JVM Bindings CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+concurrency:
+  group: jvm-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Rust-side correctness/lint for the jvm feature is already covered by rust-ci.yml's
+  # `lint` job (`cargo clippy --all-features`, which includes `jvm`) and `msrv` job
+  # confirmed separately to be 1.80-compatible with `--features jvm` -- no need to
+  # duplicate that here.
+
+  native-build:
+    name: Build native lib (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            can_test: true
+          - target: aarch64-unknown-linux-gnu
+            can_test: false
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: stable
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: jvm-native-${{ matrix.target }}
+      - name: Install cross-compilation dependencies
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+      - name: Build native library (release)
+        # No RUSTFLAGS override needed here (unlike maturin-ci.yml's macOS wheel job):
+        # .cargo/config.toml only sets target-cpu=native for *-apple-darwin targets,
+        # so these Linux builds are portable by default.
+        run: cargo build --locked --release --features jvm --target ${{ matrix.target }}
+      - name: Upload native library artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: jvm-native-${{ matrix.target }}
+          path: target/${{ matrix.target }}/release/libjson_tools_rs.so
+
+  mvn-test:
+    name: JVM Tests (Java ${{ matrix.java-version }})
+    needs: native-build
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        java-version: ["17", "21"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ matrix.java-version }}
+          cache: maven
+          cache-dependency-path: jvm/pom.xml
+      - uses: actions/download-artifact@v4
+        with:
+          name: jvm-native-x86_64-unknown-linux-gnu
+          path: jvm/src/main/resources/native/linux-x86_64
+      - name: Run JVM test suite
+        working-directory: jvm
+        run: mvn -B test
+
+  package:
+    name: Package fat jar
+    needs: [native-build, mvn-test]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: maven
+          cache-dependency-path: jvm/pom.xml
+      - uses: actions/download-artifact@v4
+        with:
+          name: jvm-native-x86_64-unknown-linux-gnu
+          path: jvm/src/main/resources/native/linux-x86_64
+      - uses: actions/download-artifact@v4
+        with:
+          name: jvm-native-aarch64-unknown-linux-gnu
+          path: jvm/src/main/resources/native/linux-aarch64
+      - name: Check version synchronization
+        working-directory: jvm
+        run: |
+          CARGO_VER=$(grep '^version' ../Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+          POM_VER=$(mvn -B -q help:evaluate -Dexpression=project.version -DforceStdout)
+          if [ "$CARGO_VER" != "$POM_VER" ]; then
+            echo "::error::Version mismatch: Cargo.toml=$CARGO_VER, jvm/pom.xml=$POM_VER"
+            exit 1
+          fi
+          echo "Versions in sync: $CARGO_VER"
+      - name: Package (tests already run in mvn-test)
+        working-directory: jvm
+        run: mvn -B package -DskipTests
+      - name: Upload packaged jar
+        uses: actions/upload-artifact@v4
+        with:
+          name: json-tools-rs-spark-jar
+          path: jvm/target/json-tools-rs-spark-*.jar

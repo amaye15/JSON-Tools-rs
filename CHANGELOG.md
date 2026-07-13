@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **JVM (Java) bindings**, for use as Apache Spark UDFs -- see [`jvm/README.md`](jvm/README.md).
+  Full feature parity with the Python bindings (regex/literal key & value replacement,
+  empty-value filtering, key casing, type conversion), via a new opt-in `jvm` Cargo
+  feature (`src/jvm.rs`, JNI shim over the same core `JSONTools` builder). Ships two
+  usage tiers: a simple row UDF (`FlattenUDF`/`UnflattenUDF`, SQL-callable via
+  `spark.udf.registerJavaFunction`) and a higher-throughput batched `Dataset.mapPartitions`
+  transform (`BatchTransform`) that amortizes JNI-crossing overhead across many rows
+  per native call. Packaged as a multi-platform (`linux-x86_64`, `linux-aarch64`) fat
+  jar built by a new `jvm-ci.yml` CI workflow, intended for Databricks Lakeflow
+  Declarative Pipelines (formerly Delta Live Tables) and other Spark workloads.
+
 ### Changed (BREAKING)
 - **`key_replacement`/`value_replacement` pattern syntax**: patterns are now literal
   (exact substring match) by default; wrap a pattern in `r'...'` (e.g. `r'^admin_'`) to

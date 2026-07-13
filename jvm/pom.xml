@@ -1,0 +1,99 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <groupId>io.github.amaye15</groupId>
+  <artifactId>json-tools-rs-spark</artifactId>
+  <version>0.9.0</version>
+  <packaging>jar</packaging>
+
+  <name>json-tools-rs-spark</name>
+  <description>
+    JVM (Java/Scala) bindings for json-tools-rs, exposed as Apache Spark UDFs for use
+    in Databricks Lakeflow Declarative Pipelines and other Spark workloads. Backed by
+    a JNI shim over the Rust core (see ../src/jvm.rs).
+  </description>
+  <url>https://github.com/amaye15/json-tools-rs</url>
+
+  <licenses>
+    <license>
+      <name>MIT</name>
+      <url>https://opensource.org/licenses/MIT</url>
+    </license>
+    <license>
+      <name>Apache-2.0</name>
+      <url>https://www.apache.org/licenses/LICENSE-2.0</url>
+    </license>
+  </licenses>
+
+  <properties>
+    <maven.compiler.release>17</maven.compiler.release>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <spark.version>4.0.0</spark.version>
+    <spark.scala.version>2.13</spark.scala.version>
+    <junit.version>5.11.3</junit.version>
+  </properties>
+
+  <dependencies>
+    <!--
+      `provided` scope: Databricks/Spark clusters already put spark-sql on the classpath
+      at runtime, so it's needed to compile and test against, but must never be bundled
+      into our own packaged jar (that would risk classpath conflicts with the cluster's
+      own Spark build).
+    -->
+    <dependency>
+      <groupId>org.apache.spark</groupId>
+      <artifactId>spark-sql_${spark.scala.version}</artifactId>
+      <version>${spark.version}</version>
+      <scope>provided</scope>
+    </dependency>
+
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <version>${junit.version}</version>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-compiler-plugin</artifactId>
+        <version>3.13.0</version>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+        <version>3.5.2</version>
+        <configuration>
+          <!--
+            Local SparkSession tests need module opens on newer JDKs (Spark's own Java
+            17/21 requirement), mirroring the flags Spark itself documents for running
+            on JDK 17+.
+          -->
+          <argLine>
+            --add-opens=java.base/java.lang=ALL-UNNAMED
+            --add-opens=java.base/java.lang.invoke=ALL-UNNAMED
+            --add-opens=java.base/java.util=ALL-UNNAMED
+            --add-opens=java.base/java.nio=ALL-UNNAMED
+            --add-opens=java.base/sun.nio.ch=ALL-UNNAMED
+            --add-opens=java.base/java.io=ALL-UNNAMED
+            --add-opens=java.base/java.net=ALL-UNNAMED
+          </argLine>
+        </configuration>
+      </plugin>
+      <plugin>
+        <!-- No shading needed: no bundled dependency to relocate (no Jackson, no
+             Spark), and native resources under src/main/resources are already copied
+             into the jar by the default Maven lifecycle. -->
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-jar-plugin</artifactId>
+        <version>3.4.1</version>
+      </plugin>
+    </plugins>
+  </build>
+</project>

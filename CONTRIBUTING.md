@@ -9,6 +9,7 @@ Thank you for your interest in contributing! This guide covers the development w
 - **Rust**: 1.80+ (the MSRV). Install via [rustup](https://rustup.rs/).
 - **Python**: 3.9+ (for Python bindings development).
 - **maturin**: For building Python wheels (`pip install maturin`).
+- **JDK 17+ and Maven**: for JVM (Java/Spark) bindings development (see [jvm/](jvm/)).
 
 ### Building
 
@@ -21,6 +22,10 @@ maturin develop --features python
 
 # Build in release mode
 cargo build --release
+
+# Build the JVM (Java/Spark) native library -- see jvm/README.md for the full
+# build/test workflow, including copying the native lib into Maven's resources tree
+cargo build --release --features jvm
 ```
 
 ### Running Tests
@@ -37,6 +42,9 @@ cargo run --example test_type_conversion
 
 # Python tests (after maturin develop)
 pytest python/tests/tests.py -v
+
+# JVM tests (after cargo build --release --features jvm; see jvm/README.md)
+cd jvm && mvn test
 ```
 
 ### Running Benchmarks

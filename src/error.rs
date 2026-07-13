@@ -309,3 +309,11 @@ impl From<pyo3::PyErr> for JsonToolsError {
         JsonToolsError::configuration_error(format!("Python error: {err}"))
     }
 }
+
+// Automatic conversion from jni::errors::Error (needed for closures mixing JNI Results and JsonToolsError)
+#[cfg(feature = "jvm")]
+impl From<jni::errors::Error> for JsonToolsError {
+    fn from(err: jni::errors::Error) -> Self {
+        JsonToolsError::configuration_error(format!("JNI error: {err}"))
+    }
+}
