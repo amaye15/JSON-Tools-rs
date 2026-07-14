@@ -1,6 +1,11 @@
 # Changelog
 
-## v0.9.1 (2026-07-14)
+## v0.9.2 (2026-07-15)
+
+Note: `v0.9.1` was tagged the day before but only completed publishing to Maven
+Central -- a crates.io/PyPI release pipeline bug caused those two to fail before any
+upload. Fixed and re-cut as v0.9.2 across all three registries; no code changes
+beyond the release pipeline fix itself.
 
 ### Added
 - **JVM (Java) bindings**: Apache Spark UDFs (row and batched `mapPartitions` tiers) via a JNI shim over the same Rust core, full feature parity with the Python bindings. See [Setting Up on Databricks](../guide/databricks-setup.md).

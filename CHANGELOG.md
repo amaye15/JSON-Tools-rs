@@ -5,7 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.9.1] - 2026-07-14
+## [0.9.2] - 2026-07-15
+
+Note: `v0.9.1` was tagged on 2026-07-14 but only completed publishing to Maven
+Central -- a bug in the crates.io/PyPI release job (untracked downloaded wheel
+artifacts tripping `cargo publish`'s dirty-checkout guard) caused it to fail before
+any crates.io or PyPI upload, so those two never got a 0.9.1 release. Fixed and
+re-cut as 0.9.2 across all three registries the same day; no code changes from what
+0.9.1 would have shipped, only the release pipeline fix itself.
 
 ### Added
 - **JVM (Java) bindings**, for use as Apache Spark UDFs -- see [`jvm/README.md`](jvm/README.md).
@@ -61,6 +68,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   object node purely to get deterministic output; switched to an order-preserving map
   (no sort needed, and no more O(n) lookup degrading to O(n^2) for JSON objects used as
   wide keyed maps, e.g. many `"user_<id>.field"` entries).
+- `maturin-ci.yml`'s `cargo publish` step failed on every run: the job downloads all
+  wheel/sdist artifacts before the publish step, and the resulting untracked files
+  tripped `cargo publish`'s dirty-checkout guard. Added `--allow-dirty` (safe here --
+  the job always starts from a fresh tag checkout, so the only "dirty" files are ever
+  those artifact downloads, never an actual uncommitted change).
 
 ## [0.9.0] - 2026-03-09
 
