@@ -8,7 +8,21 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/amaye15/json-tools-rs"
 keywords = ["json", "flatten", "manipulation", "simd"]
 categories = ["data-structures", "parsing"]
-publish = false
+readme = "README.md"
+# Only Rust-relevant files -- jvm/ (Java/Maven), python/ (Python bindings source),
+# docs/ (mdBook source), and tooling config are separate ecosystems/audiences that
+# don't belong in the published crate archive every `cargo build` consumer downloads.
+exclude = [
+    ".claude/",
+    ".github/",
+    ".pre-commit-config.yaml",
+    "docs/",
+    "jvm/",
+    "python/",
+    "scripts/",
+    "book.toml",
+    "benches/history.csv",
+]
 
 [lib]
 name = "json_tools_rs"

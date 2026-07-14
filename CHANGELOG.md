@@ -20,6 +20,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Declarative Pipelines (formerly Delta Live Tables) and other Spark workloads.
   Tagged releases (`git tag vX.Y.Z`) now also publish `io.github.amaye15:json-tools-rs-spark`
   to Maven Central automatically (GPG-signed, via Sonatype's Central Portal).
+- **crates.io publishing**: `publish = false` removed from `Cargo.toml` and the
+  (previously dormant, commented-out) `cargo publish` step in `maturin-ci.yml`'s tag-gated
+  release job is now active. Also trimmed the published package to Rust-relevant files
+  only (`exclude`d `jvm/`, `python/`, `docs/`, and tooling config -- those aren't useful
+  to a `cargo add json-tools-rs` consumer and don't belong in the crate archive).
 
 ### Changed (BREAKING)
 - **`key_replacement`/`value_replacement` pattern syntax**: patterns are now literal

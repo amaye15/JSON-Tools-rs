@@ -6,6 +6,10 @@
 # MANUAL PATCH: the `macos` job below has a hand-added `env.RUSTFLAGS` override to prevent
 # `-C target-cpu=native` (set in .cargo/config.toml) from being baked into published wheels.
 # If you regenerate this file, re-apply that override afterward.
+#
+# MANUAL PATCH: the `release` job's "Publish to crates.io" step is active (maturin's
+# default template ships it commented out). If you regenerate this file, uncomment it
+# again -- Cargo.toml no longer sets `publish = false`, so crates.io publishing is live.
 name: Python Wheels CI
 
 on:
@@ -263,10 +267,9 @@ jobs:
         uses: actions/attest-build-provenance@v2
         with:
           subject-path: 'wheels-*/*'
-      # Cargo publishing disabled (publish = false in Cargo.toml)
-      # - name: Publish to crates.io
-      #   if: ${{ startsWith(github.ref, 'refs/tags/') }}
-      #   run: cargo publish --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+      - name: Publish to crates.io
+        if: ${{ startsWith(github.ref, 'refs/tags/') }}
+        run: cargo publish --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
       - name: Publish to PyPI
         if: ${{ startsWith(github.ref, 'refs/tags/') }}
         uses: PyO3/maturin-action@v1
