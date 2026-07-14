@@ -3,7 +3,7 @@ JSON Tools RS - High-performance JSON manipulation library
 
 This package provides Python bindings for the JSON Tools RS library,
 offering high-performance JSON flattening and unflattening with SIMD-accelerated
-parsing and Crossbeam-based parallelism.
+parsing and Rayon-based parallelism.
 
 The main entry point is the JSONTools class, which provides a unified builder pattern API
 for all JSON manipulation operations with advanced collision handling and filtering.

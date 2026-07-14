@@ -9,7 +9,7 @@ build-backend = "maturin"
 
 [project]
 name = "json-tools-rs"
-description = "High-performance JSON manipulation library with SIMD-accelerated parsing, Crossbeam parallelism, and native DataFrame/Series support"
+description = "High-performance JSON manipulation library with SIMD-accelerated parsing, Rayon parallelism, and native DataFrame/Series support"
 readme = "README.md"
 license = {text = "MIT OR Apache-2.0"}
 authors = [
