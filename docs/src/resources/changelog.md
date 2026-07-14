@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.9.1 (2026-07-14)
 
 ### Added
 - **JVM (Java) bindings**: Apache Spark UDFs (row and batched `mapPartitions` tiers) via a JNI shim over the same Rust core, full feature parity with the Python bindings. See [Setting Up on Databricks](../guide/databricks-setup.md).

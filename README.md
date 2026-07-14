@@ -375,7 +375,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, testing, benchmark
 
 ## Changelog
 
-### Unreleased
+### v0.9.1 (Current)
 
 * **JVM (Java) bindings** (BREAKING for `key_replacement`/`value_replacement`, see below): new Spark UDF bindings (`jvm/`) with full feature parity, via a JNI shim over the same Rust core -- see [`jvm/README.md`](jvm/README.md).
 * **`key_replacement`/`value_replacement` pattern syntax (BREAKING)**: patterns are now literal (exact substring match) by default; wrap in `r'...'` (e.g. `r'^admin_'`) for regex. Previously every pattern was always compiled as regex.
