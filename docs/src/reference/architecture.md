@@ -14,7 +14,7 @@ src/
 ├── cache.rs          Tiered caching: regex, key deduplication, phf
 ├── convert.rs        Type conversion: numbers, dates, booleans, nulls
 ├── transform.rs      Filtering, key/value replacements, collision handling
-├── flatten.rs        Flattening algorithm with Crossbeam parallelism
+├── flatten.rs        Flattening algorithm with Rayon parallelism
 ├── unflatten.rs      Unflattening with SIMD separator detection
 ├── builder.rs        Public JSONTools builder API and execute()
 ├── python.rs         Python bindings via PyO3
@@ -57,7 +57,7 @@ All configuration structs used by the builder:
 Three-tier caching system for performance:
 1. **phf perfect hash** (`COMMON_JSON_KEYS`) -- Zero-cost lookup for common keys
 2. **Thread-local FxHashMap** (`KeyDeduplicator`) -- Per-thread key deduplication
-3. **Global DashMap** (`REGEX_CACHE`) -- Compiled regex pattern cache with LRU eviction
+3. **Global `RwLock<FxHashMap>`** (`REGEX_CACHE`) -- Compiled regex pattern cache, evicts an arbitrary entry when at capacity
 
 ### `convert` -- Type Conversion
 
@@ -80,7 +80,7 @@ Core transformation logic applied after flatten/unflatten:
 Recursive JSON flattening with performance optimizations:
 - `SeparatorCache` for pre-computed separator properties
 - `FastStringBuilder` with thread-local caching
-- `flatten_value_with_threshold()` for Crossbeam parallel flattening of large objects/arrays
+- `flatten_value_with_threshold()` for Rayon-parallel flattening of large objects/arrays
 - `quick_leaf_estimate()` for O(1) HashMap pre-sizing
 
 ### `unflatten` -- Unflattening Algorithm

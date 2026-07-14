@@ -123,6 +123,31 @@ samply load /tmp/profile.json
 4. For performance changes, include before/after benchmark results (`cargo run --release --example bench_compare` after recording both, or Criterion's own before/after comparison).
 5. Open a PR with a clear description of the change.
 
+## Release Process
+
+Pushing a version tag (`git tag vX.Y.Z && git push origin vX.Y.Z`) triggers three
+publishes at once, all gated to tag pushes only:
+
+- **crates.io** (`maturin-ci.yml`'s `release` job, `cargo publish`)
+- **PyPI** (same job, `maturin-action` upload)
+- **Maven Central** (`jvm-ci.yml`'s `release` job, GPG-signed via Sonatype's Central
+  Portal -- see [`jvm/pom.xml`](jvm/pom.xml)'s `release` profile)
+
+**Before tagging**, bump the version in all three places and make sure they match --
+CI enforces this and will fail the build otherwise:
+
+- `Cargo.toml`'s `[package] version`
+- `python/json_tools_rs/__init__.py`'s `__version__` (checked in `rust-ci.yml`'s
+  `lint` job)
+- `jvm/pom.xml`'s `<version>` (checked in `jvm-ci.yml`'s `package` job, which also
+  gates the `release` job)
+
+A GitHub Release with generated notes is created separately by `release.yml`
+(also tag-triggered). Both crates.io and Maven Central publishes are **permanent**
+(a version can be yanked/deprecated but not deleted) -- there's no `workflow_dispatch`
+fallback for either release job, deliberately, so a publish only ever happens from an
+actual tag push.
+
 ## Architecture Overview
 
 See the [Architecture reference](https://amaye15.github.io/JSON-Tools-rs/reference/architecture.html) in the mdBook guide for details on the tape-based parsing engine, module structure, and parallelism model.

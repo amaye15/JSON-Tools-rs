@@ -205,7 +205,7 @@ impl JsonToolsError {
         let suggestion = if msg.contains("pairs") {
             "Replacement patterns must be provided in pairs (pattern, replacement). Ensure you have an even number of arguments."
         } else if msg.contains("regex") {
-            "Patterns use standard Rust regex syntax. If a pattern fails to compile as regex, it falls back to literal string matching. Example: 'user_.*' to match keys starting with 'user_'."
+            "Patterns are matched literally (exact substring) by default. Wrap a pattern in r'...' to use it as a regex instead, e.g. r'^user_' to match keys starting with 'user_'."
         } else {
             "Check your replacement pattern configuration. Patterns should be in the format: pattern1, replacement1, pattern2, replacement2, etc."
         };

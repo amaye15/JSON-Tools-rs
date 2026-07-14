@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- **JVM (Java) bindings**: Apache Spark UDFs (row and batched `mapPartitions` tiers) via a JNI shim over the same Rust core, full feature parity with the Python bindings. See [Setting Up on Databricks](../guide/databricks-setup.md).
+- **crates.io and Maven Central publishing** on tagged releases.
+
+### Changed (BREAKING)
+- **`key_replacement`/`value_replacement` pattern syntax**: patterns are now literal (exact substring match) by default; wrap a pattern in `r'...'` (e.g. `r'^admin_'`) to use it as a regex. Previously every pattern was always compiled as regex regardless of content. See [Key & Value Replacements](../guide/replacements.md).
+
+### Fixed
+- **`has_escape` scanner bug**: escape sequences not adjacent to a quote (a lone `\n`, `\t`, `\r`, `\uXXXX`) were invisible to the tape scanner, so `auto_convert_types`, replacements, `lowercase_keys`, and collision handling could silently operate on still-escaped text for affected strings.
+- **Parallelism reverted from Crossbeam back to Rayon**: batch processing now uses Rayon's persistent work-stealing pool instead of spawning fresh `std::thread::scope` OS threads on every `.execute()` call -- measurably faster for small-to-medium batches.
+- `unflatten`'s object tree switched from a hash map + full key sort to an order-preserving map (`IndexMap`), removing an O(n) lookup that degraded to O(n^2) for JSON objects used as wide keyed maps.
+
+See the repository's [CHANGELOG.md](https://github.com/amaye15/json-tools-rs/blob/master/CHANGELOG.md) for full details.
+
 ## v0.9.0 (2026-03-09)
 
 ### Added

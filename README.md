@@ -1,9 +1,10 @@
 # JSON Tools RS
 
-A high-performance Rust library for advanced JSON manipulation with SIMD-accelerated parsing, providing unified flattening and unflattening operations through a clean builder pattern API.
+A high-performance Rust library for advanced JSON manipulation with SIMD-accelerated parsing, providing unified flattening and unflattening operations through a clean builder pattern API. Ships with Rust, Python, and JVM (Java/Spark) bindings.
 
 [![PyPI](https://img.shields.io/pypi/v/json-tools-rs.svg)](https://pypi.org/project/json-tools-rs/)
 [![Crates.io](https://img.shields.io/crates/v/json-tools-rs.svg)](https://crates.io/crates/json-tools-rs)
+[![Maven Central](https://img.shields.io/maven-central/v/io.github.amaye15/json-tools-rs-spark.svg)](https://central.sonatype.com/artifact/io.github.amaye15/json-tools-rs-spark)
 [![Documentation](https://docs.rs/json-tools-rs/badge.svg)](https://docs.rs/json-tools-rs)
 [![Book](https://img.shields.io/badge/book-GitHub%20Pages-blue)](https://amaye15.github.io/JSON-Tools-rs/)
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](LICENSE-MIT)
@@ -24,16 +25,17 @@ Unlike simple JSON parsers, JSON Tools RS provides a complete toolkit for JSON t
 - 🚀 **Unified API**: Single `JSONTools` entry point for flattening, unflattening, or pass-through transforms (`.normal()`)
 - 🔧 **Builder Pattern**: Fluent, chainable API for easy configuration and method chaining
 - ⚡ **High Performance**: SIMD-accelerated JSON parsing with FxHashMap, SmallVec stack allocation, and tiered caching
-- 🚄 **Parallel Processing**: Built-in Crossbeam-based parallelism for 3-5x speedup on batch operations and large nested structures
+- 🚄 **Parallel Processing**: Built-in Rayon-based parallelism (persistent work-stealing pool) for 3-5x speedup on batch operations and large nested structures
 - 🎯 **Complete Roundtrip**: Flatten JSON and unflatten back to original structure with perfect fidelity
 - 🧹 **Comprehensive Filtering**: Remove empty strings, nulls, empty objects, and empty arrays (works for both flatten and unflatten)
-- 🔄 **Advanced Replacements**: Literal and regex-based key/value replacements using standard Rust regex syntax
+- 🔄 **Advanced Replacements**: Key/value replacements, literal (exact substring match) by default, or regex by wrapping the pattern in `r'...'`
 - 🛡️ **Collision Handling**: Intelligent `.handle_key_collision(true)` to collect colliding values into arrays
 - 📅 **Date Normalization**: Automatic detection and normalization of ISO-8601 dates to UTC
 - 🔀 **Automatic Type Conversion**: Convert strings to numbers, booleans, and nulls with `.auto_convert_types(true)`
 - 📦 **Batch Processing**: Process single JSON or batches; Python also supports dicts and lists of dicts
 - 🐍 **Python Bindings**: Full Python support with perfect type preservation (input type = output type)
 - 📊 **DataFrame/Series Support**: Native support for Pandas, Polars, PyArrow, and PySpark DataFrames and Series in Python
+- ☕ **JVM Bindings**: Java/Spark UDFs (row and batched `mapPartitions` tiers) for Databricks Jobs/notebooks on classic compute and other Spark workloads -- see [`jvm/README.md`](jvm/README.md)
 
 ## Table of Contents
 
@@ -42,6 +44,7 @@ Unlike simple JSON parsers, JSON Tools RS provides a complete toolkit for JSON t
 - [Quick Start](#quick-start)
   - [Rust Examples](#rust---unified-jsontools-api)
   - [Python Examples](#python---unified-jsontools-api)
+  - [JVM / Spark Examples](#jvm--spark)
 - [Quick Reference](#quick-reference)
 - [Installation](#installation)
 - [Architecture](#architecture)
@@ -194,6 +197,34 @@ print(type(result))  # <class 'pandas.core.frame.DataFrame'>
 # Series input → Series output (Pandas, Polars, PyArrow)
 ```
 
+### JVM / Spark
+
+JNI-based Java bindings, mirroring the same `JSONTools` builder, for use as Apache
+Spark UDFs -- a simple row UDF and a higher-throughput batched `mapPartitions`
+transform. Built for Databricks Jobs/notebooks on classic compute and other Spark
+workloads (**not** usable inside a Databricks Lakeflow Declarative Pipeline --
+Databricks doesn't permit JVM libraries on pipeline compute at all; use the Python
+bindings above, wrapped in a `pandas_udf`, for that case instead).
+
+```java
+import io.github.amaye15.jsontoolsrs.JsonTools;
+import io.github.amaye15.jsontoolsrs.JsonToolsHandle;
+
+try (JsonToolsHandle tools = JsonTools.builder()
+        .flatten()
+        .separator("::")
+        .keyReplacement("r'^admin_'", "")
+        .removeNulls(true)
+        .build()) {
+    String result = tools.execute("{\"admin_name\": \"Jane\", \"age\": null}");
+    // {"name":"Jane"}
+}
+```
+
+See [`jvm/README.md`](jvm/README.md) for the Spark UDF API and
+[Setting Up on Databricks](https://amaye15.github.io/JSON-Tools-rs/guide/databricks-setup.html)
+for the full deployment walkthrough (both this and the pandas_udf path).
+
 ## Quick Reference
 
 ### Method Cheat Sheet
@@ -264,6 +295,13 @@ pip install json-tools-rs
 
 ```
 
+### JVM / Spark
+
+No published artifact yet -- build from source (`cargo build --release --features
+jvm && cd jvm && mvn package`), or download the jar from a `jvm-ci.yml` CI run. See
+[`jvm/README.md`](jvm/README.md) for details; a Maven Central release
+(`io.github.amaye15:json-tools-rs-spark`) ships automatically on tagged releases.
+
 ## Architecture
 
 The codebase is organized into focused, single-responsibility modules:
@@ -278,11 +316,12 @@ src/
 ├── cache.rs          Tiered caching: regex, key deduplication, phf perfect hash
 ├── convert.rs        Type conversion: numbers, dates, booleans, nulls (SIMD-optimized)
 ├── transform.rs      Filtering, key/value replacements, collision handling
-├── flatten.rs        Flattening algorithm with Crossbeam parallelism
+├── flatten.rs        Flattening algorithm with Rayon parallelism
 ├── unflatten.rs      Unflattening with SIMD separator detection
 ├── builder.rs        Public JSONTools builder API and execute() entry point
 ├── python.rs         Python bindings via PyO3
-├── tests.rs          99 unit tests
+├── jvm.rs            JVM bindings via JNI (Java/Spark UDFs, see jvm/)
+├── tests.rs          Unit tests
 └── main.rs           CLI examples
 ```
 
@@ -303,7 +342,7 @@ The processing pipeline:
 | Deep nesting (100 levels) | 8.3 µs | Deeply nested JSON objects |
 | Wide objects (1,000 keys) | ~337 µs | Flat objects with many keys |
 | Large arrays (5,000 items) | ~2.11 ms | Arrays with many elements |
-| Parallel batch (10,000 items) | ~2.61 ms | Batch processing with Crossbeam |
+| Parallel batch (10,000 items) | ~2.61 ms | Batch processing with Rayon |
 
 *Measured on Apple Silicon. Results may vary by platform and data shape.*
 
@@ -314,11 +353,11 @@ JSON Tools RS uses several techniques to achieve high performance (~2,000+ ops/m
 * **SIMD-JSON**: Hardware-accelerated parsing via sonic-rs (64-bit) / simd-json (32-bit).
 * **SIMD Byte Search**: memchr/memmem for SIMD-accelerated string operations and pattern matching.
 * **FxHashMap**: Faster hashing for string keys with rustc-hash.
-* **Tiered Caching**: Three-level key deduplication (phf perfect hash → thread-local FxHashMap → global DashMap) and thread-local regex cache.
+* **Tiered Caching**: Three-level regex cache (compile-time phf table → thread-local FxHashMap → global `RwLock<FxHashMap>`).
 * **SmallVec & Cow**: Stack allocation for depth stacks and number buffers; zero-copy string handling.
 * **Arc\<str\> Deduplication**: Shared key storage to minimize allocations in wide/deep JSON.
 * **First-Byte Discriminators**: Rapid rejection of non-convertible strings during type conversion.
-* **Parallelism**: Automatic Crossbeam-based parallelism for batch processing and large nested structures.
+* **Parallelism**: Rayon's persistent work-stealing thread pool for batch processing and large nested structures (avoids per-call OS thread spawn cost).
 
 ## CLI Demo
 
@@ -336,7 +375,17 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, testing, benchmark
 
 ## Changelog
 
-### v0.9.0 (Current)
+### Unreleased
+
+* **JVM (Java) bindings** (BREAKING for `key_replacement`/`value_replacement`, see below): new Spark UDF bindings (`jvm/`) with full feature parity, via a JNI shim over the same Rust core -- see [`jvm/README.md`](jvm/README.md).
+* **`key_replacement`/`value_replacement` pattern syntax (BREAKING)**: patterns are now literal (exact substring match) by default; wrap in `r'...'` (e.g. `r'^admin_'`) for regex. Previously every pattern was always compiled as regex.
+* **Rayon parallelism**: batch processing switched back from `std::thread::scope` (per-call OS thread spawn) to Rayon's persistent work-stealing pool -- measurably faster for small-to-medium batches.
+* **`has_escape` scanner bug fix**: escape sequences not adjacent to a quote (`\n`, `\t`, `\r`, `\uXXXX`) were previously invisible to the tape scanner, silently skipping `auto_convert_types`/replacements/`lowercase_keys` for affected strings.
+* **crates.io and Maven Central publishing** enabled on tagged releases.
+
+See [CHANGELOG.md](CHANGELOG.md) for full details on all of the above.
+
+### v0.9.0
 
 * **Crossbeam Parallelism**: Migrated from Rayon to Crossbeam for finer-grained parallel control.
 * **DataFrame/Series Support**: Native Python support for Pandas, Polars, PyArrow, and PySpark DataFrames and Series.

@@ -9,11 +9,11 @@ JSON Tools RS achieves ~2,000+ ops/ms through multiple optimization layers.
 | **SIMD JSON Parsing** | sonic-rs (64-bit) / simd-json (32-bit) for hardware-accelerated parsing |
 | **SIMD Byte Search** | memchr/memmem for fast string operations |
 | **FxHashMap** | Fast non-cryptographic hashing via rustc-hash |
-| **Tiered Caching** | phf perfect hash -> thread-local FxHashMap -> global DashMap |
+| **Tiered Caching** | phf perfect hash -> thread-local FxHashMap -> global `RwLock<FxHashMap>` |
 | **SmallVec** | Stack allocation for depth stacks and number buffers |
 | **Arc\<str\> Dedup** | Shared key storage to minimize allocations |
 | **First-Byte Discriminators** | Rapid rejection of non-convertible strings |
-| **Crossbeam Parallelism** | Scoped thread pools for batch and nested parallelism |
+| **Rayon Parallelism** | Persistent work-stealing thread pool for batch and nested parallelism (no per-call spawn cost) |
 | **Zero-Copy (Cow)** | Avoid allocations when strings don't need modification |
 | **itoa** | Fast integer-to-string formatting |
 | **mimalloc** | Optional high-performance allocator (`features = ["mimalloc"]`, ~5-10% speedup) |
@@ -29,7 +29,7 @@ Measured on Apple Silicon. Results from the stress benchmark suite targeting edg
 | Deep nesting (100 levels) | **8.3 us** | Deeply nested objects, 100 levels deep |
 | Wide objects (1,000 keys) | **~337 us** | Single object with 1,000 top-level keys |
 | Large arrays (5,000 items) | **~2.11 ms** | Array containing 5,000 elements |
-| Parallel batch (10,000 items) | **~2.61 ms** | Batch processing with Crossbeam parallelism |
+| Parallel batch (10,000 items) | **~2.61 ms** | Batch processing with Rayon parallelism |
 
 ### Throughput Targets (v0.9.0)
 
@@ -183,17 +183,18 @@ The codebase is organized into focused, single-responsibility modules:
 src/
 ├── lib.rs            Facade: mod declarations + pub use re-exports
 ├── json_parser.rs    Conditional SIMD parser (sonic-rs / simd-json)
-├── types.rs          Core types: JsonInput, JsonOutput, FlatMap
+├── types.rs          Core types: JsonInput, JsonOutput
 ├── error.rs          Error types with codes E001-E008
 ├── config.rs         Configuration structs and operation modes
 ├── cache.rs          Tiered caching: regex, key deduplication, phf
 ├── convert.rs        Type conversion: numbers, dates, booleans, nulls
 ├── transform.rs      Filtering, key/value replacements, collision handling
-├── flatten.rs        Flattening algorithm with Crossbeam parallelism
+├── flatten.rs        Flattening algorithm with Rayon parallelism
 ├── unflatten.rs      Unflattening with SIMD separator detection
 ├── builder.rs        Public JSONTools builder API and execute()
 ├── python.rs         Python bindings via PyO3
-└── tests.rs          99 unit tests
+├── jvm.rs            JVM bindings via JNI (Java/Spark UDFs, see jvm/)
+└── tests.rs          Unit tests
 ```
 
 The processing pipeline:

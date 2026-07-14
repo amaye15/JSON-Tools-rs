@@ -1,6 +1,6 @@
 # Parallel Processing
 
-JSON Tools RS uses Crossbeam-based parallelism to automatically speed up batch operations and large nested structures.
+JSON Tools RS uses Rayon-based parallelism to automatically speed up batch operations and large nested structures.
 
 ## Automatic Parallelism
 
@@ -70,9 +70,9 @@ results = tools.execute(large_batch)
 
 ## How It Works
 
-- **Batch parallelism**: Input is split into chunks, each processed by a separate thread via `crossbeam::thread::scope`. Results are written to pre-allocated slots preserving input order.
+- **Batch parallelism**: Input is split into chunks processed via Rayon's `par_chunks`. By default this runs on Rayon's persistent, process-wide work-stealing pool (no per-call thread spawn cost); setting `.num_threads(Some(n))` instead builds and installs a dedicated pool sized to `n` for that call. Results preserve input order.
 - **Nested parallelism**: Large JSON objects (many keys) or arrays (many elements) are split across threads for parallel flattening, then merged.
-- **Thread safety**: All parallelism uses scoped threads -- no `'static` bounds required, no data races possible.
+- **Thread safety**: Rayon's work-stealing model requires no `'static` bounds and guarantees no data races.
 
 ## Environment Variables
 

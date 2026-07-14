@@ -195,23 +195,24 @@ impl JSONTools {
 
     /// Add a key replacement pattern
     ///
-    /// Patterns are treated as regex patterns using standard Rust regex syntax.
-    /// If a pattern fails to compile as regex, it falls back to literal string replacement.
-    /// Works for both flatten and unflatten operations.
+    /// Patterns are literal (exact substring match) by default. Wrap a pattern in
+    /// `r'...'` (e.g. `r'^admin_'`) to use standard Rust regex syntax instead. A
+    /// malformed `r'...'` pattern is silently treated as "no match" rather than
+    /// raising an error. Works for both flatten and unflatten operations.
     ///
     /// # Examples
     ///
     /// ```rust
     /// use json_tools_rs::{JSONTools, JsonOutput};
     ///
-    /// // Regex pattern (standard Rust regex syntax)
+    /// // Regex pattern, via the r'...' wrapper
     /// let json = r#"{"user_name": "John", "admin_name": "Jane"}"#;
     /// let result = JSONTools::new()
     ///     .flatten()
     ///     .key_replacement("r'(user|admin)_'", "person_")
     ///     .execute(json).unwrap();
     ///
-    /// // Literal pattern (if regex compilation fails)
+    /// // Literal pattern (the default -- no r'...' wrapper)
     /// let result2 = JSONTools::new()
     ///     .flatten()
     ///     .key_replacement("user_", "person_")
@@ -225,23 +226,24 @@ impl JSONTools {
 
     /// Add a value replacement pattern
     ///
-    /// Patterns are treated as regex patterns using standard Rust regex syntax.
-    /// If a pattern fails to compile as regex, it falls back to literal string replacement.
-    /// Works for both flatten and unflatten operations.
+    /// Patterns are literal (exact substring match) by default. Wrap a pattern in
+    /// `r'...'` (e.g. `r'^admin_'`) to use standard Rust regex syntax instead. A
+    /// malformed `r'...'` pattern is silently treated as "no match" rather than
+    /// raising an error. Works for both flatten and unflatten operations.
     ///
     /// # Examples
     ///
     /// ```rust
     /// use json_tools_rs::{JSONTools, JsonOutput};
     ///
-    /// // Regex pattern (standard Rust regex syntax)
+    /// // Regex pattern, via the r'...' wrapper
     /// let json = r#"{"role": "super", "level": "admin"}"#;
     /// let result = JSONTools::new()
     ///     .flatten()
     ///     .value_replacement("r'^(super|admin)$'", "administrator")
     ///     .execute(json).unwrap();
     ///
-    /// // Literal pattern (if regex compilation fails)
+    /// // Literal pattern (the default -- no r'...' wrapper)
     /// let result2 = JSONTools::new()
     ///     .flatten()
     ///     .value_replacement("@example.com", "@company.org")

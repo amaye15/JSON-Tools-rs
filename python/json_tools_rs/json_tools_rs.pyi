@@ -83,11 +83,11 @@ class JSONTools:
         ...
 
     def key_replacement(self, find: str, replace: str) -> "JSONTools":
-        """Add a key replacement pattern (regex or literal fallback)."""
+        """Add a key replacement pattern. Literal (exact substring) by default; wrap in r'...' for regex."""
         ...
 
     def value_replacement(self, find: str, replace: str) -> "JSONTools":
-        """Add a value replacement pattern (regex or literal fallback)."""
+        """Add a value replacement pattern. Literal (exact substring) by default; wrap in r'...' for regex."""
         ...
 
     def handle_key_collision(self, value: bool) -> "JSONTools":

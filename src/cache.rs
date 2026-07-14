@@ -10,7 +10,7 @@ use std::sync::{Arc, LazyLock, RwLock};
 /// Maximum number of patterns in the thread-local cache before eviction.
 const THREAD_LOCAL_CACHE_CAPACITY: usize = 128;
 
-/// Maximum number of patterns in the global DashMap cache.
+/// Maximum number of patterns in the global `RwLock<FxHashMap>` cache.
 const GLOBAL_CACHE_CAPACITY: usize = 512;
 
 /// Pre-compiled common regex patterns for maximum performance
