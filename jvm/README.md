@@ -6,12 +6,25 @@ used by the crate's Python bindings (`../src/jvm.rs`) -- full feature parity (re
 and literal key/value replacement, empty-value filtering, key casing, type
 conversion), not just flattening.
 
-Built for use in a Databricks **Lakeflow Declarative Pipeline** (formerly Delta Live
-Tables). Lakeflow pipelines only support Python/SQL for pipeline *definitions* -- so
-this isn't "write the pipeline in Scala," it's "expose the Rust core as a JVM-native
-library the Python pipeline calls into," via `spark.udf.registerJavaFunction` (row
-UDF, SQL-native) or a `spark._jvm` escape hatch (batched, higher-throughput
-transform).
+Built for use as Apache Spark UDFs in a **Databricks Job or notebook running on
+classic compute** (an all-purpose or job cluster with the jar attached as a cluster
+library).
+
+> **This does *not* work inside a Lakeflow Declarative Pipeline (formerly Delta Live
+> Tables).** Databricks' own docs are explicit: *"pipelines support only SQL and
+> Python. You cannot use JVM libraries in a pipeline"* and *"installing JVM libraries
+> causes unpredictable behavior."* This applies to every Lakeflow pipeline regardless
+> of compute type (serverless or classic-backed) -- there is no way to attach this
+> jar to a pipeline's compute, so `spark.udf.registerJavaFunction(...)` called from
+> inside a pipeline's Python code will fail with a `ClassNotFoundException` (the class
+> was never on that JVM's classpath to begin with). See [Databricks
+> Setup](../docs/src/guide/databricks-setup.md) for the two ways to actually get this
+> library's functionality into a Databricks data flow, including one that *does*
+> feed a Lakeflow pipeline.
+>
+> If your goal is specifically "call json-tools-rs from inside a Lakeflow pipeline,"
+> use the **Python bindings** instead (`pip install json-tools-rs` once published) --
+> Python wheels are supported in a pipeline's Environment settings, unlike JVM jars.
 
 If your need is just "flatten nested JSON into columns" with no custom key/value
 transforms, check whether Spark's built-in `VARIANT` type + `variant_explode()` /
@@ -58,8 +71,10 @@ export JAVA_HOME=$(/usr/libexec/java_home -v 17)   # or your platform's equivale
 **Via CI artifact (any commit):** download the `json-tools-rs-spark-jar` artifact
 from a `jvm-ci.yml` CI run (or build it locally per above), then:
 
-1. Upload the jar to a Unity Catalog Volume or a workspace path.
-2. Attach it as a cluster-scoped or pipeline-scoped library.
+1. Upload the jar to a Unity Catalog Volume.
+2. Attach it as a cluster library on a **classic** all-purpose or job cluster
+   (Compute → your cluster → Libraries → Install new → Volumes). Not applicable to
+   Lakeflow Pipeline compute -- see the note above.
 
 **Via Maven Central (tagged releases only):** pushing a git tag (e.g. `v0.10.0`)
 triggers `jvm-ci.yml`'s `release` job, which builds, GPG-signs, and publishes
@@ -83,7 +98,11 @@ publishes via Sonatype's `central-publishing-maven-plugin`) -- everything in tha
 profile is opt-in and only runs when explicitly activated (`-P release`), so a plain
 `mvn test`/`mvn package` never needs a GPG key.
 
-## Usage from a Python Lakeflow Declarative Pipeline
+## Usage in a Databricks Job or notebook (classic compute)
+
+This is a PySpark notebook cell or a notebook/Python task in a Databricks Job,
+running on a cluster that has the jar attached as a library (see above) --
+**not** a Lakeflow Pipeline.
 
 ### Tier 1: row UDF (simple, SQL-native)
 
@@ -106,11 +125,10 @@ spark.udf.registerJavaFunction(
     StringType(),
 )
 
-@dlt.table
-def flattened_events():
-    return spark.readStream.table("raw_events").selectExpr(
-        "flatten_json(payload) AS flattened_payload"
-    )
+flattened = spark.table("raw_events").selectExpr(
+    "flatten_json(payload) AS flattened_payload"
+)
+flattened.write.mode("append").saveAsTable("flattened_events")
 ```
 
 For **custom configuration** (separator, replacements, filters), use the `spark._jvm`
@@ -136,8 +154,8 @@ spark._jsparkSession.udf().register(
 
 **Malformed input throws `JsonToolsException`** (fail-fast), consistent with how both
 the core Rust library and its Python bindings already behave -- it is not silently
-swallowed to `null`. Wrap in SQL `TRY(...)` or a Lakeflow expectation if you want
-`from_json`-style null-on-error semantics instead.
+swallowed to `null`. Wrap in SQL `TRY(...)` if you want `from_json`-style
+null-on-error semantics instead.
 
 ### Tier 2: batched transform (higher throughput)
 
@@ -181,6 +199,32 @@ exception identifies the actual malformed row's own JSON error, instead of an op
 per-chunk index -- this does not change Spark's normal task-failure semantics (the
 task still fails and is retried/aborted the same way any `mapPartitions` exception
 would), it only makes the failure diagnosable.
+
+## Feeding a Lakeflow Pipeline
+
+Since this library can't run inside a Lakeflow Pipeline directly, the way to get its
+output *into* one is to run it upstream as a separate Databricks Job (per above) that
+writes a Delta table, then point the pipeline at that table as its source:
+
+```python
+# In the Job's notebook/task (classic cluster, jar attached):
+spark.table("raw_events") \
+    .selectExpr("flatten_json(payload) AS flattened_payload") \
+    .write.mode("append").saveAsTable("main.default.flattened_events")
+```
+
+```python
+# In the Lakeflow Pipeline (separate, Python/SQL only, serverless or classic compute):
+@dlt.table
+def bronze_events():
+    return spark.readStream.table("main.default.flattened_events")
+```
+
+Schedule the Job to run before the pipeline (or as an upstream task in the same
+Databricks Workflow) so the Delta table is fresh when the pipeline reads it. See
+[Databricks Setup](../docs/src/guide/databricks-setup.md) for the full walkthrough of
+both this pattern and the simpler Job-only one, plus the Python-bindings alternative
+for when the requirement is genuinely "run inside the pipeline itself."
 
 ## Configuration reference
 

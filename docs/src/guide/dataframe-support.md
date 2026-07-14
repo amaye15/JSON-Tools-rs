@@ -2,12 +2,16 @@
 
 The Python bindings natively support DataFrame and Series objects from popular data libraries, with perfect type preservation.
 
-> **Note:** PySpark support here means the Python bindings can accept/return a
-> PySpark DataFrame directly (useful when driving a Spark job from a Python script
-> that has the Python bindings installed). For running *inside* a distributed Spark
-> job as a native UDF -- without requiring the Python bindings on every executor,
-> e.g. from a Databricks Lakeflow Declarative Pipeline -- see the
-> [JVM / Spark bindings](../getting-started/quickstart-jvm.md) instead.
+> **Note:** the `.execute(df)` convenience shown here collects the DataFrame to the
+> driver, processes it through the Rust engine, and reconstructs a new DataFrame --
+> fine for smaller data, but not how you want to process a large distributed Spark
+> dataset. For genuinely distributed, per-partition processing (including from
+> *inside* a Databricks Lakeflow Declarative Pipeline, where this is the only
+> supported approach -- see [Setting Up on Databricks](./databricks-setup.md)), wrap
+> the Python bindings in a `pandas_udf` instead, so each executor runs its own share
+> of the work. The [JVM / Spark bindings](../getting-started/quickstart-jvm.md) are a
+> separate, JVM-native alternative for Databricks Jobs/notebooks on classic compute
+> (not usable inside a pipeline at all -- see that page for why).
 
 ## Supported Libraries
 

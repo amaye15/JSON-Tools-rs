@@ -16,8 +16,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `spark.udf.registerJavaFunction`) and a higher-throughput batched `Dataset.mapPartitions`
   transform (`BatchTransform`) that amortizes JNI-crossing overhead across many rows
   per native call. Packaged as a multi-platform (`linux-x86_64`, `linux-aarch64`) fat
-  jar built by a new `jvm-ci.yml` CI workflow, intended for Databricks Lakeflow
-  Declarative Pipelines (formerly Delta Live Tables) and other Spark workloads.
+  jar built by a new `jvm-ci.yml` CI workflow, intended for Databricks Jobs/notebooks
+  on classic compute and other Spark workloads -- **not** usable inside a Lakeflow
+  Declarative Pipeline (formerly Delta Live Tables): Databricks does not permit JVM
+  libraries on pipeline compute at all. For running inside a pipeline, wrap the
+  Python bindings in a `pandas_udf` instead -- see [Setting Up on
+  Databricks](docs/src/guide/databricks-setup.md).
   Tagged releases (`git tag vX.Y.Z`) now also publish `io.github.amaye15:json-tools-rs-spark`
   to Maven Central automatically (GPG-signed, via Sonatype's Central Portal).
 - **crates.io publishing**: `publish = false` removed from `Cargo.toml` and the

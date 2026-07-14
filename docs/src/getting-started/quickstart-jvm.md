@@ -1,19 +1,23 @@
 # Quick Start (JVM / Spark)
 
-The JVM bindings expose the same `JSONTools` engine as a Java library, built primarily
-for use as **Apache Spark UDFs** -- e.g. inside a **Databricks Lakeflow Declarative
-Pipeline** (formerly Delta Live Tables). They're backed by a thin JNI shim over the
-same Rust core the Python bindings use, so they have full feature parity: regex and
-literal key/value replacement, empty-value filtering, key casing, and type
-conversion -- not just flattening.
+The JVM bindings expose the same `JSONTools` engine as a Java library, built for use
+as **Apache Spark UDFs in a Databricks Job or notebook running on classic compute**
+(or any other Spark environment where you control cluster libraries). They're backed
+by a thin JNI shim over the same Rust core the Python bindings use, so they have full
+feature parity: regex and literal key/value replacement, empty-value filtering, key
+casing, and type conversion -- not just flattening.
 
-> Lakeflow Declarative Pipelines only support Python/SQL for pipeline
-> *definitions*, so using this binding isn't "write the pipeline in Scala" -- it's
-> "expose the Rust core as a JVM-native library that a Python pipeline calls into,"
-> via `spark.udf.registerJavaFunction` or a `spark._jvm` escape hatch. See
-> [`jvm/README.md`](https://github.com/amaye15/json-tools-rs/blob/master/jvm/README.md)
-> in the repository for the full Databricks integration walkthrough (distribution,
-> both usage tiers, tuning) -- this page just covers the basics.
+> **This does not work inside a Lakeflow Declarative Pipeline** (formerly Delta Live
+> Tables). Databricks' own docs are explicit that pipelines support only SQL and
+> Python, and that JVM libraries cannot be attached to pipeline compute at all
+> (serverless or classic-backed) -- so a jar-based UDF can never be registered from
+> inside a pipeline's Python code. See [Setting Up on
+> Databricks](../guide/databricks-setup.md) for what actually works: running this as
+> a Databricks Job on a classic cluster, optionally feeding a Lakeflow pipeline
+> downstream via a Delta table, or using the Python bindings instead if you need the
+> processing to happen genuinely inside a pipeline (Python wheels *are* supported
+> there). This page covers the JVM API itself; that guide covers the Databricks
+> deployment mechanics.
 
 If your need is just "flatten nested JSON into columns" with no custom key/value
 transforms, check whether Spark's built-in `VARIANT` type + `variant_explode()` /
@@ -61,7 +65,8 @@ Patterns follow the same `r'...'` convention as every other binding -- see
 
 ## As a Spark Row UDF
 
-Register the default-config UDF directly from a Python pipeline:
+Register the default-config UDF in a notebook or Job task running on a classic
+cluster that has the jar attached as a library:
 
 ```python
 from pyspark.sql.types import StringType
@@ -83,8 +88,10 @@ higher-throughput batched `BatchTransform` (`mapPartitions`-based) alternative.
 
 ## Where to Go Next
 
+- [Setting Up on Databricks](../guide/databricks-setup.md) -- attaching the jar to a
+  cluster, running it from a Job, and feeding a Lakeflow Pipeline downstream.
 - [`jvm/README.md`](https://github.com/amaye15/json-tools-rs/blob/master/jvm/README.md) --
-  full build, Databricks distribution, both UDF tiers, tuning guidance.
+  full build instructions, both UDF tiers, tuning guidance.
 - [Key & Value Replacements](../guide/replacements.md) -- the `r'...'` pattern convention.
 - [Rust API Reference](../reference/rust-api.md) -- the underlying `JSONTools` builder
   every method on the Java `JsonTools` builder maps to 1:1.

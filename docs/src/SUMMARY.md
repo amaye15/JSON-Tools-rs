@@ -19,6 +19,7 @@
 - [Normal Mode](./guide/normal-mode.md)
 - [Parallel Processing](./guide/parallel-processing.md)
 - [DataFrame & Series Support](./guide/dataframe-support.md)
+- [Setting Up on Databricks](./guide/databricks-setup.md)
 
 # Reference
 
