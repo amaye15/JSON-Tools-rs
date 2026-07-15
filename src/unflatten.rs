@@ -388,20 +388,41 @@ fn handle_entry_collisions<'a>(
 // Path Analysis
 // ================================================================================================
 
+/// Find every separator byte-offset in `key`, once. Shared by the path-type analysis
+/// pass below and the tree-building pass (`set_nested_value`) so a key's separators are
+/// located exactly once instead of once per pass (the analysis pass used to walk the
+/// key itself via `find_separator`, then tree-building re-walked the same key via
+/// `str::split`).
+fn find_separator_offsets(key_bytes: &[u8], sep_bytes: &[u8]) -> SmallVec<[usize; 16]> {
+    let mut offsets = SmallVec::new();
+    let mut search_start = 0;
+    let sep_len = sep_bytes.len();
+
+    while search_start < key_bytes.len() {
+        match find_separator(key_bytes, sep_bytes, search_start) {
+            Some(pos) => {
+                offsets.push(pos);
+                search_start = pos + sep_len;
+            }
+            None => break,
+        }
+    }
+
+    offsets
+}
+
 /// Pre-analyze all flattened keys to build a path-type map for array vs object disambiguation.
 fn analyze_path_types(
     entries: &[(String, ValueRef<'_>)],
-    separator: &str,
+    offsets_per_entry: &[SmallVec<[usize; 16]>],
+    sep_len: usize,
 ) -> FxHashMap<String, bool> {
     let estimated_paths = entries.len() * 2;
     let mut state: FxHashMap<String, u8> =
         FxHashMap::with_capacity_and_hasher(estimated_paths, Default::default());
 
-    let sep_bytes = separator.as_bytes();
-    let sep_len = separator.len();
-
-    for (key, _) in entries {
-        analyze_key_path(key, sep_bytes, sep_len, &mut state);
+    for ((key, _), offsets) in entries.iter().zip(offsets_per_entry) {
+        analyze_key_path(key, offsets, sep_len, &mut state);
     }
 
     state
@@ -413,7 +434,8 @@ fn analyze_path_types(
         .collect()
 }
 
-/// Analyze a single key's path segments and record child-type info per parent prefix.
+/// Analyze a single key's path segments (given its pre-found separator offsets) and
+/// record child-type info per parent prefix.
 ///
 /// Bitmask per parent: bit 0 (0b01) = has numeric child, bit 1 (0b10) = has non-numeric child.
 /// A parent with only numeric children (mask == 0b01) is treated as an array;
@@ -421,25 +443,18 @@ fn analyze_path_types(
 #[inline]
 fn analyze_key_path(
     key: &str,
-    sep_bytes: &[u8],
+    offsets: &[usize],
     sep_len: usize,
     state: &mut FxHashMap<String, u8>,
 ) {
-    let key_bytes = key.as_bytes();
-    let mut search_start = 0;
+    let key_len = key.len();
 
-    while search_start < key_bytes.len() {
-        let next_sep = match find_separator(key_bytes, sep_bytes, search_start) {
-            Some(pos) => pos,
-            None => break,
-        };
+    for (i, &sep_pos) in offsets.iter().enumerate() {
+        let parent = &key[..sep_pos];
 
-        let parent = &key[..next_sep];
-
-        let child_start = next_sep + sep_len;
-        if child_start < key_bytes.len() {
-            let child_end =
-                find_separator(key_bytes, sep_bytes, child_start).unwrap_or(key_bytes.len());
+        let child_start = sep_pos + sep_len;
+        if child_start < key_len {
+            let child_end = offsets.get(i + 1).copied().unwrap_or(key_len);
             let child = &key[child_start..child_end];
 
             let bit: u8 = if is_valid_array_index(child) {
@@ -454,8 +469,6 @@ fn analyze_key_path(
                 state.insert(parent.to_string(), bit);
             }
         }
-
-        search_start = next_sep + sep_len;
     }
 }
 
@@ -509,13 +522,26 @@ fn build_unflatten_tree<'a>(
         return Ok(UnflatNode::Object(ObjectMap::default()));
     }
 
-    let path_types = analyze_path_types(&entries, separator);
+    let sep_bytes = separator.as_bytes();
+    let sep_len = separator.len();
+
+    // Each key's separators are located exactly once here, then reused by both the
+    // path-type analysis pass (which needs to see every sibling before the
+    // tree-building pass can know if a parent is an array or object -- those two
+    // passes are load-bearing and can't be merged) and the tree-building pass itself.
+    let offsets_per_entry: Vec<SmallVec<[usize; 16]>> = entries
+        .iter()
+        .map(|(key, _)| find_separator_offsets(key.as_bytes(), sep_bytes))
+        .collect();
+
+    let path_types = analyze_path_types(&entries, &offsets_per_entry, sep_len);
     let mut root: ObjectMap<'a> = ObjectMap::default();
 
-    for (key, value) in entries {
+    for ((key, value), offsets) in entries.into_iter().zip(offsets_per_entry.iter()) {
         set_nested_value(
             &mut root,
             &key,
+            offsets,
             value,
             separator,
             &path_types,
@@ -530,24 +556,30 @@ fn build_unflatten_tree<'a>(
 fn set_nested_value<'a>(
     result: &mut ObjectMap<'a>,
     key_path: &str,
+    offsets: &[usize],
     value: ValueRef<'a>,
     separator: &str,
     path_types: &FxHashMap<String, bool>,
     max_array_index: usize,
 ) -> Result<(), JsonToolsError> {
-    type PathSegments<'b> = SmallVec<[&'b str; 16]>;
-    let parts: PathSegments = key_path.split(separator).collect();
-
-    if parts.is_empty() {
-        return Err(JsonToolsError::invalid_json_structure("Empty key path"));
-    }
-
-    if parts.len() == 1 {
-        // Flat keys are already unique at this point (collision handling ran in
-        // Phase 3), so no two entries ever target the same leaf slot -- safe to insert.
-        result.insert(parts[0].to_string(), UnflatNode::Leaf(value));
+    if offsets.is_empty() {
+        // No separator found: the whole key is a single segment (leaf directly
+        // under `result`). Flat keys are already unique at this point (collision
+        // handling ran in Phase 3), so no two entries ever target the same leaf
+        // slot -- safe to insert.
+        result.insert(key_path.to_string(), UnflatNode::Leaf(value));
         return Ok(());
     }
+
+    type PathSegments<'b> = SmallVec<[&'b str; 16]>;
+    let sep_len = separator.len();
+    let mut parts: PathSegments = SmallVec::with_capacity(offsets.len() + 1);
+    let mut start = 0;
+    for &pos in offsets {
+        parts.push(&key_path[start..pos]);
+        start = pos + sep_len;
+    }
+    parts.push(&key_path[start..]);
 
     let mut path_buffer = String::with_capacity(key_path.len());
     set_nested_value_recursive(

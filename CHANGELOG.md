@@ -7,28 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
-- Windows and macOS Python wheels are now built with Profile-Guided Optimization
-  (PGO): an instrumented build runs a training workload through the actual Python
-  bindings, and the collected profile feeds a final optimized rebuild. Locally
-  validated ~5-17% faster across flatten/unflatten/normal-mode scenarios. See
-  `scripts/pgo_train.py` and CONTRIBUTING.md's "Profile-Guided Optimization" section.
-  linux/musllinux wheels are not yet PGO'd (Docker/QEMU-based builds make
-  on-target-architecture training meaningfully harder to wire up safely).
-
 ### Changed
-- Published Python wheels for linux x86_64, windows x64, and macos x86_64/aarch64
-  now build with the `mimalloc` feature enabled (~5-10% speedup), which previously
-  existed as a tested opt-in Cargo feature but was never actually turned on for the
-  artifacts most users install. **Not** enabled for linux aarch64/ppc64le (mimalloc's
-  C build fails under the cross-gcc toolchain manylinux uses for those targets) or
-  any musllinux target, including x86_64 (mimalloc's `initial-exec` TLS model is
-  incompatible with musl's dynamic loading of Python extensions) -- both discovered
-  via real CI failures, not theoretical.
+- `unflatten`'s tree-building pass no longer re-scans each key's separators a second
+  time: the path-type analysis pass and the tree-building pass now share one set of
+  separator offsets per key (previously the analysis pass located separators via
+  `find_separator`, then tree-building independently re-split the same key via
+  `str::split`). Pure algorithmic change, portable to every platform and to plain
+  `cargo add` library consumers, not just published wheels.
+- The regex pattern cache (both the thread-local and global tiers) now evicts the
+  genuinely least-recently-used entry when full, via a shared monotonic tick bumped
+  on every cache hit, instead of an arbitrary entry (global tier: `cache.keys().next()`;
+  thread-local tier: alternating half-retain with no recency awareness). Protects hot
+  patterns from eviction under high pattern-cardinality workloads. No new dependency.
 - Bumped patch/minor dependencies within already-declared `Cargo.toml` ranges:
-  sonic-rs 0.5.7->0.5.8 (fixes unsafe/Miri soundness issues, drops an unnecessary
-  `pclmulqdq` CPU-feature requirement), mimalloc 0.1.48->0.1.52, smallvec
-  1.15.1->1.15.2, regex, serde_json, and chrono to latest patch.
+  mimalloc 0.1.48->0.1.52, smallvec 1.15.1->1.15.2, regex, serde_json, and chrono
+  to latest patch. sonic-rs is pinned to exactly `=0.5.7`: 0.5.8 uses
+  `exposed_provenance`/`strict_provenance`, which need a newer rustc than this
+  crate's MSRV of 1.80.
 
 ## [0.9.2] - 2026-07-15
 

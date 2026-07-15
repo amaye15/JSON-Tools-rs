@@ -5,7 +5,21 @@
 
 use crate::fxhash::FxHashMap;
 use regex::Regex;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, RwLock};
+
+/// Monotonic "recency" counter shared by both cache tiers, so eviction can identify
+/// the genuinely least-recently-used entry instead of an arbitrary one. A plain
+/// `fetch_add` is cheap enough to call on every cache hit; eviction only scans for
+/// the minimum tick when the cache is actually full, which is the already-rare path
+/// (a cache miss followed by a `Regex::new` compile costs far more than an O(n) scan
+/// over at most a few hundred entries).
+static CACHE_CLOCK: AtomicU64 = AtomicU64::new(0);
+
+#[inline]
+fn next_tick() -> u64 {
+    CACHE_CLOCK.fetch_add(1, Ordering::Relaxed)
+}
 
 /// Maximum number of patterns in the thread-local cache before eviction.
 const THREAD_LOCAL_CACHE_CAPACITY: usize = 128;
@@ -116,7 +130,13 @@ static COMMON_REGEX_PATTERNS: LazyLock<FxHashMap<&'static str, Arc<Regex>>> = La
     patterns
 });
 
-static REGEX_CACHE: LazyLock<RwLock<FxHashMap<Arc<str>, Arc<Regex>>>> = LazyLock::new(|| {
+/// Cached regex plus its last-access tick, for LRU eviction. The tick lives outside
+/// the `Arc<Regex>` (rather than e.g. inside a wrapper struct) so it can be bumped
+/// through a shared reference -- readers only need a *read* lock on the outer map to
+/// record a cache hit, not a write lock.
+type CacheEntry = (Arc<Regex>, AtomicU64);
+
+static REGEX_CACHE: LazyLock<RwLock<FxHashMap<Arc<str>, CacheEntry>>> = LazyLock::new(|| {
     RwLock::new(FxHashMap::with_capacity_and_hasher(
         GLOBAL_CACHE_CAPACITY,
         Default::default(),
@@ -124,19 +144,21 @@ static REGEX_CACHE: LazyLock<RwLock<FxHashMap<Arc<str>, Arc<Regex>>>> = LazyLock
 });
 
 thread_local! {
-    static THREAD_LOCAL_REGEX_CACHE: std::cell::RefCell<FxHashMap<Arc<str>, Arc<Regex>>> =
+    static THREAD_LOCAL_REGEX_CACHE: std::cell::RefCell<FxHashMap<Arc<str>, CacheEntry>> =
         std::cell::RefCell::new(FxHashMap::with_capacity_and_hasher(THREAD_LOCAL_CACHE_CAPACITY, Default::default()));
 }
 
-/// Evict approximately half the entries from a thread-local cache.
-/// Uses alternating retain to preserve ~50% of entries.
+/// Evict the least-recently-used half of a thread-local cache (batched, rather than
+/// evicting one entry per insert, to amortize the O(n) scan across future inserts).
 #[inline]
-fn evict_thread_local_half(cache: &mut FxHashMap<Arc<str>, Arc<Regex>>) {
-    let mut keep = true;
-    cache.retain(|_, _| {
-        keep = !keep;
-        keep
-    });
+fn evict_thread_local_lru_half(cache: &mut FxHashMap<Arc<str>, CacheEntry>) {
+    let mut ticks: Vec<u64> = cache
+        .values()
+        .map(|(_, tick)| tick.load(Ordering::Relaxed))
+        .collect();
+    ticks.sort_unstable();
+    let median = ticks[ticks.len() / 2];
+    cache.retain(|_, (_, tick)| tick.load(Ordering::Relaxed) >= median);
 }
 
 /// Insert a regex into the thread-local cache, evicting if at capacity.
@@ -145,9 +167,12 @@ fn insert_thread_local(pattern: &str, regex: &Arc<Regex>) {
     THREAD_LOCAL_REGEX_CACHE.with(|cache| {
         let mut cache_ref = cache.borrow_mut();
         if cache_ref.len() >= THREAD_LOCAL_CACHE_CAPACITY {
-            evict_thread_local_half(&mut cache_ref);
+            evict_thread_local_lru_half(&mut cache_ref);
         }
-        cache_ref.insert(Arc::from(pattern), Arc::clone(regex));
+        cache_ref.insert(
+            Arc::from(pattern),
+            (Arc::clone(regex), AtomicU64::new(next_tick())),
+        );
     });
 }
 
@@ -186,7 +211,10 @@ pub(crate) fn get_cached_regex(pattern: &str) -> Result<Arc<Regex>, regex::Error
     // TIER 2: Try thread-local cache (fast path, no locks)
     let thread_local_result = THREAD_LOCAL_REGEX_CACHE.with(|cache| {
         let cache_ref = cache.borrow();
-        cache_ref.get(pattern).map(Arc::clone)
+        cache_ref.get(pattern).map(|(regex, tick)| {
+            tick.store(next_tick(), Ordering::Relaxed);
+            Arc::clone(regex)
+        })
     });
 
     if let Some(regex) = thread_local_result {
@@ -195,7 +223,8 @@ pub(crate) fn get_cached_regex(pattern: &str) -> Result<Arc<Regex>, regex::Error
 
     // TIER 3: Try global cache under read lock
     {
-        if let Some(regex) = REGEX_CACHE.read().unwrap().get(pattern) {
+        if let Some((regex, tick)) = REGEX_CACHE.read().unwrap().get(pattern) {
+            tick.store(next_tick(), Ordering::Relaxed);
             let regex_arc = Arc::clone(regex);
             insert_thread_local(pattern, &regex_arc);
             return Ok(regex_arc);
@@ -208,18 +237,82 @@ pub(crate) fn get_cached_regex(pattern: &str) -> Result<Arc<Regex>, regex::Error
     {
         let mut cache = REGEX_CACHE.write().unwrap();
         // Another thread may have compiled the same pattern while we were waiting
-        if let Some(existing) = cache.get(pattern) {
+        if let Some((existing, tick)) = cache.get(pattern) {
+            tick.store(next_tick(), Ordering::Relaxed);
             return Ok(Arc::clone(existing));
         }
-        // Bounded cache: evict one entry if at capacity
+        // Bounded cache: evict the genuinely least-recently-used entry if at capacity
         if cache.len() >= GLOBAL_CACHE_CAPACITY {
-            if let Some(key) = cache.keys().next().cloned() {
-                cache.remove(&key);
+            if let Some(lru_key) = cache
+                .iter()
+                .min_by_key(|(_, (_, tick))| tick.load(Ordering::Relaxed))
+                .map(|(k, _)| k.clone())
+            {
+                cache.remove(&lru_key);
             }
         }
-        cache.insert(Arc::from(pattern), Arc::clone(&regex));
+        cache.insert(
+            Arc::from(pattern),
+            (Arc::clone(&regex), AtomicU64::new(next_tick())),
+        );
     }
 
     insert_thread_local(pattern, &regex);
     Ok(regex)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The thread-local cache tier must evict genuinely least-recently-used entries,
+    /// not an arbitrary half -- regression test for the previous alternating-retain
+    /// eviction, which had no concept of recency and could evict a pattern being
+    /// accessed on every single call just as readily as one never touched again.
+    ///
+    /// Scoped to the thread-local tier deliberately: each `#[test]` fn runs on its own
+    /// thread, so this tier's state is naturally isolated from other tests running
+    /// concurrently. The global tier shares the same tick-based eviction logic but is
+    /// process-wide, so asserting on it here would risk flakiness from unrelated tests'
+    /// cache activity.
+    /// Test-only: check the thread-local tier directly, bypassing the tier-1/tier-3
+    /// fallbacks that `get_cached_regex` would otherwise use to mask an eviction from
+    /// this tier specifically (the global tier has its own, much larger capacity and
+    /// won't have evicted the same entry, so a `get_cached_regex` call alone can't
+    /// distinguish "still in the thread-local cache" from "fell through to tier 3").
+    fn thread_local_cache_contains(pattern: &str) -> bool {
+        THREAD_LOCAL_REGEX_CACHE.with(|cache| cache.borrow().contains_key(pattern))
+    }
+
+    #[test]
+    fn test_thread_local_cache_evicts_lru_not_arbitrary() {
+        let hot_pattern = "lru_test_hot_pattern_zzz";
+        get_cached_regex(hot_pattern).expect("hot pattern should compile");
+
+        let cold_pattern = "lru_test_cold_pattern_zzz";
+        get_cached_regex(cold_pattern).expect("cold pattern should compile");
+
+        assert!(thread_local_cache_contains(hot_pattern));
+        assert!(thread_local_cache_contains(cold_pattern));
+
+        // Flood well past THREAD_LOCAL_CACHE_CAPACITY with distinct patterns, periodically
+        // re-touching the hot pattern to keep its tick fresh. The cold pattern is never
+        // touched again after its initial compile above.
+        for i in 0..(THREAD_LOCAL_CACHE_CAPACITY * 3) {
+            let pattern = format!("lru_test_flood_pattern_{i}");
+            get_cached_regex(&pattern).expect("flood pattern should compile");
+            if i % 4 == 0 {
+                get_cached_regex(hot_pattern).expect("hot pattern re-access should succeed");
+            }
+        }
+
+        assert!(
+            thread_local_cache_contains(hot_pattern),
+            "repeatedly-accessed pattern should survive eviction"
+        );
+        assert!(
+            !thread_local_cache_contains(cold_pattern),
+            "untouched pattern should have been evicted, not kept by arbitrary chance"
+        );
+    }
 }

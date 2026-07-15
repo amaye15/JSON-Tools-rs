@@ -14,28 +14,6 @@
 # PyPI/attestation steps) downloads wheels-*/sdist artifacts as untracked files before
 # `cargo publish` runs, which its dirty-checkout guard otherwise refuses to publish
 # against (this bit the very first real release, v0.9.1 -- caught and fixed same-day).
-#
-# MANUAL PATCH: `linux`/`musllinux` matrix entries carry a per-target `features` field
-# (referenced via `--features ${{ matrix.platform.features }}` in their maturin-action
-# args), to build the `linux`/x86_64 wheel with the mimalloc global allocator
-# (~5-10% speedup, already a tested opt-in Cargo feature -- see Cargo.toml). Every
-# other linux/musllinux target deliberately omits it, confirmed via real CI failures:
-# aarch64/ppc64le's cross-gcc toolchain can't build libmimalloc-sys's C code ("cc1:
-# error: -Werror=date-time: no option -Wdate-time"), and every musllinux target
-# (including x86_64, so it's not a cross-compilation issue) fails at import time
-# because mimalloc's `-ftls-model=initial-exec` is incompatible with musl's dynamic
-# loading of Python extensions. If you regenerate this file, re-apply the `features`
-# matrix fields exactly (only linux/x86_64 gets `python,mimalloc`).
-#
-# MANUAL PATCH: the `windows` and `macos` jobs no longer use a single PyO3/maturin-action
-# "Build wheels" step. They now run a hand-written Profile-Guided Optimization (PGO)
-# sequence (install maturin via pip, instrumented `maturin develop` + `scripts/pgo_train.py`
-# training run, `llvm-profdata merge`, then a final `maturin build` with `-Cprofile-use`)
-# that also passes `--features python,mimalloc`. Locally validated ~5-17% faster --
-# see CONTRIBUTING.md's "Profile-Guided Optimization" section. `linux`/`musllinux` are
-# deliberately NOT PGO'd (Docker/QEMU-based builds make on-target-architecture training
-# much harder to wire up safely). If you regenerate this file, re-apply the whole PGO
-# step sequence in place of the regenerated single "Build wheels" step for both jobs.
 name: Python Wheels CI
 
 on:
@@ -60,25 +38,17 @@ jobs:
         platform:
           - runner: ubuntu-22.04
             target: x86_64
-            features: python,mimalloc
           - runner: ubuntu-22.04
             target: x86
-            features: python
-          # mimalloc excluded: libmimalloc-sys's C build fails under the aarch64/ppc64le
-          # cross-gcc toolchains manylinux uses here ("cc1: error: -Werror=date-time: no
-          # option -Wdate-time") -- confirmed by a real CI failure, not theoretical.
           - runner: ubuntu-22.04
             target: aarch64
-            features: python
           - runner: ubuntu-22.04
             target: armv7
-            features: python
           # Temporarily disabled: s390x fails with simd-json fallback implementation issues on big-endian architecture
           # - runner: ubuntu-22.04
           #   target: s390x
           - runner: ubuntu-22.04
             target: ppc64le
-            features: python
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -88,7 +58,7 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.platform.target }}
-          args: --release --out dist --find-interpreter --features ${{ matrix.platform.features }}
+          args: --release --out dist --find-interpreter
           sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
           manylinux: auto
       - name: Upload wheels
@@ -128,24 +98,14 @@ jobs:
       fail-fast: false
       matrix:
         platform:
-          # mimalloc excluded on every musllinux target: its `-ftls-model=initial-exec`
-          # TLS model is incompatible with musl's dynamic loading of Python extensions
-          # ("Error relocating ...: mprotect: initial-exec TLS resolves to dynamic
-          # definition") -- confirmed by a real CI failure even on native x86_64 (no
-          # cross-compilation involved, so this is a musl/dlopen incompatibility, not a
-          # toolchain quirk).
           - runner: ubuntu-22.04
             target: x86_64
-            features: python
           - runner: ubuntu-22.04
             target: x86
-            features: python
           - runner: ubuntu-22.04
             target: aarch64
-            features: python
           - runner: ubuntu-22.04
             target: armv7
-            features: python
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -155,7 +115,7 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.platform.target }}
-          args: --release --out dist --find-interpreter --features ${{ matrix.platform.features }}
+          args: --release --out dist --find-interpreter
           sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
           manylinux: musllinux_1_2
       - name: Upload wheels
@@ -211,60 +171,12 @@ jobs:
         with:
           python-version: 3.x
           architecture: ${{ matrix.platform.target }}
-      - uses: dtolnay/rust-toolchain@v1
+      - name: Build wheels
+        uses: PyO3/maturin-action@v1
         with:
-          toolchain: stable
-          components: llvm-tools-preview
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: pgo-windows-${{ matrix.platform.target }}
-      - name: Install maturin
-        shell: bash
-        run: pip install maturin
-      # PGO (Profile-Guided Optimization): build once with -Cprofile-generate, run a
-      # representative training workload through the actual Python bindings, merge the
-      # collected profiles, then rebuild with -Cprofile-use for the wheel that actually
-      # ships. Locally validated ~5-17% faster across flatten/unflatten/normal scenarios
-      # -- see CONTRIBUTING.md's "Profile-Guided Optimization" section. Native-runner
-      # platforms only (windows/macos): PGO training must execute on the target
-      # architecture, which isn't straightforward for the Docker/QEMU-based linux and
-      # musllinux legs, so those are deliberately left on the plain build path for now.
-      # `maturin develop` has no --interpreter flag; it only auto-detects the active
-      # venv, so activation is required here. But a real CI failure showed the bare
-      # `python3` command doesn't reliably resolve to that same venv afterward on
-      # Windows (venvs there only ship `python.exe`, not `python3.exe`, so `python3`
-      # can fall through to a different Python on PATH) -- so the training script is
-      # invoked via the venv's explicit executable path instead, to remove that
-      # ambiguity entirely.
-      - name: PGO instrumented build + train
-        shell: bash
-        env:
-          RUSTFLAGS: "-Cprofile-generate=${{ github.workspace }}/pgo-data"
-        run: |
-          set -e
-          mkdir -p pgo-data
-          python3 -m venv .venv-pgo-train
-          source .venv-pgo-train/Scripts/activate
-          maturin develop --release --features python,mimalloc
-          .venv-pgo-train/Scripts/python.exe scripts/pgo_train.py
-      # `rustup which` only resolves rustup-proxied binaries (rustc/cargo/etc.), not
-      # llvm-tools-preview's component binaries -- confirmed by a real CI failure
-      # ("unknown binary 'llvm-profdata' in toolchain"). Locate it via the sysroot
-      # instead, same as cargo-pgo does internally.
-      - name: Merge PGO profiles
-        shell: bash
-        run: |
-          set -e
-          SYSROOT="$(rustc --print sysroot)"
-          HOST="$(rustc -vV | sed -n 's/^host: //p')"
-          PROFDATA="$SYSROOT/lib/rustlib/$HOST/bin/llvm-profdata"
-          [ -f "$PROFDATA" ] || PROFDATA="${PROFDATA}.exe"
-          "$PROFDATA" merge -o pgo-data/merged.profdata pgo-data/*.profraw
-      - name: Build PGO-optimized wheels
-        shell: bash
-        env:
-          RUSTFLAGS: "-Cprofile-use=${{ github.workspace }}/pgo-data/merged.profdata -Cllvm-args=-pgo-warn-missing-function"
-        run: maturin build --release --features python,mimalloc --interpreter python3 --out dist
+          target: ${{ matrix.platform.target }}
+          args: --release --out dist --find-interpreter
+          sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
@@ -305,39 +217,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: 3.x
-      - uses: dtolnay/rust-toolchain@v1
+      - name: Build wheels
+        uses: PyO3/maturin-action@v1
         with:
-          toolchain: stable
-          components: llvm-tools-preview
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: pgo-macos-${{ matrix.platform.target }}
-      - name: Install maturin
-        run: pip install maturin
-      # PGO: see the matching step in the `windows` job above for the full rationale.
-      # The link-arg flags from this job's `env.RUSTFLAGS` above must be restated here
-      # (RUSTFLAGS fully replaces, not merges) alongside the profile flag.
-      - name: PGO instrumented build + train
-        env:
-          RUSTFLAGS: "-C link-arg=-undefined -C link-arg=dynamic_lookup -Cprofile-generate=${{ github.workspace }}/pgo-data"
-        run: |
-          set -e
-          mkdir -p pgo-data
-          python3 -m venv .venv-pgo-train
-          source .venv-pgo-train/bin/activate
-          maturin develop --release --features python,mimalloc
-          .venv-pgo-train/bin/python scripts/pgo_train.py
-      - name: Merge PGO profiles
-        run: |
-          set -e
-          SYSROOT="$(rustc --print sysroot)"
-          HOST="$(rustc -vV | sed -n 's/^host: //p')"
-          PROFDATA="$SYSROOT/lib/rustlib/$HOST/bin/llvm-profdata"
-          "$PROFDATA" merge -o pgo-data/merged.profdata pgo-data/*.profraw
-      - name: Build PGO-optimized wheels
-        env:
-          RUSTFLAGS: "-C link-arg=-undefined -C link-arg=dynamic_lookup -Cprofile-use=${{ github.workspace }}/pgo-data/merged.profdata -Cllvm-args=-pgo-warn-missing-function"
-        run: maturin build --release --features python,mimalloc --interpreter python3 --out dist
+          target: ${{ matrix.platform.target }}
+          args: --release --out dist --find-interpreter
+          sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
