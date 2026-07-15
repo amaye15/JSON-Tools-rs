@@ -17,13 +17,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on-target-architecture training meaningfully harder to wire up safely).
 
 ### Changed
-- Published Python wheels for 64-bit targets (linux x86_64/aarch64/ppc64le,
-  musllinux x86_64/aarch64, windows x64, macos x86_64/aarch64) now build with the
-  `mimalloc` feature enabled (~5-10% speedup), which previously existed as a tested
-  opt-in Cargo feature but was never actually turned on for the artifacts most users
-  install. 32-bit targets (x86, armv7) are intentionally excluded, mirroring the
-  crate's own `target_pointer_width` split (32-bit already uses a separate, more
-  conservative simd-json code path instead of sonic-rs).
+- Published Python wheels for linux x86_64, windows x64, and macos x86_64/aarch64
+  now build with the `mimalloc` feature enabled (~5-10% speedup), which previously
+  existed as a tested opt-in Cargo feature but was never actually turned on for the
+  artifacts most users install. **Not** enabled for linux aarch64/ppc64le (mimalloc's
+  C build fails under the cross-gcc toolchain manylinux uses for those targets) or
+  any musllinux target, including x86_64 (mimalloc's `initial-exec` TLS model is
+  incompatible with musl's dynamic loading of Python extensions) -- both discovered
+  via real CI failures, not theoretical.
 - Bumped patch/minor dependencies within already-declared `Cargo.toml` ranges:
   sonic-rs 0.5.7->0.5.8 (fixes unsafe/Miri soundness issues, drops an unnecessary
   `pclmulqdq` CPU-feature requirement), mimalloc 0.1.48->0.1.52, smallvec

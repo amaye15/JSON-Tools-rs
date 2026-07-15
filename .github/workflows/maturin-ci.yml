@@ -17,12 +17,15 @@
 #
 # MANUAL PATCH: `linux`/`musllinux` matrix entries carry a per-target `features` field
 # (referenced via `--features ${{ matrix.platform.features }}` in their maturin-action
-# args), to build published wheels with the mimalloc global allocator (~5-10% speedup,
-# already a tested opt-in Cargo feature -- see Cargo.toml). Scoped to 64-bit targets
-# only: this mirrors the crate's own `target_pointer_width` split (32-bit already takes
-# a separate, more conservative simd-json code path instead of sonic-rs), and mimalloc's
-# 32-bit support is less battle-tested than its 64-bit support. If you regenerate this
-# file, re-apply the `features` matrix fields.
+# args), to build the `linux`/x86_64 wheel with the mimalloc global allocator
+# (~5-10% speedup, already a tested opt-in Cargo feature -- see Cargo.toml). Every
+# other linux/musllinux target deliberately omits it, confirmed via real CI failures:
+# aarch64/ppc64le's cross-gcc toolchain can't build libmimalloc-sys's C code ("cc1:
+# error: -Werror=date-time: no option -Wdate-time"), and every musllinux target
+# (including x86_64, so it's not a cross-compilation issue) fails at import time
+# because mimalloc's `-ftls-model=initial-exec` is incompatible with musl's dynamic
+# loading of Python extensions. If you regenerate this file, re-apply the `features`
+# matrix fields exactly (only linux/x86_64 gets `python,mimalloc`).
 #
 # MANUAL PATCH: the `windows` and `macos` jobs no longer use a single PyO3/maturin-action
 # "Build wheels" step. They now run a hand-written Profile-Guided Optimization (PGO)
@@ -61,9 +64,12 @@ jobs:
           - runner: ubuntu-22.04
             target: x86
             features: python
+          # mimalloc excluded: libmimalloc-sys's C build fails under the aarch64/ppc64le
+          # cross-gcc toolchains manylinux uses here ("cc1: error: -Werror=date-time: no
+          # option -Wdate-time") -- confirmed by a real CI failure, not theoretical.
           - runner: ubuntu-22.04
             target: aarch64
-            features: python,mimalloc
+            features: python
           - runner: ubuntu-22.04
             target: armv7
             features: python
@@ -72,7 +78,7 @@ jobs:
           #   target: s390x
           - runner: ubuntu-22.04
             target: ppc64le
-            features: python,mimalloc
+            features: python
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -122,15 +128,21 @@ jobs:
       fail-fast: false
       matrix:
         platform:
+          # mimalloc excluded on every musllinux target: its `-ftls-model=initial-exec`
+          # TLS model is incompatible with musl's dynamic loading of Python extensions
+          # ("Error relocating ...: mprotect: initial-exec TLS resolves to dynamic
+          # definition") -- confirmed by a real CI failure even on native x86_64 (no
+          # cross-compilation involved, so this is a musl/dlopen incompatibility, not a
+          # toolchain quirk).
           - runner: ubuntu-22.04
             target: x86_64
-            features: python,mimalloc
+            features: python
           - runner: ubuntu-22.04
             target: x86
             features: python
           - runner: ubuntu-22.04
             target: aarch64
-            features: python,mimalloc
+            features: python
           - runner: ubuntu-22.04
             target: armv7
             features: python
@@ -217,6 +229,13 @@ jobs:
       # platforms only (windows/macos): PGO training must execute on the target
       # architecture, which isn't straightforward for the Docker/QEMU-based linux and
       # musllinux legs, so those are deliberately left on the plain build path for now.
+      # `maturin develop` has no --interpreter flag; it only auto-detects the active
+      # venv, so activation is required here. But a real CI failure showed the bare
+      # `python3` command doesn't reliably resolve to that same venv afterward on
+      # Windows (venvs there only ship `python.exe`, not `python3.exe`, so `python3`
+      # can fall through to a different Python on PATH) -- so the training script is
+      # invoked via the venv's explicit executable path instead, to remove that
+      # ambiguity entirely.
       - name: PGO instrumented build + train
         shell: bash
         env:
@@ -227,12 +246,19 @@ jobs:
           python3 -m venv .venv-pgo-train
           source .venv-pgo-train/Scripts/activate
           maturin develop --release --features python,mimalloc
-          python3 scripts/pgo_train.py
+          .venv-pgo-train/Scripts/python.exe scripts/pgo_train.py
+      # `rustup which` only resolves rustup-proxied binaries (rustc/cargo/etc.), not
+      # llvm-tools-preview's component binaries -- confirmed by a real CI failure
+      # ("unknown binary 'llvm-profdata' in toolchain"). Locate it via the sysroot
+      # instead, same as cargo-pgo does internally.
       - name: Merge PGO profiles
         shell: bash
         run: |
           set -e
-          PROFDATA="$(rustup which llvm-profdata)"
+          SYSROOT="$(rustc --print sysroot)"
+          HOST="$(rustc -vV | sed -n 's/^host: //p')"
+          PROFDATA="$SYSROOT/lib/rustlib/$HOST/bin/llvm-profdata"
+          [ -f "$PROFDATA" ] || PROFDATA="${PROFDATA}.exe"
           "$PROFDATA" merge -o pgo-data/merged.profdata pgo-data/*.profraw
       - name: Build PGO-optimized wheels
         shell: bash
@@ -300,11 +326,13 @@ jobs:
           python3 -m venv .venv-pgo-train
           source .venv-pgo-train/bin/activate
           maturin develop --release --features python,mimalloc
-          python3 scripts/pgo_train.py
+          .venv-pgo-train/bin/python scripts/pgo_train.py
       - name: Merge PGO profiles
         run: |
           set -e
-          PROFDATA="$(rustup which llvm-profdata)"
+          SYSROOT="$(rustc --print sysroot)"
+          HOST="$(rustc -vV | sed -n 's/^host: //p')"
+          PROFDATA="$SYSROOT/lib/rustlib/$HOST/bin/llvm-profdata"
           "$PROFDATA" merge -o pgo-data/merged.profdata pgo-data/*.profraw
       - name: Build PGO-optimized wheels
         env:
