@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- Windows and macOS Python wheels are now built with Profile-Guided Optimization
+  (PGO): an instrumented build runs a training workload through the actual Python
+  bindings, and the collected profile feeds a final optimized rebuild. Locally
+  validated ~5-17% faster across flatten/unflatten/normal-mode scenarios. See
+  `scripts/pgo_train.py` and CONTRIBUTING.md's "Profile-Guided Optimization" section.
+  linux/musllinux wheels are not yet PGO'd (Docker/QEMU-based builds make
+  on-target-architecture training meaningfully harder to wire up safely).
+
+### Changed
+- Published Python wheels for 64-bit targets (linux x86_64/aarch64/ppc64le,
+  musllinux x86_64/aarch64, windows x64, macos x86_64/aarch64) now build with the
+  `mimalloc` feature enabled (~5-10% speedup), which previously existed as a tested
+  opt-in Cargo feature but was never actually turned on for the artifacts most users
+  install. 32-bit targets (x86, armv7) are intentionally excluded, mirroring the
+  crate's own `target_pointer_width` split (32-bit already uses a separate, more
+  conservative simd-json code path instead of sonic-rs).
+- Bumped patch/minor dependencies within already-declared `Cargo.toml` ranges:
+  sonic-rs 0.5.7->0.5.8 (fixes unsafe/Miri soundness issues, drops an unnecessary
+  `pclmulqdq` CPU-feature requirement), mimalloc 0.1.48->0.1.52, smallvec
+  1.15.1->1.15.2, regex, serde_json, and chrono to latest patch.
+
 ## [0.9.2] - 2026-07-15
 
 Note: `v0.9.1` was tagged on 2026-07-14 but only completed publishing to Maven

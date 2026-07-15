@@ -109,6 +109,51 @@ samply load /tmp/profile.json
 
 > **Note**: `flamegraph` requires full Xcode (not CLI tools only). Valgrind does not work on modern macOS.
 
+### Profile-Guided Optimization (PGO)
+
+Published Python wheels for windows and macos are built with PGO: an instrumented
+build runs a representative training workload (`scripts/pgo_train.py`, driven through
+the actual Python bindings) to collect branch/call-frequency profiles, which are then
+fed back into a final optimized build. Locally validated ~5-17% faster across
+flatten/unflatten/normal-mode scenarios, both at the pure-Rust level (via
+`cargo-pgo` + `examples/bench_quick.rs`) and at the actual wheel level (via `maturin`
++ manual `RUSTFLAGS`). See `.github/workflows/maturin-ci.yml`'s `windows`/`macos` jobs
+for the exact CI sequence. `linux`/`musllinux` wheels are **not** PGO'd: those build
+inside Docker/QEMU (for manylinux/musllinux compliance and cross-arch targets), which
+makes running an instrumented binary on the target architecture during CI meaningfully
+harder to wire up safely -- left as a deliberate follow-up, not an oversight.
+
+To reproduce locally (macOS/Linux; adjust venv activation paths on Windows):
+
+```bash
+rustup component add llvm-tools-preview
+
+# 1. Instrumented build, installed into a scratch venv
+python3 -m venv .venv-pgo
+source .venv-pgo/bin/activate
+pip install maturin
+RUSTFLAGS="-Cprofile-generate=$PWD/pgo-data" maturin develop --release --features python,mimalloc
+
+# 2. Train against realistic workloads through the actual Python bindings
+python3 scripts/pgo_train.py
+
+# 3. Merge the collected profiles
+PROFDATA="$(rustup which llvm-profdata)"
+"$PROFDATA" merge -o pgo-data/merged.profdata pgo-data/*.profraw
+
+# 4. Rebuild the wheel using the merged profile
+RUSTFLAGS="-Cprofile-use=$PWD/pgo-data/merged.profdata" maturin build --release --features python,mimalloc --out dist
+```
+
+For the CLI binary / core library (not currently published as a standalone binary
+anywhere, so this is a local/optional exercise rather than something CI does):
+
+```bash
+cargo install cargo-pgo
+cargo pgo instrument run -- --release --example bench_quick
+cargo pgo optimize build -- --release --example bench_quick
+```
+
 ## Code Style
 
 - Run `cargo fmt` before committing.
