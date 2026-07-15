@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Object keys throughout `unflatten`'s tree (`ObjectMap`) now use `CompactString`
+  instead of `String`, inlining keys up to 24 bytes with no heap allocation. Real-world
+  JSON keys are short (this project's own benchmark corpus averages ~8.6 chars, max
+  22), so nearly every key insertion avoids allocating entirely. Validated with an
+  isolated micro-benchmark before adopting (~3.4x faster than `String` for realistic
+  insert+lookup key-map workloads) and confirmed on the real unflatten path via
+  Criterion: ~19-22% faster (p < 0.05, reproduced across multiple runs).
+  `flatten`'s slow path (`CollectedEntry`, used when key lowercasing/replacement/
+  collision-handling is configured) got the same change for consistency -- its keys
+  are full flattened paths rather than single segments, so more of them exceed the
+  24-byte inline threshold and the win is smaller and noisier to measure (the machine
+  used for benchmarking this session was under heavy thermal load by this point: the
+  *same* binary showed 60% run-to-run variance with zero code changes). Directionally
+  positive across repeated controlled A/B comparisons, kept for architectural
+  consistency and because it carries no measured downside, but not claiming a precise
+  number for this specific path.
+
 ### Changed
 - `unflatten`'s tree-building pass no longer re-scans each key's separators a second
   time: the path-type analysis pass and the tree-building pass now share one set of

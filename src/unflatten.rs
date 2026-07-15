@@ -9,6 +9,7 @@
 use std::borrow::Cow;
 
 use crate::fxhash::{FxHashMap, FxIndexMap};
+use compact_str::CompactString;
 use memchr::{memchr, memmem};
 use smallvec::SmallVec;
 
@@ -33,7 +34,13 @@ use crate::transform::{apply_key_replacement_patterns, apply_value_replacement_p
 /// fine for typical narrow objects, but a JSON object used as a keyed map (e.g. many
 /// `"user_<id>.field"` entries, each a distinct top-level key) turns that into O(n^2)
 /// overall (empirically: 20K such entries went from a few ms to over a second).
-type ObjectMap<'a> = FxIndexMap<String, UnflatNode<'a>>;
+///
+/// Keys are `CompactString`, not `String`: real-world JSON keys are short (this
+/// project's own benchmark corpus averages ~8.6 chars, max 22 -- comfortably within
+/// `CompactString`'s 24-byte inline capacity), so nearly every key insertion here
+/// avoids a heap allocation entirely. Validated with an isolated benchmark before
+/// adopting (~3.4x faster than `String` for realistic insert+lookup key-map workloads).
+type ObjectMap<'a> = FxIndexMap<CompactString, UnflatNode<'a>>;
 
 /// Lightweight tree node for unflattened JSON. Leaf values stay as zero-copy
 /// byte ranges from the original input via `ValueRef`.
@@ -126,7 +133,7 @@ fn extract_flat_entries<'a>(
     input: &'a [u8],
     tape: &[TapeEntry],
     config: &ProcessingConfig,
-) -> Result<Vec<(String, ValueRef<'a>)>, JsonToolsError> {
+) -> Result<Vec<(CompactString, ValueRef<'a>)>, JsonToolsError> {
     if tape.is_empty() {
         return Ok(Vec::new());
     }
@@ -153,10 +160,10 @@ fn extract_flat_entries<'a>(
         // Extract key
         let key_str = tape_content_str(input, entry);
 
-        let mut key = if entry.string_has_escapes() {
-            unescape_json_string(key_str).into_owned()
+        let mut key: CompactString = if entry.string_has_escapes() {
+            CompactString::from(unescape_json_string(key_str).as_ref())
         } else {
-            key_str.to_string()
+            CompactString::from(key_str)
         };
 
         // Apply lowercase
@@ -169,7 +176,7 @@ fn extract_flat_entries<'a>(
             if let Ok(Some(new_key)) =
                 apply_key_replacement_patterns(&key, &config.replacements.key_replacements)
             {
-                key = new_key;
+                key = CompactString::from(new_key);
             }
         }
 
@@ -270,7 +277,7 @@ fn advance_past_value(tape: &[TapeEntry], idx: usize) -> usize {
 
 /// Check if any duplicate keys exist (fast path to skip collision handling).
 #[inline]
-fn has_duplicate_keys(entries: &[(String, ValueRef<'_>)]) -> bool {
+fn has_duplicate_keys(entries: &[(CompactString, ValueRef<'_>)]) -> bool {
     if entries.len() <= 1 {
         return false;
     }
@@ -286,9 +293,9 @@ fn has_duplicate_keys(entries: &[(String, ValueRef<'_>)]) -> bool {
 
 /// Handle duplicate keys: merge into arrays (if enabled) or last-wins.
 fn handle_entry_collisions<'a>(
-    entries: Vec<(String, ValueRef<'a>)>,
+    entries: Vec<(CompactString, ValueRef<'a>)>,
     merge_collisions: bool,
-) -> Vec<(String, ValueRef<'a>)> {
+) -> Vec<(CompactString, ValueRef<'a>)> {
     let n = entries.len();
 
     // First pass: build index map using borrowed keys (avoids cloning every key)
@@ -376,8 +383,10 @@ fn handle_entry_collisions<'a>(
     result
         .into_iter()
         .map(|(idx, override_value)| {
-            let (key, original_value) =
-                std::mem::replace(&mut entries[idx], (String::new(), ValueRef::Raw(b"null")));
+            let (key, original_value) = std::mem::replace(
+                &mut entries[idx],
+                (CompactString::new(""), ValueRef::Raw(b"null")),
+            );
             let value = override_value.unwrap_or(original_value);
             (key, value)
         })
@@ -413,12 +422,12 @@ fn find_separator_offsets(key_bytes: &[u8], sep_bytes: &[u8]) -> SmallVec<[usize
 
 /// Pre-analyze all flattened keys to build a path-type map for array vs object disambiguation.
 fn analyze_path_types(
-    entries: &[(String, ValueRef<'_>)],
+    entries: &[(CompactString, ValueRef<'_>)],
     offsets_per_entry: &[SmallVec<[usize; 16]>],
     sep_len: usize,
-) -> FxHashMap<String, bool> {
+) -> FxHashMap<CompactString, bool> {
     let estimated_paths = entries.len() * 2;
-    let mut state: FxHashMap<String, u8> =
+    let mut state: FxHashMap<CompactString, u8> =
         FxHashMap::with_capacity_and_hasher(estimated_paths, Default::default());
 
     for ((key, _), offsets) in entries.iter().zip(offsets_per_entry) {
@@ -445,7 +454,7 @@ fn analyze_key_path(
     key: &str,
     offsets: &[usize],
     sep_len: usize,
-    state: &mut FxHashMap<String, u8>,
+    state: &mut FxHashMap<CompactString, u8>,
 ) {
     let key_len = key.len();
 
@@ -462,11 +471,11 @@ fn analyze_key_path(
             } else {
                 0b10
             };
-            // Avoid to_string() allocation when key already exists (common for shared parent paths)
+            // Avoid allocation when key already exists (common for shared parent paths)
             if let Some(existing) = state.get_mut(parent) {
                 *existing |= bit;
             } else {
-                state.insert(parent.to_string(), bit);
+                state.insert(CompactString::from(parent), bit);
             }
         }
     }
@@ -514,7 +523,7 @@ fn is_valid_array_index(s: &str) -> bool {
 
 /// Build an UnflatNode tree from extracted flat entries.
 fn build_unflatten_tree<'a>(
-    entries: Vec<(String, ValueRef<'a>)>,
+    entries: Vec<(CompactString, ValueRef<'a>)>,
     separator: &str,
     max_array_index: usize,
 ) -> Result<UnflatNode<'a>, JsonToolsError> {
@@ -559,7 +568,7 @@ fn set_nested_value<'a>(
     offsets: &[usize],
     value: ValueRef<'a>,
     separator: &str,
-    path_types: &FxHashMap<String, bool>,
+    path_types: &FxHashMap<CompactString, bool>,
     max_array_index: usize,
 ) -> Result<(), JsonToolsError> {
     if offsets.is_empty() {
@@ -567,7 +576,7 @@ fn set_nested_value<'a>(
         // under `result`). Flat keys are already unique at this point (collision
         // handling ran in Phase 3), so no two entries ever target the same leaf
         // slot -- safe to insert.
-        result.insert(key_path.to_string(), UnflatNode::Leaf(value));
+        result.insert(CompactString::from(key_path), UnflatNode::Leaf(value));
         return Ok(());
     }
 
@@ -602,7 +611,7 @@ fn set_nested_value_recursive<'a>(
     index: usize,
     value: ValueRef<'a>,
     separator: &str,
-    path_types: &FxHashMap<String, bool>,
+    path_types: &FxHashMap<CompactString, bool>,
     path_buffer: &mut String,
     max_array_index: usize,
 ) -> Result<(), JsonToolsError> {
@@ -611,7 +620,7 @@ fn set_nested_value_recursive<'a>(
     if index == parts.len() - 1 {
         // Flat keys are already unique (collision handling ran in Phase 3), so no two
         // entries ever target the same leaf slot within this object -- safe to insert.
-        current.insert(part.to_string(), UnflatNode::Leaf(value));
+        current.insert(CompactString::from(part), UnflatNode::Leaf(value));
         return Ok(());
     }
 
@@ -626,14 +635,14 @@ fn set_nested_value_recursive<'a>(
         .copied()
         .unwrap_or(false);
 
-    // Avoid to_string() allocation when key already exists (common for shared path prefixes)
+    // Avoid allocation when key already exists (common for shared path prefixes)
     if !current.contains_key(part) {
         let node = if should_be_array {
             UnflatNode::Array(vec![])
         } else {
             UnflatNode::Object(ObjectMap::default())
         };
-        current.insert(part.to_string(), node);
+        current.insert(CompactString::from(part), node);
     }
     let entry = current.get_mut(part).unwrap();
 
@@ -715,10 +724,10 @@ fn set_nested_value_recursive<'a>(
                 for (i, item) in arr.iter_mut().enumerate() {
                     if !matches!(item, UnflatNode::Null) {
                         let taken = std::mem::replace(item, UnflatNode::Null);
-                        obj.insert(i.to_string(), taken);
+                        obj.insert(CompactString::from(i.to_string()), taken);
                     }
                 }
-                obj.insert(next_part.to_string(), UnflatNode::Null);
+                obj.insert(CompactString::from(next_part), UnflatNode::Null);
                 *entry = UnflatNode::Object(obj);
 
                 if let UnflatNode::Object(ref mut obj) = entry {
@@ -755,7 +764,7 @@ fn set_nested_array_value<'a>(
     index: usize,
     value: ValueRef<'a>,
     separator: &str,
-    path_types: &FxHashMap<String, bool>,
+    path_types: &FxHashMap<CompactString, bool>,
     path_buffer: &mut String,
     max_array_index: usize,
 ) -> Result<(), JsonToolsError> {

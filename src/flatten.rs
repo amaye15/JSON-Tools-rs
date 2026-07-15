@@ -11,6 +11,7 @@
 //! - Zero-copy value references (ValueRef::Raw) avoiding Value tree allocation
 
 use crate::fxhash::FxHashMap;
+use compact_str::CompactString;
 use memchr::memchr;
 use rayon::prelude::*;
 use smallvec::SmallVec;
@@ -254,8 +255,14 @@ impl<'a> ValueRef<'a> {
 }
 
 /// A collected flatten entry: transformed key + zero-copy value reference.
+///
+/// `key` is `CompactString`, not `String`: this project's own benchmark corpus shows
+/// most individual key segments are well under 24 bytes (`CompactString`'s inline
+/// capacity), so shallow-to-medium-depth flattened paths often avoid a heap allocation
+/// entirely, and even paths that do spill to heap are no worse off than `String` was.
+/// See `unflatten.rs`'s `ObjectMap` doc comment for the benchmark that validated this.
 struct CollectedEntry<'a> {
-    key: String,
+    key: CompactString,
     value: ValueRef<'a>,
 }
 
@@ -1077,7 +1084,7 @@ impl<'a> CollectingWalker<'a> {
     /// Apply key transforms and collect a value entry.
     #[inline]
     fn collect_value(&mut self, value: ValueRef<'a>) {
-        let mut key = self.path.as_str().to_string();
+        let mut key = CompactString::from(self.path.as_str());
 
         if self.config.lowercase_keys {
             key.make_ascii_lowercase();
@@ -1087,7 +1094,7 @@ impl<'a> CollectingWalker<'a> {
             if let Ok(Some(new_key)) =
                 apply_key_replacement_patterns(&key, &self.config.replacements.key_replacements)
             {
-                key = new_key;
+                key = CompactString::from(new_key);
             }
         }
 
