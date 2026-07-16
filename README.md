@@ -375,7 +375,15 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, testing, benchmark
 
 ## Changelog
 
-### v0.9.2 (Current)
+### v0.9.3 (Current)
+
+* **Bug fix**: `flatten` produced invalid JSON for any key containing an escaped character (`\"`, `\\`, control chars) when no key transform was configured -- the default, most common usage.
+* **Bug fix**: re-escaping corrupted multi-byte UTF-8 characters (e.g. `café "quoted"` became `cafÃ© \"quoted\"`) whenever a string needed escaping and also contained non-ASCII text -- affected key escaping under `lowercase_keys`/`key_replacement`/collision-handling, value escaping under `value_replacement`, and `unflatten`'s key serialization.
+* **Performance**: JSON object keys now use `CompactString` instead of `String` (inlines keys up to 24 bytes, no heap allocation) -- `unflatten` is ~19-22% faster (Criterion). Redundant separator re-scan eliminated in `unflatten`'s tree-building. Regex pattern cache now evicts genuinely least-recently-used entries instead of arbitrary ones. Key/value re-escaping is ~17-22% faster as a side effect of the UTF-8 corruption fix above.
+
+See [CHANGELOG.md](CHANGELOG.md) for full details on all of the above.
+
+### v0.9.2
 
 *(`v0.9.1` was tagged a day earlier but only completed publishing to Maven Central --
 a crates.io/PyPI release pipeline bug caused those two to fail before any upload.

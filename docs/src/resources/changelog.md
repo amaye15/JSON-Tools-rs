@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.9.3 (2026-07-16)
+
+### Fixed
+- **`flatten` produced invalid JSON for keys with escaped characters**: any key containing `\"`, `\\`, or a control-character escape produced syntactically invalid JSON output when no key transform (`lowercase_keys`/`key_replacement`/collision-handling) was configured -- the default, most common usage. The fast path unescaped such keys to build its internal path buffer but never re-escaped before writing that buffer directly as the output key.
+- **Re-escaping corrupted multi-byte UTF-8 characters**: whenever a string needed escaping (an embedded quote, backslash, or control character) and also contained non-ASCII text, the slow escaping path reinterpreted each byte individually as its own Latin-1 codepoint, e.g. turning `café "quoted"` into `cafÃ© \"quoted\"`. Affected key escaping under `lowercase_keys`/`key_replacement`/collision-handling, value escaping under `value_replacement`, and `unflatten`'s key serialization.
+
+### Changed
+- JSON object keys now use `CompactString` instead of `String`, inlining keys up to 24 bytes with no heap allocation. `unflatten` is ~19-22% faster (Criterion, p < 0.05).
+- `unflatten`'s tree-building pass no longer re-scans each key's separators a second time.
+- The regex pattern cache now evicts the genuinely least-recently-used entry when full, instead of an arbitrary one.
+- `unflatten`'s output buffer is sized from the input JSON's byte length instead of a fixed 256-byte default.
+
 ## v0.9.2 (2026-07-15)
 
 Note: `v0.9.1` was tagged the day before but only completed publishing to Maven
