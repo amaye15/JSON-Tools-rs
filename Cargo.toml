@@ -50,6 +50,15 @@ smallvec = "1.15.1"  # Stack-allocated vectors for small buffers
 # insert+lookup key-map workloads. Pure Rust, MSRV 1.80-compatible, and most of its
 # transitive deps (itoa, cfg-if, zmij) are already in this tree via other dependencies.
 compact_str = "0.10"
+# Arena allocator for flatten's slow path (CollectingWalker, used when key
+# lowercasing/replacement/collision-handling is configured). CompactString already
+# inlines short keys, but flatten's slow-path keys are full dotted paths (e.g.
+# "response.data.attributes.firstName"), which commonly exceed its 24-byte inline cap
+# for 3+ level nesting and still heap-allocate one at a time. Validated with an
+# isolated benchmark before adopting: ~5.9x faster than CompactString for realistic
+# deep-nested-path collection. `collections` feature provides `bumpalo::collections::
+# String`, needed for in-place lowercasing/replacement before the final arena commit.
+bumpalo = { version = "3.20", features = ["collections"] }
 pythonize = { version = "0.29.0", optional = true }
 jni = { version = "0.21", optional = true }  # JNI bindings for JVM (Java/Scala/Spark) integration
 chrono = { version = "0.4.44", default-features = false, features = ["std", "clock"] }

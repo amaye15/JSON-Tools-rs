@@ -2915,6 +2915,154 @@ mod validation_and_edge_case_tests {
         assert_eq!(parsed["café \"nested\"_日本語_🎉 city"], "v");
     }
 
+    /// Builds a deeply-nested (5 levels) JSON object with `width` keys at each level,
+    /// so flattened leaf paths are long enough (>24 bytes) to exceed CompactString's
+    /// inline cap and exercise the sequential slow path's bump-arena key storage
+    /// (`BumpKeyBuilder`) rather than a shallow/coincidentally-inline case.
+    fn deeply_nested_json(width: usize) -> String {
+        let mut obj = serde_json::Map::new();
+        for i in 0..width {
+            obj.insert(
+                format!("Leaf_Field_{i}"),
+                serde_json::Value::String(format!("value_{i}")),
+            );
+        }
+        let mut value = serde_json::Value::Object(obj);
+        for level in ["levelFour", "levelThree", "levelTwo", "levelOne"] {
+            let mut wrapper = serde_json::Map::new();
+            wrapper.insert(level.to_string(), value);
+            value = serde_json::Value::Object(wrapper);
+        }
+        serde_json::to_string(&value).unwrap()
+    }
+
+    #[test]
+    fn test_bump_arena_deep_nesting_lowercase() {
+        let json = deeply_nested_json(10);
+        let flattened = JSONTools::new()
+            .flatten()
+            .lowercase_keys(true)
+            .execute(json.as_str())
+            .unwrap();
+        let flat_str = extract_single(flattened);
+        let parsed: Value = serde_json::from_str(&flat_str).expect("must be valid JSON");
+
+        for i in 0..10 {
+            let key = format!("levelone.leveltwo.levelthree.levelfour.leaf_field_{i}");
+            assert_eq!(parsed[&key], format!("value_{i}"), "missing key: {key}");
+        }
+        assert_eq!(parsed.as_object().unwrap().len(), 10);
+    }
+
+    #[test]
+    fn test_bump_arena_deep_nesting_key_replacement() {
+        let json = deeply_nested_json(8);
+        let flattened = JSONTools::new()
+            .flatten()
+            .key_replacement("r'Leaf_Field_'", "field_")
+            .key_replacement("r'level(One|Two|Three|Four)'", "L")
+            .execute(json.as_str())
+            .unwrap();
+        let flat_str = extract_single(flattened);
+        let parsed: Value = serde_json::from_str(&flat_str).expect("must be valid JSON");
+
+        for i in 0..8 {
+            let key = format!("L.L.L.L.field_{i}");
+            assert_eq!(parsed[&key], format!("value_{i}"), "missing key: {key}");
+        }
+    }
+
+    #[test]
+    fn test_bump_arena_deep_nesting_collision_handling() {
+        // Two distinct source paths that collapse to the same key after lowercasing,
+        // deep enough to hit the bump-arena path -- exercises resolve_and_write's
+        // collision map (FxHashMap<&str, ...>) with bump-backed keys specifically.
+        let json = r#"{
+            "levelOne": {"levelTwo": {"levelThree": {"levelFour": {"DupField": "first"}}}},
+            "levelOneAlt": {"levelTwo": {"levelThree": {"levelFour": {"dupfield": "second"}}}}
+        }"#;
+        let flattened = JSONTools::new()
+            .flatten()
+            .lowercase_keys(true)
+            // Lowercase runs before replacement (pre-existing, documented order), so
+            // the pattern must match already-lowercased text.
+            .key_replacement("r'^levelonealt'", "levelone")
+            .handle_key_collision(true)
+            .execute(json)
+            .unwrap();
+        let flat_str = extract_single(flattened);
+        let parsed: Value = serde_json::from_str(&flat_str).expect("must be valid JSON");
+
+        let key = "levelone.leveltwo.levelthree.levelfour.dupfield";
+        let arr = parsed[key]
+            .as_array()
+            .expect("collision should merge to array");
+        assert_eq!(arr.len(), 2);
+        assert!(arr.contains(&Value::String("first".to_string())));
+        assert!(arr.contains(&Value::String("second".to_string())));
+    }
+
+    #[test]
+    fn test_bump_arena_deep_nesting_all_transforms_combined() {
+        // lowercase + key_replacement + collision handling all at once, plus a
+        // multi-byte UTF-8 + escaped-quote key mixed in for good measure.
+        let json = r#"{
+            "LevelOne": {"LevelTwo": {"LevelThree": {"LevelFour": {
+                "USER_Name": "Alice",
+                "café_\"special\"_日本語": "café_val"
+            }}}}
+        }"#;
+        let flattened = JSONTools::new()
+            .flatten()
+            .lowercase_keys(true)
+            // No `^` anchor: key_replacement matches against the full dotted path, and
+            // "user_" is the start of the *last* segment here, not the whole path.
+            .key_replacement("r'(user|admin)_'", "")
+            .handle_key_collision(true)
+            .execute(json)
+            .unwrap();
+        let flat_str = extract_single(flattened);
+        let parsed: Value =
+            serde_json::from_str(&flat_str).expect("flatten output must be valid JSON");
+
+        assert_eq!(
+            parsed["levelone.leveltwo.levelthree.levelfour.name"],
+            "Alice"
+        );
+        assert_eq!(
+            parsed["levelone.leveltwo.levelthree.levelfour.café_\"special\"_日本語"],
+            "café_val"
+        );
+    }
+
+    #[test]
+    fn test_nested_parallel_path_still_correct_with_key_transforms() {
+        // Forces flatten_collecting_parallel (CompactKeyBuilder path, not the bump
+        // arena) via a low threshold, combined with key transforms -- confirms the
+        // generic CollectedEntry<K>/KeyBuilder refactor didn't change behavior on the
+        // parallel path, which intentionally still uses CompactString.
+        let mut obj = serde_json::Map::new();
+        for i in 0..50 {
+            obj.insert(format!("Field_{i}"), serde_json::json!({"Nested_Value": i}));
+        }
+        let json = serde_json::to_string(&serde_json::Value::Object(obj)).unwrap();
+
+        let flattened = JSONTools::new()
+            .flatten()
+            .lowercase_keys(true)
+            .nested_parallel_threshold(10) // 50 top-level children > 10: forces parallel path
+            .execute(json.as_str())
+            .unwrap();
+        let flat_str = extract_single(flattened);
+        let parsed: Value = serde_json::from_str(&flat_str).expect("must be valid JSON");
+
+        for i in 0..50 {
+            let key = format!("field_{i}.nested_value");
+            assert_eq!(parsed[&key], i, "missing key: {key}");
+        }
+        assert_eq!(parsed.as_object().unwrap().len(), 50);
+    }
+
     #[test]
     fn test_escaped_value_falls_through_replacement_to_auto_convert() {
         // Regression test combining two fixes: (1) a perf fix where value_replacement +

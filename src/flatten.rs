@@ -11,11 +11,13 @@
 //! - Zero-copy value references (ValueRef::Raw) avoiding Value tree allocation
 
 use crate::fxhash::FxHashMap;
+use bumpalo::Bump;
 use compact_str::CompactString;
 use memchr::memchr;
 use rayon::prelude::*;
 use smallvec::SmallVec;
 use std::borrow::Cow;
+use std::ops::Deref;
 
 use crate::cache::{get_cached_regex, parse_pattern, ParsedPattern};
 use crate::config::ProcessingConfig;
@@ -256,14 +258,90 @@ impl<'a> ValueRef<'a> {
 
 /// A collected flatten entry: transformed key + zero-copy value reference.
 ///
-/// `key` is `CompactString`, not `String`: this project's own benchmark corpus shows
-/// most individual key segments are well under 24 bytes (`CompactString`'s inline
-/// capacity), so shallow-to-medium-depth flattened paths often avoid a heap allocation
-/// entirely, and even paths that do spill to heap are no worse off than `String` was.
-/// See `unflatten.rs`'s `ObjectMap` doc comment for the benchmark that validated this.
-struct CollectedEntry<'a> {
-    key: CompactString,
+/// `key` is generic (`K`, bounded by `Deref<Target = str>` at point of use) rather than
+/// a single fixed type: the sequential (single-document) slow path and the
+/// nested-parallel path use different key storage strategies with the same tape-walking
+/// logic. See `KeyBuilder`'s doc comment for why, and `CompactKeyBuilder`/
+/// `BumpKeyBuilder` for the two concrete strategies.
+struct CollectedEntry<'a, K> {
+    key: K,
     value: ValueRef<'a>,
+}
+
+// ================================================================================================
+// Key Storage Strategies
+// ================================================================================================
+
+/// Abstracts how `CollectingWalker` materializes an owned key from the path buffer and
+/// applies lowercase/key-replacement transforms. Lets the sequential (single-document)
+/// and nested-parallel code paths share all the tape-walking logic (`walk_object`,
+/// `walk_array`, `emit_string_value`, etc.) while using different backing storage for
+/// the key itself -- see `CompactKeyBuilder` and `BumpKeyBuilder`.
+trait KeyBuilder {
+    type Key: Deref<Target = str>;
+
+    fn build(&self, path: &str, config: &ProcessingConfig) -> Self::Key;
+}
+
+/// Default key storage: `CompactString` (inlines keys up to 24 bytes). Used by the
+/// nested-parallel path (`flatten_collecting_parallel`), where each worker thread would
+/// otherwise need its own bump arena kept alive past the parallel merge -- `bumpalo::
+/// Bump` isn't `Send`/`Sync`, and safely bundling per-chunk arenas with the entries that
+/// borrow from them requires either unsafe self-referential-struct code or a
+/// specialized crate (e.g. `yoke`), neither of which is worth it for what's already a
+/// narrower case (a document large enough to cross `nested_parallel_threshold` *and*
+/// key transforms configured at once).
+struct CompactKeyBuilder;
+
+impl KeyBuilder for CompactKeyBuilder {
+    type Key = CompactString;
+
+    #[inline]
+    fn build(&self, path: &str, config: &ProcessingConfig) -> CompactString {
+        let mut key = CompactString::from(path);
+        if config.lowercase_keys {
+            key.make_ascii_lowercase();
+        }
+        if config.replacements.has_key_replacements() {
+            if let Ok(Some(new_key)) =
+                apply_key_replacement_patterns(&key, &config.replacements.key_replacements)
+            {
+                key = CompactString::from(new_key);
+            }
+        }
+        key
+    }
+}
+
+/// Arena-backed key storage for the sequential (single-document) slow path. Collapses N
+/// per-leaf heap allocations into ~O(1) arena chunk allocations: flatten's slow-path
+/// keys are full dotted paths (e.g. `"response.data.attributes.firstName"`), which
+/// commonly exceed `CompactString`'s 24-byte inline cap for 3+ level nesting and would
+/// otherwise still heap-allocate one at a time. Validated with an isolated benchmark
+/// before adopting: ~5.9x faster than `CompactString` for realistic deep-nested-path
+/// collection.
+struct BumpKeyBuilder<'bump> {
+    bump: &'bump Bump,
+}
+
+impl<'bump> KeyBuilder for BumpKeyBuilder<'bump> {
+    type Key = &'bump str;
+
+    #[inline]
+    fn build(&self, path: &str, config: &ProcessingConfig) -> &'bump str {
+        let mut key = bumpalo::collections::String::from_str_in(path, self.bump);
+        if config.lowercase_keys {
+            key.make_ascii_lowercase();
+        }
+        if config.replacements.has_key_replacements() {
+            if let Ok(Some(new_key)) =
+                apply_key_replacement_patterns(&key, &config.replacements.key_replacements)
+            {
+                key = bumpalo::collections::String::from_str_in(&new_key, self.bump);
+            }
+        }
+        key.into_bump_str()
+    }
 }
 
 // ================================================================================================
@@ -898,22 +976,26 @@ impl<'a> DirectWalker<'a> {
 
 /// Walks the structural tape and collects flattened key-value entries.
 /// Used when key transforms or collision handling require seeing all keys before output.
-struct CollectingWalker<'a> {
+/// Generic over `KB: KeyBuilder` -- see its doc comment for why.
+struct CollectingWalker<'a, KB: KeyBuilder> {
     input: &'a [u8],
     tape: &'a [TapeEntry],
     path: FastStreamingPathBuilder,
     separator: SeparatorCache,
     config: &'a ProcessingConfig,
-    entries: Vec<CollectedEntry<'a>>,
+    key_builder: KB,
+    entries: Vec<CollectedEntry<'a, KB::Key>>,
 }
 
-impl<'a> CollectingWalker<'a> {
+impl<'a, KB: KeyBuilder> CollectingWalker<'a, KB> {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         input: &'a [u8],
         tape: &'a [TapeEntry],
         config: &'a ProcessingConfig,
         separator: SeparatorCache,
         capacity: usize,
+        key_builder: KB,
     ) -> Self {
         Self {
             input,
@@ -921,6 +1003,7 @@ impl<'a> CollectingWalker<'a> {
             path: FastStreamingPathBuilder::new(),
             separator,
             config,
+            key_builder,
             entries: Vec::with_capacity(capacity),
         }
     }
@@ -1085,20 +1168,7 @@ impl<'a> CollectingWalker<'a> {
     /// Apply key transforms and collect a value entry.
     #[inline]
     fn collect_value(&mut self, value: ValueRef<'a>) {
-        let mut key = CompactString::from(self.path.as_str());
-
-        if self.config.lowercase_keys {
-            key.make_ascii_lowercase();
-        }
-
-        if self.config.replacements.has_key_replacements() {
-            if let Ok(Some(new_key)) =
-                apply_key_replacement_patterns(&key, &self.config.replacements.key_replacements)
-            {
-                key = CompactString::from(new_key);
-            }
-        }
-
+        let key = self.key_builder.build(self.path.as_str(), self.config);
         self.entries.push(CollectedEntry { key, value });
     }
 }
@@ -1108,8 +1178,13 @@ impl<'a> CollectingWalker<'a> {
 // ================================================================================================
 
 /// Resolve collisions and write the final JSON output.
-/// Takes ownership of entries to avoid cloning keys.
-fn resolve_and_write(entries: Vec<CollectedEntry<'_>>, config: &ProcessingConfig) -> String {
+/// Takes ownership of entries to avoid cloning keys. Generic over the key storage type
+/// (`CompactString` or `&'bump str`, see `KeyBuilder`); every key access here only
+/// needs `str`'s own methods, reachable via the `Deref` bound.
+fn resolve_and_write<K: Deref<Target = str>>(
+    entries: Vec<CollectedEntry<'_, K>>,
+    config: &ProcessingConfig,
+) -> String {
     if entries.is_empty() {
         return "{}".to_string();
     }
@@ -1164,8 +1239,8 @@ fn resolve_and_write(entries: Vec<CollectedEntry<'_>>, config: &ProcessingConfig
     let mut first = true;
 
     for &first_idx in &ordered_keys {
-        let key = &entries[first_idx].key;
-        let indices = &key_indices[key.as_str()];
+        let key: &str = &entries[first_idx].key;
+        let indices = &key_indices[key];
 
         if !first {
             output.push(',');
@@ -1205,7 +1280,7 @@ fn resolve_and_write(entries: Vec<CollectedEntry<'_>>, config: &ProcessingConfig
 
 /// Simple output path — no collision detection needed, just write entries in order.
 #[inline]
-fn write_entries_simple(entries: &[CollectedEntry<'_>]) -> String {
+fn write_entries_simple<K: Deref<Target = str>>(entries: &[CollectedEntry<'_, K>]) -> String {
     let output_cap = entries
         .iter()
         .map(|e| {
@@ -1647,6 +1722,11 @@ fn collect_child_ranges(tape: &[TapeEntry]) -> Vec<(usize, usize, usize)> {
 
 /// Parallel collecting flatten using tape-range chunks.
 /// Each thread gets a slice of (key_tape_idx, value_tape_idx, array_index) ranges.
+///
+/// Uses `CompactKeyBuilder`, not the bump-arena `BumpKeyBuilder` the sequential
+/// collecting path uses -- see `CompactKeyBuilder`'s doc comment for why (bumpalo's
+/// `Bump` isn't `Send`/`Sync`, and safely bundling per-chunk arenas with the entries
+/// that borrow from them across this rayon merge isn't worth the unsafe code it'd take).
 fn flatten_collecting_parallel<'a>(
     input: &'a [u8],
     tape: &'a [TapeEntry],
@@ -1654,17 +1734,23 @@ fn flatten_collecting_parallel<'a>(
     separator: &SeparatorCache,
     ranges: &[(usize, usize, usize)],
     is_root_object: bool,
-) -> Result<Vec<CollectedEntry<'a>>, JsonToolsError> {
+) -> Result<Vec<CollectedEntry<'a, CompactString>>, JsonToolsError> {
     let n_threads = config.effective_thread_count(ranges.len());
     let chunk_size = ranges.len().div_ceil(n_threads);
 
-    let process_chunks = || -> Vec<CollectedEntry<'a>> {
+    let process_chunks = || -> Vec<CollectedEntry<'a, CompactString>> {
         ranges
             .par_chunks(chunk_size)
             .flat_map(|range_chunk| {
                 let sep = SeparatorCache::new(&separator.separator);
-                let mut walker =
-                    CollectingWalker::new(input, tape, config, sep, range_chunk.len() * 4);
+                let mut walker = CollectingWalker::new(
+                    input,
+                    tape,
+                    config,
+                    sep,
+                    range_chunk.len() * 4,
+                    CompactKeyBuilder,
+                );
 
                 for &(key_idx, val_idx, arr_idx) in range_chunk {
                     // Reset path (reuse buffer allocation)
@@ -1807,19 +1893,36 @@ pub(crate) fn process_single_json(
         let leaf_estimate = tape.len() / 4;
         let child_count = count_top_level_children(&tape);
 
-        let entries = if child_count > config.nested_parallel_threshold {
+        if child_count > config.nested_parallel_threshold {
             let ranges = collect_child_ranges(&tape);
             let is_root_object = tape[0].kind() == EntryKind::ObjectStart;
-            flatten_collecting_parallel(input, &tape, config, &separator, &ranges, is_root_object)?
+            let entries = flatten_collecting_parallel(
+                input,
+                &tape,
+                config,
+                &separator,
+                &ranges,
+                is_root_object,
+            )?;
+            Ok(resolve_and_write(entries, config))
         } else {
-            let mut walker = CollectingWalker::new(input, &tape, config, separator, leaf_estimate);
+            // Bump arena for key storage -- see BumpKeyBuilder's doc comment. Scoped to
+            // this call: dropped once `resolve_and_write` has produced the final owned
+            // output String, which is the only thing that needs to outlive it.
+            let bump = Bump::new();
+            let mut walker = CollectingWalker::new(
+                input,
+                &tape,
+                config,
+                separator,
+                leaf_estimate,
+                BumpKeyBuilder { bump: &bump },
+            );
             if !tape.is_empty() {
                 walker.walk_value(0);
             }
-            walker.entries
-        };
-
-        Ok(resolve_and_write(entries, config))
+            Ok(resolve_and_write(walker.entries, config))
+        }
     } else {
         // Fast path: direct-to-output, always sequential
         let mut walker = DirectWalker::new(input, &tape, config, separator, input.len() * 3 / 2);

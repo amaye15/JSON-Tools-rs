@@ -475,6 +475,7 @@ dependencies = [
 name = "json-tools-rs"
 version = "0.9.3"
 dependencies = [
+ "bumpalo",
  "chrono",
  "compact_str",
  "criterion",

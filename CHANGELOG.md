@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `flatten`'s slow path (`CollectingWalker`, used when key lowercasing/replacement/
+  collision-handling is configured) now stores keys in a `bumpalo` arena instead of
+  `CompactString` for single-document (non-nested-parallel) processing. Flatten's
+  slow-path keys are full dotted paths (e.g. `"response.data.attributes.firstName"`),
+  which commonly exceed `CompactString`'s 24-byte inline cap for 3+ level nesting and
+  would otherwise still heap-allocate one at a time. An isolated benchmark measured
+  ~5.9x faster for realistic deep-nested-path collection; end-to-end (real
+  flatten+lowercase+key_replacement call) measured ~14% faster on a deep-nesting
+  workload. On mixed/shallow-nesting data (this project's own "medium" realistic
+  benchmark payload) the effect is neutral -- measured within ±1-2% noise across
+  repeated runs, not a consistent win or loss, since short paths were already
+  allocation-free via `CompactString`'s inlining and gain nothing from the arena.
+  The nested-parallel path (`flatten_collecting_parallel`, used for very large
+  documents) intentionally still uses `CompactString`: `bumpalo::Bump` isn't
+  `Send`/`Sync`, and safely bundling per-thread arenas with the entries that borrow
+  from them across the parallel merge would require unsafe self-referential-struct
+  code or a specialized crate -- not worth it for what's already a narrower case
+  (a document large enough to cross `nested_parallel_threshold` *and* key transforms
+  configured at once). `CollectedEntry`/`CollectingWalker` are now generic over a
+  `KeyBuilder` trait so both strategies share all the tape-walking logic. Added 5
+  regression tests covering deep nesting combined with lowercase, key_replacement,
+  collision handling, and multi-byte UTF-8, plus confirmation the nested-parallel
+  path is unaffected.
+
 ### Changed
 - `auto_convert_types`'s date detection (`try_parse_compact_date`, `try_parse_ordinal_date`,
   and standard-date's date-only branch in `convert.rs`) now validates via
