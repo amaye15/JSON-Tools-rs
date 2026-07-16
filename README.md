@@ -375,7 +375,15 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, testing, benchmark
 
 ## Changelog
 
-### v0.9.3 (Current)
+### v0.9.4 (Current)
+
+* **Bug fix**: `auto_convert_types` silently corrupted the trailing digits of large integer strings (17+ digits, e.g. Snowflake/Discord/database bigint IDs) by always round-tripping through `f64`, which only has ~15-17 significant decimal digits of exact precision. Now reuses already-canonical integer strings directly instead of reformatting through a float.
+* **Python bindings**: `dict`/`list[dict]`/DataFrame/Series conversion switched from the `pythonize` crate's generic serde-based traversal to direct calls to Python's own `json` module. Benchmarked against the actual built extension: ~18% faster for a single nested dict, ~1.6x faster for a 200-row pandas DataFrame (the realistic cases this library exists for); flat/tiny dicts see a smaller, reported-honestly regression. Removes the `pythonize` dependency entirely.
+* **Performance**: credit/debit currency suffix stripping (`"100CR"`/`"100DR"`) in `auto_convert_types` no longer goes through std's generic string-pattern search machinery -- ~13-17% faster on currency-heavy conversion (Criterion). Literal (non-regex) key/value replacement now uses SIMD substring search -- ~2.6-4.8% faster. `unflatten`'s internal object maps now start pre-sized instead of growing from empty -- ~7-9% faster combined. `auto_convert_types`'s date detection hand-rolled instead of using chrono's generic parser -- ~25% faster on mixed real-dates/false-positive workloads. `flatten`'s slow path (key transforms configured) now uses an arena allocator for deep-nested documents -- up to ~14% faster end-to-end.
+
+See [CHANGELOG.md](CHANGELOG.md) for full details on all of the above, including the honest trade-offs.
+
+### v0.9.3
 
 * **Bug fix**: `flatten` produced invalid JSON for any key containing an escaped character (`\"`, `\\`, control chars) when no key transform was configured -- the default, most common usage.
 * **Bug fix**: re-escaping corrupted multi-byte UTF-8 characters (e.g. `café "quoted"` became `cafÃ© \"quoted\"`) whenever a string needed escaping and also contained non-ASCII text -- affected key escaping under `lowercase_keys`/`key_replacement`/collision-handling, value escaping under `value_replacement`, and `unflatten`'s key serialization.

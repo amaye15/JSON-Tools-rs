@@ -473,7 +473,7 @@ dependencies = [
 
 [[package]]
 name = "json-tools-rs"
-version = "0.9.3"
+version = "0.9.4"
 dependencies = [
  "bumpalo",
  "chrono",
@@ -484,7 +484,6 @@ dependencies = [
  "memchr",
  "mimalloc",
  "pyo3",
- "pythonize",
  "rayon",
  "regex",
  "serde",
@@ -699,16 +698,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
-]
-
-[[package]]
-name = "pythonize"
-version = "0.29.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6ec376e1216e0c929a74964ce2020012a1a39f32d80e78aa688721219ea7fb89"
-dependencies = [
- "pyo3",
- "serde",
 ]
 
 [[package]]

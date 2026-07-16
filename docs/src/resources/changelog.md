@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.9.4 (2026-07-17)
+
+### Fixed
+- **`auto_convert_types` silently corrupted the trailing digits of large integer strings**: numeric-string-to-JSON-number conversion always routed every candidate through `f64` (only ~15-17 significant decimal digits of exact precision) before reformatting, so any string-encoded integer longer than that came back corrupted, e.g. `"999999999999999999"` → `1000000000000000000`. Real-world 64-bit IDs (Snowflake/Discord/database bigint primary keys) are commonly stored as JSON strings *specifically to avoid* this exact class of precision loss elsewhere, and are typically 17-19 digits, so this was a live bug. Already-canonical integer strings are now reused directly instead of being parsed to `f64` and reformatted, covering the entire range the previous float round-trip claimed to support (checked precisely against `i64`/`u64` bounds, not a rough digit-count cutoff).
+
+### Changed
+- **Python bindings: `dict`/`list[dict]`/DataFrame/Series conversion switched from `pythonize`/`depythonize` to Python's own `json` module.** Benchmarked against the actual built extension (not just reasoned about): `depythonize`'s generic serde-based Python↔Rust traversal was 5-30% *slower* than a plain `json.dumps`/`json.loads` round-trip for nested dicts (the case `.flatten()`/`.unflatten()` exist for), and ~1.6x slower end-to-end for DataFrame rows (this library's other headline feature) — the reverse of what the code's own prior comments claimed. DataFrame input now uses each library's native line-delimited JSON export (pandas `to_json`, polars `write_ndjson`) instead of `to_dict()`/`to_dicts()` + per-row conversion. Removes the `pythonize` dependency entirely. Trade-off, reported honestly: flat/shallow dicts are slower under the new approach (still microsecond-scale in absolute terms) — see [CHANGELOG.md](https://github.com/amaye15/json-tools-rs/blob/master/CHANGELOG.md) for the full numbers.
+- Credit/debit currency suffix stripping (`"100CR"`/`"100DR"`, part of `auto_convert_types`) no longer chains `str::trim_end_matches` calls with string patterns, which forced std to construct generic substring-search machinery for a fixed 2-byte suffix check. ~13-17% faster on currency-heavy conversion (Criterion).
+- Literal (non-regex) key/value replacement now locates matches with SIMD substring search (`memchr::memmem`) instead of `str::replace`'s matcher. ~2.6-4.8% faster (Criterion).
+- `unflatten`'s internal object maps (root and per-branch) now start pre-sized instead of growing from empty capacity one key at a time. ~7-9% faster combined (Criterion), found via sampling profiler.
+- `auto_convert_types`'s date detection now validates via `chrono`'s direct date constructors instead of its generic format-string parser. ~25% faster on mixed real-dates/false-positive-numeric-ID workloads.
+
+### Added
+- `flatten`'s slow path (key lowercasing/replacement/collision-handling configured) now uses an arena allocator for key storage on single-document processing, instead of allocating each dotted key path individually. Up to ~14% faster end-to-end on deep-nesting workloads; neutral on shallow/mixed data.
+
 ## v0.9.3 (2026-07-16)
 
 ### Fixed

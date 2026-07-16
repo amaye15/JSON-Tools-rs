@@ -6,7 +6,7 @@
 
   <groupId>io.github.amaye15</groupId>
   <artifactId>json-tools-rs-spark</artifactId>
-  <version>0.9.3</version>
+  <version>0.9.4</version>
   <packaging>jar</packaging>
 
   <name>json-tools-rs-spark</name>
