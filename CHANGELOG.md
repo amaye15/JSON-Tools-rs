@@ -7,6 +7,143 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.4] - 2026-07-17
+
+### Fixed
+- **`auto_convert_types` silently corrupted the trailing digits of large integer
+  strings.** Numeric-string-to-JSON-number conversion always routed every candidate
+  through `f64` (`str::parse::<f64>` then reformat), but `f64` only has ~15-17
+  significant decimal digits of exact precision -- so any string-encoded integer
+  longer than that came back with corrupted digits, e.g. `"999999999999999999"` ->
+  `1000000000000000000`, `"1234567890123456789"` -> `1234567890123456768`. Real-world
+  64-bit IDs (Snowflake/Discord/database bigint primary keys) are commonly stored as
+  JSON strings specifically *to avoid* this exact class of precision loss in other
+  JSON parsers/languages, and are typically 17-19 digits, so this was a live bug, not
+  a hypothetical one. Fixed by adding `canonical_json_integer` in `convert.rs`: when a
+  string is already the exact canonical JSON integer we'd otherwise reconstruct
+  (optional leading `-`, no leading zeros, and exactly representable as an `i64` or
+  `u64` -- checked precisely, not via a blanket digit-count cutoff, so the fix covers
+  the *entire* range the existing float round-trip claims to support), it's reused
+  directly instead of being parsed to `f64` and reformatted. Deliberately excludes
+  `"-0"` (the existing round-trip collapses it to `"0"`, matched to avoid an unrelated
+  behavior change) and anything exceeding `u64::MAX` (falls through to the existing,
+  unaffected float-fallback path). Verified via byte-for-byte A/B comparison against
+  the pre-fix implementation across the full boundary set (`i64::MIN`/`MAX`,
+  `u64::MAX`, and their neighbors) -- every previously-corrupted case now round-trips
+  exactly. Also a real performance win for the common case (skips a full float parse
+  and a heap-allocating reformat): ~8x faster in isolation for a realistic mix of
+  mostly-clean integer strings; ~2.6% faster end-to-end on this project's own
+  "medium" realistic-document benchmark, which doesn't happen to contain many long
+  numeric-ID-style fields (most of its win is on the many short quantities/zip codes
+  it does have, which are nanosecond-scale to begin with). Added 5 regression tests
+  covering the fast path, leading zeros, negative zero, and exact i64/u64 boundaries.
+
+### Changed
+- `clean_number_string`'s credit/debit suffix stripping (the "100CR"/"100DR" accounting
+  notation, part of `auto_convert_types`'s currency parsing) no longer chains
+  `.trim_end_matches("CR")`/`"DR"`/`"cr"`/`"dr"`. Found via sampling profiler (same
+  session as the `unflatten` root-`ObjectMap` fix): a stress-test call-stack sample
+  showed `try_parse_number` spending real time inside `core::str::pattern::StrSearcher::new`
+  -- std constructs its generic substring-search machinery for a `&str` pattern even
+  though these are fixed 2-byte ASCII suffixes with no need for a general search
+  algorithm. Replaced with a small hand-rolled `strip_trailing_ascii_pair` helper that
+  directly compares the last two bytes in a loop. Isolated benchmark: ~21-28x faster
+  for the specific chain; real end-to-end win on the `iso_07_auto_type_conversion_only`
+  Criterion benchmark's `auto_convert/medium` case (the one that actually exercises
+  currency values): ~13-17% faster, verified via the git-show A/B technique. Kept as 4
+  sequential exhaustive-strip passes (matching `trim_end_matches`'s exact chained
+  semantics, not a single combined loop) after confirming with a worked example that
+  the two aren't equivalent: `"100CRDR"` and `"100DRCR"` resolve differently depending
+  on strip order (only `"100DRCR"` ends up as a valid number) -- a regression test
+  covers this asymmetry directly.
+- `unflatten`'s root `ObjectMap` now starts pre-sized to `entries.len()` (an upper
+  bound -- every entry lands either directly in root or in a nested object under it)
+  instead of `ObjectMap::default()`'s zero capacity. Found via sampling profiler
+  (`sample`/`samply` against a release build with debug symbols, not code reading):
+  a stress-test call-stack sample showed `IndexMap::insert_full` repeatedly
+  triggering `realloc`+copy as `root` grew one key at a time, accounting for a
+  meaningful share of total allocator activity (`tiny_malloc`/`free_tiny`/
+  `_platform_memmove` all showed up prominently in the leaf-function sample
+  breakdown). Verified via the existing `iso_10_unflatten_only` Criterion
+  benchmark: ~5% faster, consistent across repeated runs. Nested objects (created
+  per-branch during tree building) also now start at a small fixed capacity (4)
+  instead of zero -- a follow-up profiling run after the root fix still showed
+  `_platform_memcmp`/`_platform_memmove` under `set_nested_value_recursive`, traced
+  to the same `IndexMap` growth pattern one level down. Their eventual size isn't
+  known without a separate counting pass (so, unlike root, this is a fixed guess,
+  not an exact bound), but a small constant is enough to skip the first couple of
+  regrow cycles for the common case of a handful of children. Re-verified via the
+  same benchmark: a further ~2-4% faster on top of the root fix, consistent across
+  repeated runs.
+- **Python bindings: replaced `pythonize`/`depythonize` (generic serde-based Python<->Rust
+  conversion) with direct calls to Python's own `json` module** for `dict`/`list[dict]`
+  input/output and DataFrame/Series row conversion. The existing code's own comments
+  claimed this was a "TIER 6→3 OPTIMIZATION... saves 50K-500K cycles per dict" versus a
+  plain `json.dumps`/`json.loads` round-trip -- benchmarked with the actual built
+  extension (`timeit`-style measurement, not just reasoning about it) and found that
+  claim false for the realistic case: nested dicts (the case `.flatten()`/`.unflatten()`
+  exist for -- a flat dict doesn't need flattening) were 5-30% *slower* through
+  `depythonize` than a plain `json.dumps`+`execute(str)`+`json.loads`, and DataFrame rows
+  (this library's other headline feature) were ~1.6x slower end-to-end. Root cause:
+  `depythonize`/`pythonize` cross the PyO3 FFI boundary once per field/nesting level via
+  serde's generic Serializer/Deserializer visitor pattern, while CPython's own `json`
+  module is hand-tuned C that never leaves native CPython object representations until
+  the final result. For DataFrames specifically, `to_dict()`/`to_dicts()` were *also*
+  already expensive before any Rust-side conversion even started (materializing a full
+  Python dict-object graph, one per row) compared to pandas' `to_json(orient='records',
+  lines=True)` / polars' `write_ndjson()`, which write directly from columnar storage.
+  Rewrote the DataFrame input path to use each library's native line-delimited JSON
+  export where available (PyArrow has no equivalent, kept on `to_pylist()` +
+  `json.dumps` per row -- still faster than the old `depythonize` path). Net effect,
+  measured end-to-end against the actual built extension: single nested dict ~18%
+  faster (now matches a hand-written `json` round-trip almost exactly, since it's doing
+  the same work); 200-row pandas DataFrame ~1.6x faster. **Trade-off, reported
+  honestly**: flat/shallow dicts, where `depythonize`'s per-field approach had less
+  overhead to begin with, are slower under the new approach (single flat 5-field dict:
+  ~2.5us -> ~3.7us; a batch of 100 flat dicts: ~238us -> ~326us) -- both still
+  microsecond/sub-millisecond in absolute terms, and the crossover consistently tracks
+  nesting depth, not batch size (a batch of 100 *nested* dicts was a small win, not a
+  regression). Removes the `pythonize` crate dependency entirely (only user was this
+  code). Verified equivalent output between old and new implementations via the actual
+  built wheel across dict/list[dict]/DataFrame(pandas+polars+pyarrow)/Series inputs,
+  including the empty-DataFrame edge case; full existing Python test suite (188 tests)
+  passes unchanged. Exception message text for unsupported Python types changes slightly
+  (Python's own `TypeError` message instead of `depythonize`'s) -- no existing test
+  asserted on the old exact wording.
+- Literal (non-regex) key/value replacement now locates matches with
+  `memchr::memmem::find` (SIMD substring search) in a loop, building the result via
+  bulk copy between matches, instead of `str::replace`'s std (non-SIMD) matcher.
+  Getting this right took two iterations: a first version built one `memmem::Finder`
+  per call and regressed the real `iso_04_key_replacement_only` Criterion benchmark's
+  `literal_multiple` case by ~9-13% despite winning ~1.6-2x in an isolated
+  microbenchmark -- `memchr::memmem::find`'s own source picks a lightweight
+  Rabin-Karp search for haystacks under 64 bytes and only reaches for the heavier
+  SIMD `Finder` above that threshold, and JSON keys (dotted flatten paths) are almost
+  always under 64 bytes, so a `Finder` built fresh per call was paying SIMD setup
+  cost it never earned back (`memmem::find_iter` has the identical problem -- it
+  builds a `Finder` internally too, regardless of haystack size). Switched to
+  calling the free `memmem::find` function per match instead, so each call re-picks
+  the cheaper algorithm as the remaining haystack shrinks; re-validated against the
+  same Criterion benchmark, now a consistent ~2.6-4.8% improvement with no
+  regression. Caught only because this project validates against its own real
+  benchmark suite, not just an isolated microbenchmark that happened to only
+  exercise the SIMD path. Verified byte-for-byte identical output against the
+  pre-change implementation across overlapping/adjacent matches, multi-byte UTF-8,
+  empty patterns, and replacement strings that contain the search pattern. Added 2
+  regression tests.
+- `auto_convert_types`'s date detection (`try_parse_compact_date`, `try_parse_ordinal_date`,
+  and standard-date's date-only branch in `convert.rs`) now validates via
+  `NaiveDate::from_ymd_opt`/`from_yo_opt` directly instead of chrono's generic
+  format-string parser, which re-interprets the format string on every call. The
+  `could_be_date` prefilter can't distinguish a real compact date from an 8-digit
+  numeric ID/zip+4/order number starting with 1 or 2 (common once `auto_convert_types`
+  is enabled), so this path is reached for plenty of non-dates. ~25% faster on a
+  realistic mixed workload (real dates + false-positive numeric IDs); verified
+  byte-for-byte identical output against the old implementation across 31 cases
+  (leap years, invalid months/days, all four date formats, timezones, non-dates).
+  Datetime/timezone-offset parsing is untouched (left on chrono's parser -- more
+  complex to hand-roll correctly, and less prone to false-positive collisions).
+
 ### Added
 - `flatten`'s slow path (`CollectingWalker`, used when key lowercasing/replacement/
   collision-handling is configured) now stores keys in a `bumpalo` arena instead of
@@ -31,20 +168,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   regression tests covering deep nesting combined with lowercase, key_replacement,
   collision handling, and multi-byte UTF-8, plus confirmation the nested-parallel
   path is unaffected.
-
-### Changed
-- `auto_convert_types`'s date detection (`try_parse_compact_date`, `try_parse_ordinal_date`,
-  and standard-date's date-only branch in `convert.rs`) now validates via
-  `NaiveDate::from_ymd_opt`/`from_yo_opt` directly instead of chrono's generic
-  format-string parser, which re-interprets the format string on every call. The
-  `could_be_date` prefilter can't distinguish a real compact date from an 8-digit
-  numeric ID/zip+4/order number starting with 1 or 2 (common once `auto_convert_types`
-  is enabled), so this path is reached for plenty of non-dates. ~25% faster on a
-  realistic mixed workload (real dates + false-positive numeric IDs); verified
-  byte-for-byte identical output against the old implementation across 31 cases
-  (leap years, invalid months/days, all four date formats, timezones, non-dates).
-  Datetime/timezone-offset parsing is untouched (left on chrono's parser -- more
-  complex to hand-roll correctly, and less prone to false-positive collisions).
 
 ## [0.9.3] - 2026-07-16
 

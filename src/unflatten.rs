@@ -552,7 +552,14 @@ fn build_unflatten_tree<'a>(
         .collect();
 
     let path_types = analyze_path_types(&entries, &offsets_per_entry, sep_len);
-    let mut root: ObjectMap<'a> = ObjectMap::default();
+    // Upper-bound capacity hint: every entry is either a direct child of `root` or
+    // nested under one, so `entries.len()` is never too small. Confirmed via sampling
+    // profiler that `ObjectMap::default()`'s zero starting capacity was a real,
+    // measurable source of allocator churn -- `IndexMap::insert_full` repeatedly
+    // triggering `realloc` as `root` grew one key at a time showed up directly in a
+    // stress-test call-stack sample (`unflatten.rs:631` -> `finish_grow` -> `realloc`).
+    let mut root: ObjectMap<'a> =
+        ObjectMap::with_capacity_and_hasher(entries.len(), Default::default());
 
     for ((key, value), offsets) in entries.into_iter().zip(offsets_per_entry.iter()) {
         set_nested_value(
@@ -648,7 +655,7 @@ fn set_nested_value_recursive<'a>(
         let node = if should_be_array {
             UnflatNode::Array(vec![])
         } else {
-            UnflatNode::Object(ObjectMap::default())
+            UnflatNode::Object(ObjectMap::with_capacity_and_hasher(4, Default::default()))
         };
         current.insert(CompactString::from(part), node);
     }
@@ -695,7 +702,10 @@ fn set_nested_value_recursive<'a>(
                         arr[array_index] = if next_should_be_array {
                             UnflatNode::Array(vec![])
                         } else {
-                            UnflatNode::Object(ObjectMap::default())
+                            UnflatNode::Object(ObjectMap::with_capacity_and_hasher(
+                                4,
+                                Default::default(),
+                            ))
                         };
                     }
 
@@ -816,7 +826,7 @@ fn set_nested_array_value<'a>(
                 arr[array_index] = if next_should_be_array {
                     UnflatNode::Array(vec![])
                 } else {
-                    UnflatNode::Object(ObjectMap::default())
+                    UnflatNode::Object(ObjectMap::with_capacity_and_hasher(4, Default::default()))
                 };
             }
 

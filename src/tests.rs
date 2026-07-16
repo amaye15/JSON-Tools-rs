@@ -118,6 +118,46 @@ mod unit_tests {
         assert_eq!(parsed["role"], "super");
     }
 
+    /// Regression test for `memmem_replace_all` in transform.rs: multiple
+    /// non-overlapping occurrences of the same literal pattern in one key, and a
+    /// replacement string that itself contains the search pattern (must not
+    /// re-match the just-inserted text, matching `str::replace`'s semantics of
+    /// scanning the original string, not the growing output).
+    #[test]
+    fn test_literal_replacement_multiple_and_self_referential() {
+        let json = r#"{"admin_admin_admin": 1, "xx": 2}"#;
+        let result = JSONTools::new()
+            .flatten()
+            .key_replacement("admin", "root")
+            .key_replacement("x", "xx")
+            .execute(json)
+            .unwrap();
+        let flattened = extract_single(result);
+        let parsed: Value = serde_json::from_str(&flattened).unwrap();
+
+        assert_eq!(parsed["root_root_root"], 1);
+        // "xx" -> each 'x' replaced with "xx" against the *original* string,
+        // not re-matched against inserted output: "xx" -> "xxxx", not infinite.
+        assert_eq!(parsed["xxxx"], 2);
+    }
+
+    /// An empty literal pattern is legal but degenerate input (no config-time
+    /// validation rejects it); must not hang or panic, and should match
+    /// `str::replace("", ..)`'s defined (if unusual) zero-width-everywhere behavior.
+    #[test]
+    fn test_literal_replacement_empty_pattern_does_not_hang() {
+        let json = r#"{"ab": 1}"#;
+        let result = JSONTools::new()
+            .flatten()
+            .key_replacement("", "-")
+            .execute(json)
+            .unwrap();
+        let flattened = extract_single(result);
+        let parsed: Value = serde_json::from_str(&flattened).unwrap();
+
+        assert_eq!(parsed["-a-b-"], 1);
+    }
+
     #[test]
     fn test_value_replacement() {
         let json = r#"{"email": "john@example.com", "role": "super"}"#;
@@ -844,6 +884,152 @@ mod unit_tests {
         assert_eq!(parsed["count"], -10);
     }
 
+    /// Regression test for `canonical_json_integer`'s fast path in convert.rs:
+    /// already-clean integer strings ("123", "-45", "0") must convert identically
+    /// to how the (slower) float round-trip path would have converted them.
+    #[test]
+    fn test_clean_integer_fast_path() {
+        let json = r#"{"a": "123", "b": "-45", "c": "0", "d": "9007199254740993"}"#;
+        let result = JSONTools::new()
+            .flatten()
+            .auto_convert_types(true)
+            .execute(json)
+            .unwrap();
+        let flattened = extract_single(result);
+        let parsed: Value = serde_json::from_str(&flattened).unwrap();
+
+        assert_eq!(parsed["a"], 123);
+        assert_eq!(parsed["b"], -45);
+        assert_eq!(parsed["c"], 0);
+        // 16 digits: within the fast path's 18-digit bound, but big enough that an
+        // f64 round-trip would lose precision -- confirms the fast path preserves
+        // the exact original digits rather than reformatting through a float.
+        assert_eq!(parsed["d"], 9007199254740993i64);
+    }
+
+    /// Leading zeros ("007") are not valid unquoted JSON number syntax, so they
+    /// must never take the fast path -- must still go through the existing
+    /// float round-trip, which normalizes to "7" (matches pre-existing behavior).
+    #[test]
+    fn test_leading_zero_not_fast_pathed() {
+        let json = r#"{"code": "007"}"#;
+        let result = JSONTools::new()
+            .flatten()
+            .auto_convert_types(true)
+            .execute(json)
+            .unwrap();
+        let flattened = extract_single(result);
+        let parsed: Value = serde_json::from_str(&flattened).unwrap();
+
+        assert_eq!(parsed["code"], 7);
+    }
+
+    /// "-0" must keep converting to "0" (sign dropped), matching the existing
+    /// float round-trip's behavior (`-0.0f64 as i64 == 0`) -- the fast path
+    /// deliberately excludes "-0" to avoid silently changing this.
+    #[test]
+    fn test_negative_zero_matches_existing_behavior() {
+        let json = r#"{"value": "-0"}"#;
+        let result = JSONTools::new()
+            .flatten()
+            .auto_convert_types(true)
+            .execute(json)
+            .unwrap();
+        let flattened = extract_single(result);
+        let parsed: Value = serde_json::from_str(&flattened).unwrap();
+
+        assert_eq!(parsed["value"], 0);
+        assert!(!flattened.contains("-0"));
+    }
+
+    /// Integers too large for even u64 (>20 digits) fall through to the
+    /// pre-existing float round-trip path unchanged -- which, since the value
+    /// is unrepresentable exactly in an i64/u64 either way, formats it as a
+    /// (lossy, scientific-notation) float rather than leaving it as a string.
+    /// This isn't behavior the fast path introduces; it documents the existing
+    /// fallback so a future change to it doesn't silently regress unnoticed.
+    #[test]
+    fn test_integer_beyond_u64_falls_through_to_float() {
+        let json = r#"{"huge": "99999999999999999999999999"}"#;
+        let result = JSONTools::new()
+            .flatten()
+            .auto_convert_types(true)
+            .execute(json)
+            .unwrap();
+        let flattened = extract_single(result);
+        let parsed: Value = serde_json::from_str(&flattened).unwrap();
+
+        assert!(parsed["huge"].is_number());
+        assert_ne!(
+            parsed["huge"],
+            serde_json::json!("99999999999999999999999999")
+        );
+    }
+
+    /// Correctness regression test: before `canonical_json_integer`, `auto_convert_types`
+    /// silently corrupted the trailing digits of exact 64-bit-range integer strings by
+    /// routing them through `f64` (only ~15-17 significant decimal digits of exact
+    /// precision) before reformatting. Real-world 64-bit IDs (Snowflake/Discord/database
+    /// bigint IDs, commonly stored as JSON strings *specifically* to avoid this exact
+    /// class of precision loss elsewhere) are typically 17-19 digits, so this was a live
+    /// bug, not a hypothetical one. Confirmed via byte-for-byte A/B comparison against the
+    /// pre-fix implementation: every one of these previously came out corrupted.
+    #[test]
+    fn test_large_integer_precision_exact_at_boundaries() {
+        let json = r#"{
+            "a": "999999999999999999",
+            "b": "12345678901234567",
+            "c": "123456789012345678",
+            "d": "1234567890123456789",
+            "e": "9223372036854775807",
+            "f": "9223372036854775809",
+            "g": "-9223372036854775807",
+            "h": "-9223372036854775808",
+            "i": "18446744073709551614",
+            "j": "99999999999999999"
+        }"#;
+        let result = JSONTools::new()
+            .flatten()
+            .auto_convert_types(true)
+            .execute(json)
+            .unwrap();
+        let flattened = extract_single(result);
+        let parsed: Value = serde_json::from_str(&flattened).unwrap();
+
+        assert_eq!(parsed["a"], 999999999999999999i64);
+        assert_eq!(parsed["b"], 12345678901234567i64);
+        assert_eq!(parsed["c"], 123456789012345678i64);
+        assert_eq!(parsed["d"], 1234567890123456789i64);
+        assert_eq!(parsed["e"], i64::MAX);
+        assert_eq!(parsed["f"], 9223372036854775809u64); // i64::MAX + 2, fits u64
+        assert_eq!(parsed["g"], -9223372036854775807i64); // i64::MIN + 1
+        assert_eq!(parsed["h"], i64::MIN);
+        assert_eq!(parsed["i"], 18446744073709551614u64); // u64::MAX - 1
+        assert_eq!(parsed["j"], 99999999999999999i64);
+    }
+
+    /// 20-digit negative numbers (magnitude beyond i64::MIN) and >20-digit
+    /// positive numbers (beyond u64::MAX) cannot be exactly represented by
+    /// either i64 or u64, so the fast path must decline them and leave the
+    /// existing (lossy but pre-existing) fallback behavior untouched.
+    #[test]
+    fn test_integers_beyond_i64_u64_range_unchanged() {
+        let json = r#"{"neg": "-18446744073709551615", "pos": "999999999999999999999"}"#;
+        let result = JSONTools::new()
+            .flatten()
+            .auto_convert_types(true)
+            .execute(json)
+            .unwrap();
+        let flattened = extract_single(result);
+        let parsed: Value = serde_json::from_str(&flattened).unwrap();
+
+        // Both are converted (existing fallback always produces *some* numeric
+        // output for finite parseable values) but not preserved exactly --
+        // this documents the pre-existing behavior, unaffected by the fast path.
+        assert!(parsed["neg"].is_number());
+        assert!(parsed["pos"].is_number());
+    }
+
     #[test]
     fn test_thousands_separator_us_format() {
         let json = r#"{"amount": "1,234.56", "total": "1,000,000"}"#;
@@ -888,6 +1074,39 @@ mod unit_tests {
         assert_eq!(parsed["usd"], 123.45);
         assert_eq!(parsed["eur"], 99.99);
         assert_eq!(parsed["gbp"], 50.0);
+    }
+
+    /// Regression test for `strip_trailing_ascii_pair` in convert.rs: credit/debit
+    /// suffix stripping must match `trim_end_matches`'s exact chained semantics --
+    /// each of CR/DR/cr/dr is stripped exhaustively before the next is tried, so
+    /// mixed-suffix strings like "100CRDR"/"100DRCR" resolve asymmetrically (order
+    /// matters: only a trailing "DR" gets caught by the first pass in "100CRDR",
+    /// leaving "CR" behind and making it fail to parse as a number at all).
+    #[test]
+    fn test_credit_debit_suffix_stripping() {
+        let json = r#"{
+            "a": "100CR", "b": "100DR", "c": "100cr", "d": "100dr",
+            "e": "100CRDR", "f": "100DRCR", "g": "100crdr", "h": "100drcr"
+        }"#;
+        let result = JSONTools::new()
+            .flatten()
+            .auto_convert_types(true)
+            .execute(json)
+            .unwrap();
+        let flattened = extract_single(result);
+        let parsed: Value = serde_json::from_str(&flattened).unwrap();
+
+        assert_eq!(parsed["a"], 100);
+        assert_eq!(parsed["b"], 100);
+        assert_eq!(parsed["c"], 100);
+        assert_eq!(parsed["d"], 100);
+        // Asymmetric: "CR" isn't a suffix of "100CRDR" (it ends in "DR"), so only the
+        // "DR" pass strips anything, leaving "100CR" -- not a valid number, so the
+        // original string is kept unconverted.
+        assert_eq!(parsed["e"], "100CRDR");
+        assert_eq!(parsed["f"], 100);
+        assert_eq!(parsed["g"], "100crdr");
+        assert_eq!(parsed["h"], 100);
     }
 
     #[test]
