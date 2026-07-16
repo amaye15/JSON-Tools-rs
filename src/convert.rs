@@ -4,7 +4,7 @@
 //! and null into their native JSON types. Handles locale-aware number formats
 //! (EU comma decimals, accounting negatives) with SIMD-accelerated cleaning.
 
-use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
+use chrono::{DateTime, Datelike, NaiveDate, NaiveDateTime, Utc};
 use memchr::{memchr, memchr2, memchr3, memchr_iter};
 use smallvec::SmallVec;
 use std::borrow::Cow;
@@ -337,12 +337,31 @@ fn try_parse_and_normalize_iso8601(s: &str) -> Option<String> {
     None
 }
 
+/// Parse `n` ASCII digit bytes into a `u32`. Caller guarantees the slice is all digits.
+#[inline(always)]
+fn digits_to_u32(bytes: &[u8]) -> u32 {
+    bytes
+        .iter()
+        .fold(0u32, |acc, &b| acc * 10 + (b - b'0') as u32)
+}
+
 /// Parse compact date format: YYYYMMDD
+///
+/// Hand-rolled instead of `NaiveDate::parse_from_str(s, "%Y%m%d")`: chrono's generic
+/// parser re-interprets the format string on every call. `could_be_date`'s prefilter
+/// can't distinguish a real compact date from an 8-digit numeric ID/zip+4/order number
+/// starting with 1 or 2 (a very common shape once `auto_convert_types` is enabled), so
+/// this function is reached for plenty of non-dates -- `NaiveDate::from_ymd_opt` is a
+/// direct, cheap validator (no string re-scanning) and correctly rejects those the same
+/// way the format-string parser would (invalid month/day, non-leap Feb 29, etc.).
 #[inline]
 fn try_parse_compact_date(s: &str) -> Option<String> {
-    NaiveDate::parse_from_str(s, "%Y%m%d")
-        .ok()
-        .map(|d| d.format("%Y-%m-%d").to_string())
+    let bytes = s.as_bytes();
+    let year = digits_to_u32(&bytes[0..4]);
+    let month = digits_to_u32(&bytes[4..6]);
+    let day = digits_to_u32(&bytes[6..8]);
+    NaiveDate::from_ymd_opt(year as i32, month, day)?;
+    Some(format!("{year:04}-{month:02}-{day:02}"))
 }
 
 /// Parse compact datetime format: YYYYMMDDTHHMMSS with optional Z or offset
@@ -407,11 +426,27 @@ fn try_parse_compact_datetime(s: &str) -> Option<String> {
 }
 
 /// Parse ordinal date format: YYYY-DDD
+///
+/// Hand-rolled for the same reason as `try_parse_compact_date`; ordinal-to-month/day
+/// conversion (leap-year-aware) is left to `NaiveDate`'s getters rather than
+/// re-implemented, since that's the part actually worth trusting chrono for.
 #[inline]
 fn try_parse_ordinal_date(s: &str) -> Option<String> {
-    NaiveDate::parse_from_str(s, "%Y-%j")
-        .ok()
-        .map(|d| d.format("%Y-%m-%d").to_string())
+    let bytes = s.as_bytes();
+    if !bytes[0..4].iter().all(|b| b.is_ascii_digit())
+        || !bytes[5..8].iter().all(|b| b.is_ascii_digit())
+    {
+        return None;
+    }
+    let year = digits_to_u32(&bytes[0..4]);
+    let ordinal = digits_to_u32(&bytes[5..8]);
+    let date = NaiveDate::from_yo_opt(year as i32, ordinal)?;
+    Some(format!(
+        "{:04}-{:02}-{:02}",
+        date.year(),
+        date.month(),
+        date.day()
+    ))
 }
 
 /// Parse ISO week date format: YYYY-Www or YYYY-Www-D
@@ -452,11 +487,18 @@ fn try_parse_standard_date(s: &str, sep: u8) -> Option<String> {
         return None;
     }
 
-    // Date-only (exactly 10 chars)
+    // Date-only (exactly 10 chars). Hand-rolled for the same reason as
+    // try_parse_compact_date: positions 0..4, 5..7, 8..10 are already confirmed all
+    // ASCII digits above, so NaiveDate::from_ymd_opt validates just as correctly as
+    // the format-string parser without re-scanning the string a second time. The
+    // original (already-normalized, separator-unified) string is returned unchanged
+    // on success -- this call only needs to validate, not reformat.
     if len == 10 {
-        return NaiveDate::parse_from_str(&normalized, "%Y-%m-%d")
-            .ok()
-            .map(|_| normalized.into_owned());
+        let year = digits_to_u32(&bytes[0..4]);
+        let month = digits_to_u32(&bytes[5..7]);
+        let day = digits_to_u32(&bytes[8..10]);
+        NaiveDate::from_ymd_opt(year as i32, month, day)?;
+        return Some(normalized.into_owned());
     }
 
     // Must have datetime separator at position 10 (T or space)

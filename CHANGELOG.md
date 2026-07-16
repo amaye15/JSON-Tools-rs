@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- `auto_convert_types`'s date detection (`try_parse_compact_date`, `try_parse_ordinal_date`,
+  and standard-date's date-only branch in `convert.rs`) now validates via
+  `NaiveDate::from_ymd_opt`/`from_yo_opt` directly instead of chrono's generic
+  format-string parser, which re-interprets the format string on every call. The
+  `could_be_date` prefilter can't distinguish a real compact date from an 8-digit
+  numeric ID/zip+4/order number starting with 1 or 2 (common once `auto_convert_types`
+  is enabled), so this path is reached for plenty of non-dates. ~25% faster on a
+  realistic mixed workload (real dates + false-positive numeric IDs); verified
+  byte-for-byte identical output against the old implementation across 31 cases
+  (leap years, invalid months/days, all four date formats, timezones, non-dates).
+  Datetime/timezone-offset parsing is untouched (left on chrono's parser -- more
+  complex to hand-roll correctly, and less prone to false-positive collisions).
+
 ## [0.9.3] - 2026-07-16
 
 ### Fixed
