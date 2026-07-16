@@ -710,14 +710,15 @@ impl<'a> DirectWalker<'a> {
                 let key_str = tape_content_str(self.input, entry);
 
                 self.path.push_level();
-                // Fast path: skip unescape if no escape sequences in the key
-                if entry.string_has_escapes() {
-                    let unescaped = unescape_json_string(key_str);
-                    self.path
-                        .append_key_raw(unescaped.as_ref(), &self.separator);
-                } else {
-                    self.path.append_key_raw(key_str, &self.separator);
-                }
+                // `key_str` is the raw source slice, already valid JSON-escaped content --
+                // DirectWalker never applies key transforms (that's CollectingWalker's job),
+                // so the logical (unescaped) value is never needed here. Previously this
+                // unescaped the key when it had escapes but never re-escaped it before
+                // writing to output (append_key_raw's buffer becomes the output key
+                // directly, unescaped), producing invalid JSON for any key containing an
+                // escaped quote/backslash/control char. Using the raw slice unconditionally
+                // fixes that and skips an unnecessary allocation.
+                self.path.append_key_raw(key_str, &self.separator);
 
                 cursor += 1; // skip key StringStart
                 if cursor < end_idx {
@@ -1282,22 +1283,42 @@ pub(crate) fn write_json_escaped_key(output: &mut String, key: &str) {
         return;
     }
 
-    // Slow path: escape character by character
-    for &b in bytes {
-        match b {
-            b'"' => output.push_str("\\\""),
-            b'\\' => output.push_str("\\\\"),
-            b'\n' => output.push_str("\\n"),
-            b'\r' => output.push_str("\\r"),
-            b'\t' => output.push_str("\\t"),
-            b if b < 0x20 => {
-                let hex = b"0123456789abcdef";
-                output.push_str("\\u00");
-                output.push(hex[(b >> 4) as usize] as char);
-                output.push(hex[(b & 0x0F) as usize] as char);
+    // Slow path: bulk-copy each run of plain (non-escape) bytes between special bytes,
+    // instead of pushing every byte individually. `_ => output.push(b as char)` on a
+    // per-byte basis is wrong for non-ASCII input: a multi-byte UTF-8 continuation/lead
+    // byte re-encoded alone as its own `char` corrupts the character (e.g. "café" with
+    // an embedded quote elsewhere would mangle to "cafÃ©"). All bytes the LUT marks as
+    // needing escaping are ASCII (control chars, `"`, `\`), so `i` only ever stops at
+    // UTF-8 character boundaries -- safe to slice at.
+    let mut run_start = 0;
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if NEEDS_JSON_ESCAPE[b as usize] {
+            if run_start < i {
+                output.push_str(&key[run_start..i]);
             }
-            _ => output.push(b as char),
+            match b {
+                b'"' => output.push_str("\\\""),
+                b'\\' => output.push_str("\\\\"),
+                b'\n' => output.push_str("\\n"),
+                b'\r' => output.push_str("\\r"),
+                b'\t' => output.push_str("\\t"),
+                _ => {
+                    let hex = b"0123456789abcdef";
+                    output.push_str("\\u00");
+                    output.push(hex[(b >> 4) as usize] as char);
+                    output.push(hex[(b & 0x0F) as usize] as char);
+                }
+            }
+            i += 1;
+            run_start = i;
+        } else {
+            i += 1;
         }
+    }
+    if run_start < bytes.len() {
+        output.push_str(&key[run_start..]);
     }
 }
 
@@ -1409,22 +1430,39 @@ pub(crate) fn escape_json_string(s: &str) -> Cow<'_, str> {
         return Cow::Borrowed(s);
     }
 
+    // Bulk-copy each run of plain (non-escape) bytes between special bytes -- see
+    // `write_json_escaped_key`'s doc comment for why per-byte `push(b as char)` is
+    // wrong for non-ASCII input (corrupts multi-byte UTF-8 sequences).
     let mut result = String::with_capacity(s.len() + 8);
-    for &b in bytes {
-        match b {
-            b'"' => result.push_str("\\\""),
-            b'\\' => result.push_str("\\\\"),
-            b'\n' => result.push_str("\\n"),
-            b'\r' => result.push_str("\\r"),
-            b'\t' => result.push_str("\\t"),
-            b if b < 0x20 => {
-                let hex = b"0123456789abcdef";
-                result.push_str("\\u00");
-                result.push(hex[(b >> 4) as usize] as char);
-                result.push(hex[(b & 0x0F) as usize] as char);
+    let mut run_start = 0;
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if NEEDS_JSON_ESCAPE[b as usize] {
+            if run_start < i {
+                result.push_str(&s[run_start..i]);
             }
-            _ => result.push(b as char),
+            match b {
+                b'"' => result.push_str("\\\""),
+                b'\\' => result.push_str("\\\\"),
+                b'\n' => result.push_str("\\n"),
+                b'\r' => result.push_str("\\r"),
+                b'\t' => result.push_str("\\t"),
+                _ => {
+                    let hex = b"0123456789abcdef";
+                    result.push_str("\\u00");
+                    result.push(hex[(b >> 4) as usize] as char);
+                    result.push(hex[(b & 0x0F) as usize] as char);
+                }
+            }
+            i += 1;
+            run_start = i;
+        } else {
+            i += 1;
         }
+    }
+    if run_start < bytes.len() {
+        result.push_str(&s[run_start..]);
     }
     Cow::Owned(result)
 }

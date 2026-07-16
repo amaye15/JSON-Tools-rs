@@ -120,8 +120,16 @@ pub(crate) fn process_single_json_for_unflatten(
     // Phase 4: Build UnflatNode tree
     let tree = build_unflatten_tree(entries, &config.separator, config.max_array_index)?;
 
-    // Phase 5: Serialize with integrated filtering
-    Ok(serialize_unflatten_tree(&tree, &config.filtering))
+    // Phase 5: Serialize with integrated filtering. `input.len()` is a cheap, already-
+    // available capacity hint: unflattening restructures the same keys/values into
+    // nested form rather than adding or removing much content, so output size tracks
+    // input size closely -- much better than the fixed small default this replaced,
+    // without needing a separate full pass over the tree just to sum exact sizes.
+    Ok(serialize_unflatten_tree(
+        &tree,
+        &config.filtering,
+        input.len(),
+    ))
 }
 
 // ================================================================================================
@@ -855,9 +863,12 @@ fn set_nested_array_value<'a>(
 // ================================================================================================
 
 /// Serialize an UnflatNode tree directly to a JSON string with integrated filtering.
-fn serialize_unflatten_tree(root: &UnflatNode<'_>, filtering: &FilteringConfig) -> String {
-    // Estimate output size
-    let mut output = String::with_capacity(256);
+fn serialize_unflatten_tree(
+    root: &UnflatNode<'_>,
+    filtering: &FilteringConfig,
+    capacity_hint: usize,
+) -> String {
+    let mut output = String::with_capacity(capacity_hint);
     serialize_node(root, &mut output, filtering);
     output
 }

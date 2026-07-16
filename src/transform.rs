@@ -470,9 +470,19 @@ struct SlowObjectEntry {
 /// `str::to_lowercase()` always allocates a new String even when nothing changes, so this
 /// first does a cheap scan for any uppercase character and returns `s` unchanged if none are
 /// found -- the common case for real-world JSON keys, which are typically already lowercase.
+/// Real-world keys are also typically pure ASCII, so the scan itself uses a byte-level
+/// `is_ascii_uppercase` check (cheaper than decoding UTF-8 codepoints) when the whole
+/// string is ASCII, falling back to the full Unicode-aware scan otherwise for correctness
+/// on non-ASCII uppercase (e.g. 'Ñ').
 #[inline]
 fn lowercase_if_needed(s: String) -> String {
-    if s.chars().any(char::is_uppercase) {
+    let bytes = s.as_bytes();
+    let has_uppercase = if bytes.is_ascii() {
+        bytes.iter().any(u8::is_ascii_uppercase)
+    } else {
+        s.chars().any(char::is_uppercase)
+    };
+    if has_uppercase {
         s.to_lowercase()
     } else {
         s

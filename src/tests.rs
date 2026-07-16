@@ -2858,6 +2858,64 @@ mod validation_and_edge_case_tests {
     }
 
     #[test]
+    fn test_key_with_escape_sequence_produces_valid_json() {
+        // Regression test: DirectWalker (flatten's fast path, no key transforms
+        // configured) used to unescape a key's escape sequences to build the path but
+        // never re-escape before writing that path directly as the output key. Any key
+        // containing an escaped quote/backslash/control char therefore produced
+        // syntactically invalid JSON output (an unescaped `"` terminating the key
+        // string early). Covers both a top-level key and a key at nesting depth 2.
+        let json = r#"{"café \"nested\" city": "v1", "user": {"say \"hi\"": "v2"}}"#;
+        let flattened = JSONTools::new().flatten().execute(json).unwrap();
+        let flat_str = extract_single(flattened);
+        let parsed: Value =
+            serde_json::from_str(&flat_str).expect("flatten output must be valid JSON");
+
+        assert_eq!(parsed["café \"nested\" city"], "v1");
+        assert_eq!(parsed["user.say \"hi\""], "v2");
+    }
+
+    #[test]
+    fn test_key_and_value_escaping_preserves_multibyte_utf8() {
+        // Regression test: escape_json_string/write_json_escaped_key's slow path (taken
+        // whenever a string has at least one char needing escaping) previously
+        // reinterpreted each byte of a multi-byte UTF-8 sequence as its own Latin-1
+        // codepoint via `push(b as char)` -- the same bug class already fixed in
+        // unescape_json_string (see test_unicode_value_with_escape_sequence), but
+        // present here in the opposite (re-escaping) direction. Exercises: the
+        // CollectingWalker slow path (lowercase_keys forces it) for key escaping, and
+        // value_replacement (which routes through escape_json_string) for value
+        // escaping. Mixes Latin accents, CJK, Cyrillic, and emoji with embedded quotes.
+        let json = r#"{"名前_\"test\"_émoji_😀_ключ": "OLD café_\"val\"_中文_🎉"}"#;
+        let flattened = JSONTools::new()
+            .flatten()
+            .lowercase_keys(true)
+            .value_replacement("OLD ", "NEW ")
+            .execute(json)
+            .unwrap();
+        let flat_str = extract_single(flattened);
+        let parsed: Value =
+            serde_json::from_str(&flat_str).expect("flatten output must be valid JSON");
+
+        let expected_key = "名前_\"test\"_émoji_😀_ключ".to_lowercase();
+        assert_eq!(parsed[&expected_key], "NEW café_\"val\"_中文_🎉");
+    }
+
+    #[test]
+    fn test_unflatten_key_escaping_preserves_multibyte_utf8() {
+        // Same bug as test_key_and_value_escaping_preserves_multibyte_utf8, exercised
+        // through unflatten.rs's key serialization (which reuses flatten.rs's
+        // write_json_escaped_key).
+        let flat_json = r#"{"café \"nested\"_日本語_🎉 city": "v"}"#;
+        let unflattened = JSONTools::new().unflatten().execute(flat_json).unwrap();
+        let result = extract_single(unflattened);
+        let parsed: Value =
+            serde_json::from_str(&result).expect("unflatten output must be valid JSON");
+
+        assert_eq!(parsed["café \"nested\"_日本語_🎉 city"], "v");
+    }
+
+    #[test]
     fn test_escaped_value_falls_through_replacement_to_auto_convert() {
         // Regression test combining two fixes: (1) a perf fix where value_replacement +
         // auto_convert_types together used to unescape the same string twice when the

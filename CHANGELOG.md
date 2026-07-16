@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **`flatten` produced invalid JSON for any key containing an escaped character**
+  (`\"`, `\\`, or a control-character escape) **when no key transform was configured**
+  (the common case: plain `.flatten()` with no `lowercase_keys`/`key_replacement`/
+  collision-handling). The fast path unescaped such a key to build the internal path
+  buffer but never re-escaped it before writing that buffer directly as the output
+  key, so e.g. a source key `"say \"hi\""` produced the syntactically invalid output
+  key `"say "hi""`. Fixed by never unescaping in this path at all -- it doesn't need
+  the logical key value (no transform is applied to it), so the original,
+  already-correctly-escaped source bytes can be used directly. Also removes an
+  unnecessary allocation.
+- **`flatten`'s and `unflatten`'s JSON string re-escaping corrupted multi-byte UTF-8
+  characters** whenever a string needed *any* escaping (an embedded quote, backslash,
+  or control character) and also contained non-ASCII text -- e.g. `café "quoted"`
+  became `cafÃ© \"quoted\"`. The escaping slow path reinterpreted each byte
+  individually as its own Latin-1 codepoint (`output.push(b as char)`) instead of
+  bulk-copying multi-byte sequences intact. Same bug class as the `unescape_json_string`
+  fix from the 2026-07 audit, but present in the opposite (re-escaping) direction and
+  missed at the time. Affected: key escaping when `lowercase_keys`/`key_replacement`/
+  collision-handling is configured (`CollectingWalker`'s slow path), value escaping
+  via `value_replacement`, and `unflatten`'s key serialization (which reuses the same
+  function). Fixed by bulk-copying plain byte runs between escape sequences, mirroring
+  `unescape_json_string`'s existing correct pattern -- this also fixes the performance
+  issue the rewrite was originally intended for (Criterion: ~17-22% faster on
+  key-replacement scenarios, p < 0.05).
+
 ### Added
 - Object keys throughout `unflatten`'s tree (`ObjectMap`) now use `CompactString`
   instead of `String`, inlining keys up to 24 bytes with no heap allocation. Real-world
@@ -42,6 +68,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to latest patch. sonic-rs is pinned to exactly `=0.5.7`: 0.5.8 uses
   `exposed_provenance`/`strict_provenance`, which need a newer rustc than this
   crate's MSRV of 1.80.
+- `unflatten`'s output buffer is now sized from the input JSON's byte length instead
+  of a fixed 256-byte default, avoiding repeated capacity-doubling reallocation on
+  larger payloads (`flatten`'s equivalent buffers already did this correctly).
+- `lowercase_if_needed` (key lowercasing's no-op fast-path check) now uses a
+  byte-level ASCII scan instead of decoding full Unicode codepoints, when the
+  string is pure ASCII -- the common case for real-world JSON keys. Falls back to
+  the original Unicode-aware scan for non-ASCII input, so correctness on e.g. 'Ñ'
+  is unchanged.
 
 ## [0.9.2] - 2026-07-15
 
