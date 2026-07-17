@@ -12,10 +12,9 @@ use crate::config::ProcessingConfig;
 use crate::convert::try_convert_string_to_json_bytes;
 use crate::error::JsonToolsError;
 use crate::flatten::{
-    apply_value_replacement_cow, escape_json_string, scan_and_fixup, skip_tape_value,
-    tape_content_str, tape_is_empty_array, tape_is_empty_object, tape_quoted_str,
-    tape_scalar_bytes, trim_ascii, unescape_json_string, write_json_escaped_key, EntryKind,
-    TapeEntry,
+    escape_json_string, scan_and_fixup, skip_tape_value, tape_content_str, tape_is_empty_array,
+    tape_is_empty_object, tape_quoted_str, tape_scalar_bytes, trim_ascii, unescape_json_string,
+    write_json_escaped_key, EntryKind, TapeEntry,
 };
 use crate::fxhash::FxHashMap;
 use memchr::memmem;
@@ -82,31 +81,36 @@ fn memmem_replace_all(s: &str, from: &str, to: &str) -> Option<String> {
     })
 }
 
-/// Core key replacement logic that works with both string keys and Cow<str>
-/// This eliminates duplication between flatten and unflatten key replacement functions
-/// Optimized to minimize string allocations by using efficient Cow operations
+/// Apply replacement patterns to a string. Used for both JSON keys and values
+/// -- the logic doesn't care which, it just replaces patterns in a string --
+/// so flatten's key-transform path and value-transform path (previously two
+/// separate, near-duplicate implementations, one of which was missing the
+/// SIMD literal-replace fix the other already had) now share this one.
 ///
-/// A pattern wrapped as `r'...'` (e.g. `r'^admin_'`) is a regex; a bare pattern is matched
-/// literally. See `crate::cache::ParsedPattern`. A malformed r'...' regex is silently
-/// skipped (treated as no match) rather than propagating a compile error through this
-/// hot path -- there's no config-time validation point for replacement patterns today.
+/// A pattern wrapped as `r'...'` (e.g. `r'^admin_'`) is a regex; a bare
+/// pattern is matched literally. See `crate::cache::ParsedPattern`. A
+/// malformed `r'...'` regex is silently skipped (treated as no match) rather
+/// than propagating a compile error through this hot path -- there's no
+/// config-time validation point for replacement patterns today.
+///
+/// Regex lookup itself is cheap even though this runs once per key/value
+/// across a whole batch: see `get_cached_regex`'s doc comment for the
+/// thread-local "sticky" fast path that avoids re-hashing the pattern string
+/// on every call when (as is the common case) the same pattern is reused
+/// across many consecutive calls.
 #[inline(always)]
-pub(crate) fn apply_key_replacement_patterns(
-    key: &str,
-    patterns: &[(String, String)],
-) -> Result<Option<String>, JsonToolsError> {
-    let mut new_key = Cow::Borrowed(key);
+pub(crate) fn apply_replacement_patterns(s: &str, patterns: &[(String, String)]) -> Option<String> {
+    let mut current = Cow::Borrowed(s);
     let mut changed = false;
 
-    // Apply each replacement pattern
     for (pattern, replacement) in patterns {
         match parse_pattern(pattern) {
             ParsedPattern::Regex(inner) => {
                 if let Ok(regex) = get_cached_regex(inner) {
                     // Use replace_all's Cow return to detect matches without a separate
                     // is_match() scan -- Owned means replacement happened, Borrowed means not.
-                    if let Cow::Owned(s) = regex.replace_all(&new_key, replacement.as_str()) {
-                        new_key = Cow::Owned(s);
+                    if let Cow::Owned(s) = regex.replace_all(&current, replacement.as_str()) {
+                        current = Cow::Owned(s);
                         changed = true;
                     }
                 }
@@ -116,10 +120,10 @@ pub(crate) fn apply_key_replacement_patterns(
                     // Empty pattern: matches at every zero-width position (std's
                     // defined, if unusual, `str::replace` behavior) -- fall back
                     // directly rather than special-casing the SIMD path for it.
-                    new_key = Cow::Owned(new_key.replace(lit, replacement));
+                    current = Cow::Owned(current.replace(lit, replacement));
                     changed = true;
-                } else if let Some(replaced) = memmem_replace_all(&new_key, lit, replacement) {
-                    new_key = Cow::Owned(replaced);
+                } else if let Some(replaced) = memmem_replace_all(&current, lit, replacement) {
+                    current = Cow::Owned(replaced);
                     changed = true;
                 }
             }
@@ -127,26 +131,22 @@ pub(crate) fn apply_key_replacement_patterns(
     }
 
     if changed {
-        Ok(Some(new_key.into_owned()))
+        Some(current.into_owned())
     } else {
-        Ok(None)
+        None
     }
 }
 
 /// Core value replacement logic that works with any Value type.
-/// Delegates to `apply_key_replacement_patterns` for the shared regex/literal
+/// Delegates to `apply_replacement_patterns` for the shared regex/literal
 /// replacement logic, then writes the result back into the Value.
 #[inline]
-pub(crate) fn apply_value_replacement_patterns(
-    value: &mut Value,
-    patterns: &[(String, String)],
-) -> Result<(), JsonToolsError> {
+pub(crate) fn apply_value_replacement_patterns(value: &mut Value, patterns: &[(String, String)]) {
     if let Value::String(s) = value {
-        if let Some(replaced) = apply_key_replacement_patterns(s, patterns)? {
+        if let Some(replaced) = apply_replacement_patterns(s, patterns) {
             *s = replaced;
         }
     }
-    Ok(())
 }
 
 // ================================================================================================
@@ -214,7 +214,7 @@ fn handle_root_primitive(
             } else {
                 Cow::Borrowed(content)
             };
-            if let Some(replaced) = apply_value_replacement_cow(
+            if let Some(replaced) = apply_replacement_patterns(
                 unescaped.as_ref(),
                 &config.replacements.value_replacements,
             ) {
@@ -281,7 +281,7 @@ fn emit_string_value_shared(
     // Value replacement
     if has_replacements {
         if let Some(replaced) =
-            apply_value_replacement_cow(unescaped.as_ref(), &config.replacements.value_replacements)
+            apply_replacement_patterns(unescaped.as_ref(), &config.replacements.value_replacements)
         {
             if config.filtering.remove_empty_strings && replaced.is_empty() {
                 return (true, true);
@@ -619,10 +619,10 @@ impl<'a> NormalSlowWalker<'a> {
 
                 // Apply key replacement patterns
                 let mut transformed_key = if self.config.replacements.has_key_replacements() {
-                    apply_key_replacement_patterns(
+                    apply_replacement_patterns(
                         key_unescaped.as_ref(),
                         &self.config.replacements.key_replacements,
-                    )?
+                    )
                     .unwrap_or_else(|| key_unescaped.into_owned())
                 } else {
                     key_unescaped.into_owned()

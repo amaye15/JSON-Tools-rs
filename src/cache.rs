@@ -5,6 +5,7 @@
 
 use crate::fxhash::FxHashMap;
 use regex::Regex;
+use smallvec::SmallVec;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, RwLock};
 
@@ -176,6 +177,57 @@ fn insert_thread_local(pattern: &str, regex: &Arc<Regex>) {
     });
 }
 
+/// Capacity of the sticky fast-path cache (see `STICKY_REGEX_CACHE`'s doc comment).
+/// `ReplacementConfig` is itself sized for 0-2 patterns per key/value list (see its
+/// doc comment); 4 gives headroom for a key-replacement pattern and a
+/// value-replacement pattern both being in flight on the same thread without
+/// thrashing, while staying small enough that the linear scan stays cheap.
+const STICKY_CACHE_CAPACITY: usize = 4;
+
+/// Storage type for the sticky cache -- named to avoid a `clippy::type_complexity`
+/// warning on the `thread_local!` declaration below.
+type StickyCache = SmallVec<[(Arc<str>, Arc<Regex>); STICKY_CACHE_CAPACITY]>;
+
+thread_local! {
+    /// Tiny "sticky" fast-path cache checked before the thread-local/global tiers: a
+    /// plain linear scan over a handful of recently-used `(pattern, regex)` pairs,
+    /// comparing pattern strings directly instead of hashing them. The *same*
+    /// `ProcessingConfig` -- and thus the same, small pattern list -- is reused for
+    /// every key/value across an entire `execute()` call (potentially a large batch
+    /// under parallel dispatch), so after the first call this almost always hits.
+    ///
+    /// Found via sampling profiler (`sample`/`samply` against a release build with
+    /// debug symbols): `get_cached_regex` was the single largest hotspot (by a wide
+    /// margin -- roughly a fifth of all samples) in a batch/parallel workload with a
+    /// regex `key_replacement` configured, because every single key check re-hashed
+    /// the pattern string and walked the thread-local `FxHashMap` (tier 2) from
+    /// scratch even though the same pattern had just been resolved on the immediately
+    /// preceding call. A short linear scan over full pattern strings (no hashing at
+    /// all) is cheaper than one hash computation plus a hashmap probe for the
+    /// realistic 1-2-distinct-pattern case, and sidesteps the tier-2 `RefCell` borrow
+    /// and hashing entirely on a hit.
+    static STICKY_REGEX_CACHE: std::cell::RefCell<StickyCache> =
+        std::cell::RefCell::new(SmallVec::new());
+}
+
+/// Insert into the sticky cache, evicting the oldest entry (FIFO) if at capacity.
+/// Not a full LRU: with a capacity of just 4 entries existing purely to catch
+/// immediate repeated use, precise recency tracking would cost more than the miss
+/// it's avoiding.
+#[inline]
+fn insert_sticky(pattern: &str, regex: &Arc<Regex>) {
+    STICKY_REGEX_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if cache.iter().any(|(p, _)| p.as_ref() == pattern) {
+            return; // already present
+        }
+        if cache.len() >= STICKY_CACHE_CAPACITY {
+            cache.remove(0);
+        }
+        cache.push((Arc::from(pattern), Arc::clone(regex)));
+    });
+}
+
 /// A key/value replacement pattern is either a regex (explicitly marked by wrapping it in
 /// `r'...'`, e.g. `r'^admin_'`) or a literal string to match exactly. Bare patterns are
 /// literal -- there is no implicit "try regex, fall back to literal" behavior, so a pattern
@@ -208,6 +260,18 @@ pub(crate) fn get_cached_regex(pattern: &str) -> Result<Arc<Regex>, regex::Error
         return Ok(Arc::clone(regex));
     }
 
+    // STICKY: tiny linear-scan cache of recently-used patterns -- see its doc comment.
+    let sticky_hit = STICKY_REGEX_CACHE.with(|cache| {
+        cache
+            .borrow()
+            .iter()
+            .find(|(p, _)| p.as_ref() == pattern)
+            .map(|(_, r)| Arc::clone(r))
+    });
+    if let Some(regex) = sticky_hit {
+        return Ok(regex);
+    }
+
     // TIER 2: Try thread-local cache (fast path, no locks)
     let thread_local_result = THREAD_LOCAL_REGEX_CACHE.with(|cache| {
         let cache_ref = cache.borrow();
@@ -218,6 +282,7 @@ pub(crate) fn get_cached_regex(pattern: &str) -> Result<Arc<Regex>, regex::Error
     });
 
     if let Some(regex) = thread_local_result {
+        insert_sticky(pattern, &regex);
         return Ok(regex);
     }
 
@@ -227,6 +292,7 @@ pub(crate) fn get_cached_regex(pattern: &str) -> Result<Arc<Regex>, regex::Error
             tick.store(next_tick(), Ordering::Relaxed);
             let regex_arc = Arc::clone(regex);
             insert_thread_local(pattern, &regex_arc);
+            insert_sticky(pattern, &regex_arc);
             return Ok(regex_arc);
         }
     }
@@ -239,7 +305,9 @@ pub(crate) fn get_cached_regex(pattern: &str) -> Result<Arc<Regex>, regex::Error
         // Another thread may have compiled the same pattern while we were waiting
         if let Some((existing, tick)) = cache.get(pattern) {
             tick.store(next_tick(), Ordering::Relaxed);
-            return Ok(Arc::clone(existing));
+            let existing_arc = Arc::clone(existing);
+            insert_sticky(pattern, &existing_arc);
+            return Ok(existing_arc);
         }
         // Bounded cache: evict the genuinely least-recently-used entry if at capacity
         if cache.len() >= GLOBAL_CACHE_CAPACITY {
@@ -258,6 +326,7 @@ pub(crate) fn get_cached_regex(pattern: &str) -> Result<Arc<Regex>, regex::Error
     }
 
     insert_thread_local(pattern, &regex);
+    insert_sticky(pattern, &regex);
     Ok(regex)
 }
 
@@ -314,5 +383,49 @@ mod tests {
             !thread_local_cache_contains(cold_pattern),
             "untouched pattern should have been evicted, not kept by arbitrary chance"
         );
+    }
+
+    /// Regression test for the sticky fast-path cache (`STICKY_REGEX_CACHE`,
+    /// `insert_sticky`): interleaving more distinct patterns than
+    /// `STICKY_CACHE_CAPACITY` on one thread must never return the wrong regex for
+    /// a given pattern, even once the sticky slots have cycled through eviction.
+    /// Each pattern here is distinct enough (different literal text matched) that
+    /// a mixed-up regex would produce an observably wrong `is_match` result, not
+    /// just an internal inconsistency.
+    #[test]
+    fn test_sticky_cache_no_cross_contamination_across_eviction() {
+        // More distinct patterns than STICKY_CACHE_CAPACITY, each matching only its
+        // own distinct literal text.
+        let patterns_and_targets: Vec<(String, &str)> = (0..(STICKY_CACHE_CAPACITY * 3))
+            .map(|i| (format!("^sticky_test_marker_{i}$"), "irrelevant"))
+            .collect();
+
+        // First pass: compile every pattern once each, evicting earlier ones out of
+        // the sticky slots as later ones are inserted.
+        for (pattern, _) in &patterns_and_targets {
+            get_cached_regex(pattern).expect("pattern should compile");
+        }
+
+        // Second pass: re-fetch every pattern (a mix of sticky hits for the most
+        // recent few, and thread-local/global fallback for the rest) and confirm
+        // each one only matches its *own* target text, never another pattern's.
+        for (i, (pattern, _)) in patterns_and_targets.iter().enumerate() {
+            let regex = get_cached_regex(pattern).expect("re-fetch should succeed");
+            let own_text = format!("sticky_test_marker_{i}");
+            assert!(
+                regex.is_match(&own_text),
+                "pattern {pattern:?} should match its own marker text"
+            );
+            // Spot-check against a neighboring pattern's text to catch cross-contamination.
+            let other_i = (i + 1) % patterns_and_targets.len();
+            let other_text = format!("sticky_test_marker_{other_i}");
+            if other_i != i {
+                assert!(
+                    !regex.is_match(&other_text),
+                    "pattern {pattern:?} must not match a different marker's text \
+                     ({other_text:?}) -- indicates sticky-cache cross-contamination"
+                );
+            }
+        }
     }
 }

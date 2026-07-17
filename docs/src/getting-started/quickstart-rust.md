@@ -15,7 +15,7 @@ let result = JSONTools::new()
 if let JsonOutput::Single(flattened) = result {
     println!("{}", flattened);
 }
-// {"user.name": "John", "user.profile.age": 30, "user.profile.city": "NYC"}
+// {"user.name":"John","user.profile.age":30,"user.profile.city":"NYC"}
 ```
 
 ## Basic Unflattening
@@ -31,7 +31,7 @@ let result = JSONTools::new()
 if let JsonOutput::Single(nested) = result {
     println!("{}", nested);
 }
-// {"user": {"name": "John", "profile": {"age": 30}}}
+// {"user":{"name":"John","profile":{"age":30}}}
 ```
 
 ## Advanced Configuration
@@ -51,7 +51,7 @@ let result = JSONTools::new()
 if let JsonOutput::Single(flattened) = result {
     println!("{}", flattened);
 }
-// {"user::name": "John"}
+// {"user::name":"John"}
 ```
 
 ## Batch Processing
@@ -75,9 +75,9 @@ if let JsonOutput::Multiple(results) = result {
         println!("{}", r);
     }
 }
-// {"user_name": "Alice"}
-// {"user_name": "Bob"}
-// {"user_name": "Charlie"}
+// {"user_name":"Alice"}
+// {"user_name":"Bob"}
+// {"user_name":"Charlie"}
 ```
 
 ## Error Handling
@@ -89,7 +89,7 @@ match JSONTools::new().flatten().execute("invalid json") {
     Ok(result) => println!("{:?}", result),
     Err(e) => {
         eprintln!("Error [{}]: {}", e.error_code(), e);
-        // Error [E001]: JSON parse error: ...
+        // Error [E001]: [E001] JSON parsing failed: Invalid JSON value at line 1 column 1 ...
     }
 }
 ```

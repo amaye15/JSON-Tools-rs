@@ -1,6 +1,7 @@
 # Filtering
 
-Remove unwanted values during flattening or unflattening.
+Remove unwanted values during flattening, unflattening, or `.normal()` processing.
+Filtering is applied recursively at every level of nesting.
 
 ## Available Filters
 

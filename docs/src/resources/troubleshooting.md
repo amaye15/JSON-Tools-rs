@@ -4,7 +4,7 @@ This guide covers common errors, their causes, and how to resolve them.
 
 ## Error Code Reference
 
-All errors include a machine-readable code (`E001`-`E008`) at the start of the error message. Use these codes for programmatic error handling.
+All errors embed a machine-readable code (`E001`-`E008`) in square brackets in the error message. Use these codes for programmatic error handling. In Rust, `Display` on `JsonToolsError` always starts with the bracketed code (e.g. `[E001] ...`). In Python, the bindings prepend their own context (e.g. `"Failed to process JSON string: "`) before the underlying message, so the code is embedded in `str(e)` but is not always its first characters -- match `"[E00x]"` as a substring, not a prefix.
 
 ### E001: JsonParseError
 
@@ -63,12 +63,14 @@ See [Key & Value Replacements](../guide/replacements.md) for the full `r'...'` c
 
 **Message:** `[E003] Invalid replacement pattern: ...`
 
-**Cause:** The replacement pattern configuration is malformed.
-
-**Solution:** Ensure replacement patterns are provided as `(find, replace)` pairs:
+**Cause:** Reserved for a malformed replacement pattern configuration. Like `E002`, this
+code is not currently constructed anywhere in the codebase -- `.key_replacement()` /
+`.value_replacement()` always take exactly two arguments (`find`, `replace`), so
+there's no "wrong number of arguments in a pattern list" case to detect. It's kept in
+the error enum for API completeness/forward compatibility.
 
 ```python
-# Correct usage
+# Both key_replacement and value_replacement always take exactly (find, replace)
 tools.key_replacement("find_pattern", "replacement")
 tools.value_replacement("old_value", "new_value")
 ```
@@ -77,21 +79,24 @@ tools.value_replacement("old_value", "new_value")
 
 **Message:** `[E004] Invalid JSON structure: ...`
 
-**Cause:** The JSON is valid but not compatible with the requested operation.
+**Cause:** The set of flat keys given to `.unflatten()` describes a structurally
+inconsistent tree -- most commonly, one key is a strict prefix of another but already
+holds a scalar value, so the longer key can't navigate "into" it.
 
-**Common triggers:**
-- Unflattening a JSON array (unflatten requires a flat object)
-- Unflattening a non-flat object (nested values where flat keys are expected)
+Two inputs that look like they *should* trigger this but don't: a root-level JSON
+array passed to `.unflatten()` is a dedicated early-exit case that returns `"{}"`
+instead of erroring, and a value that's itself a nested object (e.g. `{"a": {"b":
+1}}`) is accepted as-is -- `.unflatten()` only requires *keys* to be splittable on the
+separator; it doesn't require *values* to be scalar.
 
 **Solution:**
 ```python
-# Wrong -- unflatten expects a flat object, not an array
-result = jt.JSONTools().unflatten().execute('[1, 2, 3]')
+# Wrong -- "a" is set to a scalar (1), then "a.b" tries to navigate into it as an object
+result = jt.JSONTools().unflatten().execute('{"a": 1, "a.b": 2}')
+# Raises: [E004] Invalid JSON structure: Cannot navigate into non-object/non-array
+# value at key: a
 
-# Wrong -- unflatten expects flat keys
-result = jt.JSONTools().unflatten().execute('{"a": {"b": 1}}')
-
-# Correct -- flat object with dot-separated keys
+# Correct -- keys don't collide on structure
 result = jt.JSONTools().unflatten().execute('{"a.b": 1, "a.c": 2}')
 ```
 
@@ -113,11 +118,12 @@ result = jt.JSONTools().unflatten().execute(data)
 result = jt.JSONTools().normal().execute(data)
 ```
 
-This error also occurs if `num_threads` is set to `0`:
+This error also occurs if `num_threads` is set to `0` -- note the check happens at `.execute()` time, not when `.num_threads(0)` is called (the message text is the shared `ConfigurationError` template, "Operation mode not configured: ...", even though the actual problem is the thread count, not a missing mode):
 
 ```python
-# Wrong
+# Wrong -- raises E005 when .execute() runs, even though a mode was set
 tools = jt.JSONTools().flatten().num_threads(0)
+tools.execute(data)
 
 # Correct
 tools = jt.JSONTools().flatten().num_threads(1)    # At least 1
@@ -126,11 +132,11 @@ tools = jt.JSONTools().flatten()                    # Use default (CPU count)
 
 ### E006: BatchProcessingError
 
-**Message:** `[E006] Batch processing failed at index {N}: ...`
+**Message:** `[E006] Batch processing failed at index {N}: Failed to process item at index {N}`
 
-**Cause:** One or more items in a batch failed to process. The error includes the index of the failing item and the underlying error.
+**Cause:** One or more items in a batch failed to process. The Rust core wraps the failing item's original error as the `source` of a `BatchProcessingError` -- but the *printed* message only ever says "Failed to process item at index N", not the specific underlying reason (e.g. the E001 parse error text). In Rust, you can recover the specific cause by pattern-matching the `source` field (see the [Rust API](../reference/rust-api.md#jsontoolserror) error-handling example); the Python bindings don't expose `source`, so `str(e)` alone won't tell you *why* that item failed.
 
-**Solution:** Check the item at the reported index. The inner error (usually E001 or E004) describes what went wrong:
+**Solution:** Use the reported index to isolate and re-run just that item, so its own error (not the generic batch wrapper) surfaces:
 
 ```python
 try:
@@ -138,32 +144,49 @@ try:
 except jt.JsonToolsError as e:
     msg = str(e)
     if "[E006]" in msg:
-        # Extract the index from the message to find the bad item
-        print(f"Batch error: {e}")
-        # Fix or filter the problematic items and retry
+        # The message only gives you the index, e.g. "...at index 1: Failed to
+        # process item at index 1" -- re-run that single item to see its real cause.
+        for i, item in enumerate(batch_of_json):
+            try:
+                tools.execute(item)
+            except jt.JsonToolsError as item_err:
+                print(f"Item {i} failed: {item_err}")
 ```
 
 ### E007: InputValidationError
 
 **Message:** `[E007] Input validation failed: ...`
 
-**Cause:** The input type is not supported.
-
-**Common triggers:**
-- Passing an integer, float, or boolean directly
-- Passing a non-JSON-string, non-dict type in a list
-- Using `execute_to_output()` with a DataFrame or Series (use `execute()` instead)
+**Cause:** Raised by the Rust core itself (not the Python/JVM binding layer) for a handful of specific conditions:
+- Empty JSON input (an empty or all-whitespace string passed to `.flatten()` -- `.unflatten()` treats this as `{}` instead, not an error)
+- Input exceeding the 4 GiB size limit
+- An array index during `.unflatten()` that exceeds `max_array_index()` (e.g. a flattened key like `"items.999999999"`)
 
 **Solution:**
 ```python
-# Wrong
+# Wrong -- empty input to flatten
+result = jt.JSONTools().flatten().execute("")  # Raises E007
+
+# Wrong -- array index beyond max_array_index (default 100,000)
+result = jt.JSONTools().unflatten().execute('{"items.999999999": 1}')  # Raises E007
+
+# Correct -- either supply valid data or raise the limit
+result = jt.JSONTools().unflatten().max_array_index(10_000_000).execute('{"items.999999999": 1}')
+```
+
+**Not the same as an unsupported Python input type.** Passing a type the Python bindings don't recognize at all (an `int`/`float`/`bool` directly, a list containing something other than strings/dicts, or a DataFrame/Series to `execute_to_output()`) raises a plain Python **`ValueError`** at the binding layer, not `jt.JsonToolsError` -- `jt.JsonToolsError` does not subclass `ValueError`, so `except jt.JsonToolsError` will not catch it:
+
+```python
+# Wrong -- these all raise plain ValueError, not jt.JsonToolsError
 result = tools.execute(42)
 result = tools.execute([1, 2, 3])
+output = tools.execute_to_output(some_dataframe)
 
 # Correct
 result = tools.execute('{"value": 42}')
 result = tools.execute({"value": 42})
 result = tools.execute(['{"a": 1}', '{"b": 2}'])
+result = tools.execute(some_dataframe)  # use execute(), not execute_to_output(), for DataFrames
 ```
 
 ### E008: SerializationError
@@ -190,7 +213,7 @@ tools = jt.JSONTools().flatten().separator("::")
 tools = jt.JSONTools().flatten().separator("/")
 ```
 
-In Rust, an empty separator causes a **panic** (via `assert!`). In Python, it raises a `ValueError`.
+In Rust, `.separator("")` itself doesn't fail -- the check happens at `.execute()` time, which returns `Err(JsonToolsError::ConfigurationError)` (`E005`), not a panic. In Python, `.separator("")` raises a `ValueError` immediately, at builder-call time.
 
 ### Missing Operation Mode
 
@@ -307,7 +330,7 @@ The `mimalloc` global allocator is an optional feature that provides a 5-10% per
 
 ### sonic-rs (64-bit only)
 
-The default JSON parser is `sonic-rs`, which uses SIMD instructions available on 64-bit platforms (x86_64, aarch64). On 32-bit platforms, the library automatically falls back to `simd-json`. This is transparent -- the API is identical regardless of which parser is active.
+The main flatten/unflatten/normal-mode paths use an in-tree, tape-based scanner (`scan_and_fixup()`, shared across those three operations) rather than a general-purpose `serde_json`-style parser. `sonic-rs` (SIMD, 64-bit platforms) / `simd-json` (32-bit fallback) is used for a narrower case: a root-level JSON primitive (e.g. a bare `"hello"` or `42`, not an object/array). This is transparent either way -- the public API is identical regardless of which parser handles a given input.
 
 ### macOS Profiling
 

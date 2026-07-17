@@ -6,30 +6,30 @@ JSON Tools RS achieves ~2,000+ ops/ms through multiple optimization layers.
 
 | Technique | Impact |
 |-----------|--------|
-| **SIMD JSON Parsing** | sonic-rs (64-bit) / simd-json (32-bit) for hardware-accelerated parsing |
+| **SIMD JSON Parsing** | sonic-rs (64-bit) / simd-json (32-bit) -- used for the root-primitive fallback path; the main flatten/unflatten/normal paths use a custom tape scanner instead (see [Architecture](../reference/architecture.md)) |
 | **SIMD Byte Search** | memchr/memmem for fast string operations |
-| **FxHashMap** | Fast non-cryptographic hashing via rustc-hash |
-| **Tiered Caching** | phf perfect hash -> thread-local FxHashMap -> global `RwLock<FxHashMap>` |
-| **SmallVec** | Stack allocation for depth stacks and number buffers |
-| **Arc\<str\> Dedup** | Shared key storage to minimize allocations |
+| **FxHashMap** | Fast non-cryptographic hashing via a custom in-tree `FxHasher` (`src/fxhash.rs`), not the `rustc-hash` crate |
+| **Multi-Tier Regex Cache** | Compile-time common-pattern table -> thread-local "sticky" cache -> larger thread-local `FxHashMap` -> global `RwLock<FxHashMap>`, all LRU-evicted when full |
+| **SmallVec** | Stack allocation for depth stacks, number buffers, and 0-2 replacement patterns |
+| **CompactString + Arena Keys** | Keys inline up to 24 bytes (`CompactString`); flatten's slow path (key lowercasing/replacement/collision-handling) additionally uses a `bumpalo` arena to avoid one heap allocation per dotted key path |
 | **First-Byte Discriminators** | Rapid rejection of non-convertible strings |
 | **Rayon Parallelism** | Persistent work-stealing thread pool for batch and nested parallelism (no per-call spawn cost) |
 | **Zero-Copy (Cow)** | Avoid allocations when strings don't need modification |
-| **itoa** | Fast integer-to-string formatting |
+| **Stack-Allocated Integer Formatting** | Custom `IntBuf` formatter for array-index keys (replaced the `itoa` crate) |
 | **mimalloc** | Optional high-performance allocator (`features = ["mimalloc"]`, ~5-10% speedup) |
 
 ## Benchmark Results
 
-Measured on Apple Silicon. Results from the stress benchmark suite targeting edge cases and large inputs.
+Measured on Apple Silicon (M4) via `cargo bench --bench stress_benchmarks -- --quick` against the current source tree -- a quick/low-sample Criterion run, so treat these as indicative rather than lab-precise; re-run the suite yourself (see [Running Benchmarks](#running-benchmarks) below) for reproducible numbers on your own hardware.
 
 ### Stress Benchmarks
 
 | Benchmark | Result | Description |
 |-----------|--------|-------------|
-| Deep nesting (100 levels) | **8.3 us** | Deeply nested objects, 100 levels deep |
-| Wide objects (1,000 keys) | **~337 us** | Single object with 1,000 top-level keys |
-| Large arrays (5,000 items) | **~2.11 ms** | Array containing 5,000 elements |
-| Parallel batch (10,000 items) | **~2.61 ms** | Batch processing with Rayon parallelism |
+| Deep nesting (100 levels) | **~2.1 us** | `stress_01_deep_nesting/flatten/100` -- deeply nested object, 100 levels deep |
+| Wide objects (1,000 keys) | **~24 us** | `stress_02_wide_objects/flatten/1000` -- single object with 1,000 top-level keys |
+| Large arrays (5,000 items) | **~420 us** | `stress_03_large_arrays/flatten/5000` -- array containing 5,000 elements |
+| Many small nested objects (10,000, nested-parallel) | **~610 us** | `stress_05_many_small_objects/flatten_parallel/10000` -- single document containing 10,000 small nested objects, flattened with intra-document (Rayon) parallelism enabled |
 
 ### Throughput Targets (v0.9.0)
 
@@ -177,30 +177,34 @@ samply load /tmp/profile.json
 
 ## Architecture
 
-The codebase is organized into focused, single-responsibility modules:
+The codebase is organized into focused, single-responsibility modules (see [Architecture](../reference/architecture.md) for the full breakdown):
 
 ```
 src/
 ├── lib.rs            Facade: mod declarations + pub use re-exports
-├── json_parser.rs    Conditional SIMD parser (sonic-rs / simd-json)
+├── json_parser.rs    Conditional SIMD parser (sonic-rs / simd-json) -- used for the
+│                     root-primitive fallback, not the main tape-based paths
 ├── types.rs          Core types: JsonInput, JsonOutput
 ├── error.rs          Error types with codes E001-E008
 ├── config.rs         Configuration structs and operation modes
-├── cache.rs          Tiered caching: regex, key deduplication, phf
+├── cache.rs          Multi-tier regex pattern cache (common-pattern table, sticky,
+│                     thread-local, global RwLock)
+├── fxhash.rs         Custom FxHash-style Hasher for FxHashMap/FxIndexMap
 ├── convert.rs        Type conversion: numbers, dates, booleans, nulls
 ├── transform.rs      Filtering, key/value replacements, collision handling
-├── flatten.rs        Flattening algorithm with Rayon parallelism
-├── unflatten.rs      Unflattening with SIMD separator detection
+├── flatten.rs        Tape-based flattening engine (scan -> walk -> output)
+├── unflatten.rs      Tape-based unflattening with SIMD separator detection
 ├── builder.rs        Public JSONTools builder API and execute()
 ├── python.rs         Python bindings via PyO3
 ├── jvm.rs            JVM bindings via JNI (Java/Spark UDFs, see jvm/)
-└── tests.rs          Unit tests
+├── tests.rs          Unit tests
+└── main.rs           CLI examples
 ```
 
 The processing pipeline:
 
-1. **Parse** -- SIMD-accelerated JSON parsing (`json_parser`)
-2. **Flatten/Unflatten** -- Recursive traversal with Arc\<str\> key dedup (`flatten`/`unflatten`)
+1. **Parse** -- single-pass tape scan (`scan_and_fixup()`, shared by `flatten`/`unflatten`/`transform`); `json_parser`'s SIMD parser only handles the root-primitive edge case
+2. **Flatten/Unflatten** -- tape walk with `CompactString`-inlined keys (and an arena allocator for the slow path involving key transforms) (`flatten`/`unflatten`)
 3. **Transform** -- Lowercase, replacements (cached regex), collision handling (`transform`)
 4. **Filter** -- Remove empty strings, nulls, empty objects/arrays (`transform`)
 5. **Convert** -- Type conversion with first-byte discriminators (`convert`)

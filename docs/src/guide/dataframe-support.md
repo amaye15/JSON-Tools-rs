@@ -20,7 +20,17 @@ The Python bindings natively support DataFrame and Series objects from popular d
 | Pandas | Yes | Yes |
 | Polars | Yes | Yes |
 | PyArrow | Yes (Table) | Yes (Array) |
-| PySpark | Yes | -- |
+| PySpark | Yes (input; result comes back as a list of dicts, see below) | -- |
+
+> **PySpark DataFrame type preservation is the one exception to "perfect type
+> preservation" above.** A PySpark `DataFrame` is accepted as input (it's converted
+> via `.toPandas()` internally, processed, then converted back), but reconstruction
+> doesn't rebuild a distributed PySpark `DataFrame` -- there's no `SparkSession`
+> available at that point to do so -- so `.execute()` returns a plain Python `list`
+> of dicts instead. If you need the result back as a PySpark `DataFrame`, wrap it
+> yourself: `spark.createDataFrame(result)`. This is also a reminder that `.execute(df)`
+> on a PySpark DataFrame collects the whole thing to the driver first (see the note
+> above) -- for a genuinely distributed path, use the `pandas_udf` pattern instead.
 
 ## Usage
 
@@ -46,13 +56,21 @@ print(result.columns.tolist())  # ['user.name', 'user.age']
 import json_tools_rs as jt
 import polars as pl
 
-df = pl.DataFrame({
-    "data": ['{"user": {"name": "Alice"}}', '{"user": {"name": "Bob"}}']
-})
+df = pl.DataFrame([
+    {"user": {"name": "Alice", "age": 30}},
+    {"user": {"name": "Bob", "age": 25}},
+])
 
 result = jt.JSONTools().flatten().execute(df)
-print(type(result))  # <class 'polars.DataFrame'>
+print(type(result))  # <class 'polars.dataframe.frame.DataFrame'>
+print(result.columns)  # ['user.name', 'user.age']
 ```
+
+> A column holding pre-serialized JSON *strings* (e.g. `pl.DataFrame({"data": ['{"a":
+> 1}', ...]})`) is exported by `write_ndjson` as `{"data": "{\"a\": 1}"}` per row --
+> the nested structure is trapped inside a string value, so flattening it is a no-op.
+> To flatten nested data with polars, use struct-typed columns (as above), which
+> serialize as real nested JSON.
 
 ### Pandas Series
 
@@ -70,7 +88,7 @@ print(type(result))  # <class 'pandas.core.series.Series'>
 1. **Detection**: The library uses duck typing to detect DataFrame/Series objects (checks for `.to_dict()`, `.to_list()`, etc.)
 2. **Extraction**: Rows are extracted as JSON strings or dicts
 3. **Processing**: Each row is processed through the Rust engine (with automatic parallelism for large DataFrames)
-4. **Reconstruction**: Results are reconstructed into the original DataFrame/Series type using O(1) constructor calls
+4. **Reconstruction**: Results are reconstructed into the original DataFrame/Series type using O(1) constructor calls (except PySpark DataFrames, which come back as a list of dicts -- see the note above)
 
 ## All Features Apply
 

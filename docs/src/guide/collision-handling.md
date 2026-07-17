@@ -44,11 +44,14 @@ Collision handling respects filters. If a colliding value would be filtered out 
 // Input
 {"User_name": "John", "Admin_name": "", "Guest_name": "Bob"}
 
-// With remove_empty_strings(true) + handle_key_collision(true)
+// With key_replacement("r'(User|Admin|Guest)_'", "") + remove_empty_strings(true) + handle_key_collision(true)
 // Output
-{"name": ["John", "Bob"], "guest_name": "Bob"}
+{"name": ["John", "Bob"]}
 ```
 
-## Works with Both Modes
+`Admin_name`'s empty-string value is dropped by the filter before collision
+resolution ever sees it, so only `John` and `Bob` end up in the array.
 
-Collision handling works during both `.flatten()` and `.unflatten()` operations.
+## Works with All Modes
+
+Collision handling works during `.flatten()`, `.unflatten()`, and `.normal()` operations.

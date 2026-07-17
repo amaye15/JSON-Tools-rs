@@ -46,12 +46,18 @@ let result = JSONTools::new()
 
 ### Nested Parallelism
 
-Large individual JSON objects/arrays can also be parallelized:
+A single large JSON document being flattened can also be parallelized, based on how
+many direct children the *root* object/array has (nested containers deeper inside
+the document don't independently trigger this -- only the root's own fan-out is
+counted). This currently applies only to `.flatten()` -- `.unflatten()` and
+`.normal()` have no nested-parallel path and are unaffected by
+`nested_parallel_threshold`, though all three modes share the batch-level
+parallelism above.
 
 ```rust
 let result = JSONTools::new()
     .flatten()
-    .nested_parallel_threshold(200)  // Parallelize objects with 200+ entries
+    .nested_parallel_threshold(200)  // Parallelize when the root has MORE than 200 direct children
     .execute(large_json)?;
 ```
 
@@ -70,8 +76,8 @@ results = tools.execute(large_batch)
 
 ## How It Works
 
-- **Batch parallelism**: Input is split into chunks processed via Rayon's `par_chunks`. By default this runs on Rayon's persistent, process-wide work-stealing pool (no per-call thread spawn cost); setting `.num_threads(Some(n))` instead builds and installs a dedicated pool sized to `n` for that call. Results preserve input order.
-- **Nested parallelism**: Large JSON objects (many keys) or arrays (many elements) are split across threads for parallel flattening, then merged.
+- **Batch parallelism**: Input is split into chunks processed via Rayon's `par_chunks`. By default this runs on Rayon's persistent, process-wide work-stealing pool (no per-call thread spawn cost); setting `.num_threads(Some(n))` instead builds and installs a dedicated pool sized to `n` for that call. Results preserve input order. Applies to `.flatten()`, `.unflatten()`, and `.normal()` alike.
+- **Nested parallelism**: A `.flatten()` call on a single document whose root object/array has more than `nested_parallel_threshold` direct children splits those children across threads for parallel flattening, then merges the results.
 - **Thread safety**: Rayon's work-stealing model requires no `'static` bounds and guarantees no data races.
 
 ## Environment Variables
@@ -92,4 +98,10 @@ export JSON_TOOLS_NUM_THREADS=4
 export JSON_TOOLS_MAX_ARRAY_INDEX=500000
 ```
 
-Environment variables take effect when `JSONTools::new()` is called. Builder method calls (e.g., `.parallel_threshold(n)`) override them.
+Environment variables are read once per process -- at the first `JSONTools::new()`
+call anywhere in the program, not on every call -- and the resulting defaults are
+cached for the rest of the process's lifetime. Set them before your program starts;
+changing them at runtime (e.g. via `std::env::set_var`) after the first `JSONTools`
+has already been constructed has no effect. Builder method calls (e.g.,
+`.parallel_threshold(n)`) always override the compiled-in default on a
+per-instance basis, regardless of when the environment variable was read.

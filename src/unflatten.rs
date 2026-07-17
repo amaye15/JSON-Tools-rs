@@ -17,12 +17,12 @@ use crate::config::{FilteringConfig, ProcessingConfig};
 use crate::convert::try_convert_string_to_json_bytes;
 use crate::error::JsonToolsError;
 use crate::flatten::{
-    apply_value_replacement_cow, escape_json_string, scan_and_fixup, skip_tape_value,
-    tape_content_str, tape_entry, tape_quoted_str, tape_scalar_bytes, unescape_json_string,
-    write_json_escaped_key, EntryKind, TapeEntry, ValueRef,
+    escape_json_string, scan_and_fixup, skip_tape_value, tape_content_str, tape_entry,
+    tape_quoted_str, tape_scalar_bytes, unescape_json_string, write_json_escaped_key, EntryKind,
+    TapeEntry, ValueRef,
 };
 use crate::json_parser;
-use crate::transform::{apply_key_replacement_patterns, apply_value_replacement_patterns};
+use crate::transform::{apply_replacement_patterns, apply_value_replacement_patterns};
 
 // ================================================================================================
 // UnflatNode — Lightweight Tree with Zero-Copy Leaves
@@ -87,7 +87,7 @@ pub(crate) fn process_single_json_for_unflatten(
     if first != b'{' && first != b'[' {
         let mut value = json_parser::parse_json(json)?;
         if !config.replacements.value_replacements.is_empty() {
-            apply_value_replacement_patterns(&mut value, &config.replacements.value_replacements)?;
+            apply_value_replacement_patterns(&mut value, &config.replacements.value_replacements);
         }
         return json_parser::to_string(&value).map_err(JsonToolsError::serialization_error);
     }
@@ -181,8 +181,8 @@ fn extract_flat_entries<'a>(
 
         // Apply key replacements
         if config.replacements.has_key_replacements() {
-            if let Ok(Some(new_key)) =
-                apply_key_replacement_patterns(&key, &config.replacements.key_replacements)
+            if let Some(new_key) =
+                apply_replacement_patterns(&key, &config.replacements.key_replacements)
             {
                 key = CompactString::from(new_key);
             }
@@ -242,7 +242,7 @@ fn extract_value<'a>(
                     Cow::Borrowed(content_str)
                 };
 
-                if let Some(replaced) = apply_value_replacement_cow(
+                if let Some(replaced) = apply_replacement_patterns(
                     unescaped.as_ref(),
                     &config.replacements.value_replacements,
                 ) {

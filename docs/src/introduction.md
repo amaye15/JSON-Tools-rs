@@ -47,7 +47,7 @@ use json_tools_rs::{JSONTools, JsonOutput};
 let result = JSONTools::new()
     .flatten()
     .execute(r#"{"user": {"name": "John", "age": 30}}"#)?;
-// {"user.name": "John", "user.age": 30}
+// {"user.name":"John","user.age":30}
 ```
 
 **Python:**

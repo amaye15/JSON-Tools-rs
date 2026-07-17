@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.9.5 (2026-07-18)
+
+### Fixed
+- **Documentation-wide accuracy sweep**: every root-level doc, the full mdBook site, and the JVM Java source's own doc comments audited against actual source code and live runtime behavior across four parallel passes, rather than trusting existing prose. Corrected fabricated/stale internals (references to a `phf` key cache, `rustc-hash`, `Arc<str>` key dedup, and function names that no longer exist), benchmark numbers stale by up to 14x, wrong error-handling semantics, several broken guide examples (a `.normal()` mode key-replacement/lowercasing ordering bug, an impossible collision-handling example, a no-op Polars example), and stale "not yet published" claims for Maven Central/PyPI (both have been live for a while). Fixed a real internal contradiction in the JVM Java source itself (`FlattenUDF`/`BatchTransform` javadoc claimed Lakeflow Pipeline support that Databricks doesn't allow). See [CHANGELOG.md](https://github.com/amaye15/json-tools-rs/blob/master/CHANGELOG.md) for the full, itemized list.
+
+### Added
+- **Runnable examples** covering every builder feature individually, plus curated multi-feature pipelines, mirrored with matching inputs/outputs across Rust, Python, and Java.
+- **[JVM API reference](./jvm-api.md)** page, closing a gap where Rust and Python each had one and the JVM bindings didn't.
+
+### Changed
+- Regex pattern lookup for `key_replacement`/`value_replacement` no longer re-hashes and re-walks the cache on every key/value check -- a thread-local "sticky" cache of recently-used patterns short-circuits the common case. ~9-22% faster on regex-heavy scenarios (Criterion).
+- Consolidated two near-duplicate replacement-application code paths, which also fixed a missing SIMD fast-path for literal value replacement (~15-19% faster for that case).
+
 ## v0.9.4 (2026-07-17)
 
 ### Fixed
@@ -66,15 +79,14 @@ See the repository's [CHANGELOG.md](https://github.com/amaye15/json-tools-rs/blo
 - Vectorized `clean_number_string()` with SIMD skip helpers
 
 **Python Bindings (3 optimizations):**
-- `mem::take` for zero-cost builder field extraction
-- Batch type detection via first-element sampling
-- O(1) DataFrame/Series reconstruction
+- `mem::replace` -> `mem::take` across 13 builder methods, eliminating a default `JSONTools::new()` construction per call
+- O(N) -> O(1) DataFrame/Series reconstruction (single `into_pyobject` + `clone_ref` instead of a per-item clone)
+- GIL release via `py.detach()` during compute-intensive operations
 
 ## v0.8.0 (2026-01-01)
 
-- **Python Feature Parity**: `auto_convert_types`, `parallel_threshold`, `num_threads`, `nested_parallel_threshold` in Python
-- **Enhanced Type Conversion**: ISO-8601 dates, currency codes, basis points, suffixed numbers
-- **Date Normalization**: Automatic UTC normalization
+- **Full Python Bindings Feature Parity**: all Rust features now available in Python, including `.auto_convert_types()`, `.parallel_threshold()`, `.num_threads()`, and `.nested_parallel_threshold()`
+- 128 comprehensive Python tests covering all features
 
 ## v0.7.0 (2025-10-17)
 
@@ -88,15 +100,12 @@ See the repository's [CHANGELOG.md](https://github.com/amaye15/json-tools-rs/blo
 
 ## v0.5.0 (2025-10-12)
 
-- Rust inline optimizations (2-5% improvement)
-- Iterator adapter chains
+- `#[inline(always)]` on hot-path functions and `#[cold]`/`#[inline(never)]` on error paths (2-5% additional improvement, 32-60% cumulative from baseline)
 
 ## v0.4.0 (2025-10-11)
 
-- FxHashMap migration (30-55% improvement)
-- SIMD JSON parsing (sonic-rs / simd-json)
-- SmallVec stack allocation
-- Arc\<str\> key deduplication
+- FxHashMap replacing standard `HashMap` (15-30% faster string key operations)
+- SIMD JSON parsing optimizations, reduced string clones (~50% fewer), pre-allocated collections (30-55% overall improvement)
 
 ## v0.3.0 (2025-10-10)
 
@@ -116,4 +125,4 @@ See the repository's [CHANGELOG.md](https://github.com/amaye15/json-tools-rs/blo
 - Custom separators
 - Batch processing
 
-For the full changelog with migration guides, see [CHANGELOG.md](https://github.com/amaye15/JSON-Tools-rs/blob/master/CHANGELOG.md).
+For the full changelog with migration guides, see [CHANGELOG.md](https://github.com/amaye15/json-tools-rs/blob/master/CHANGELOG.md).

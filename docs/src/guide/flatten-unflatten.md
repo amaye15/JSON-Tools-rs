@@ -74,7 +74,7 @@ let flat = JSONTools::new().flatten().execute(original)?;
 
 // Unflatten back
 let restored = JSONTools::new().unflatten().execute(
-    &flat.into_single()
+    &flat.try_into_single()?
 )?;
 // Matches original structure
 ```

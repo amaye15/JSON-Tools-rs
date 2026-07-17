@@ -32,20 +32,35 @@ Pre-built wheels are available for:
 | macOS | x86_64 (Intel), aarch64 (Apple Silicon) |
 | Windows | x64 |
 
-Python 3.8+ is supported.
+Python 3.9+ is supported.
 
 ## JVM / Spark (Java)
 
-No published artifact yet -- build from source:
+Available on Maven Central as `io.github.amaye15:json-tools-rs-spark`:
+
+```xml
+<dependency>
+    <groupId>io.github.amaye15</groupId>
+    <artifactId>json-tools-rs-spark</artifactId>
+    <version>0.9.5</version>
+</dependency>
+```
+
+The published jar bundles native libraries for `linux-x86_64` and `linux-aarch64`
+(standard Databricks compute and Graviton instances), so no separate native library
+install is needed on those platforms.
+
+To build from source instead (for local development, or a platform other than Linux
+x86_64/aarch64):
 
 ```bash
 cargo build --release --features jvm
 cd jvm && mvn package
 ```
 
-Produces a jar at `jvm/target/json-tools-rs-spark-<version>.jar`. CI builds a version
-of this jar bundling `linux-x86_64` and `linux-aarch64` native libraries (standard
-Databricks compute and Graviton instances) as a downloadable artifact on every push.
+This produces a jar at `jvm/target/json-tools-rs-spark-<version>.jar`. CI
+(`.github/workflows/jvm-ci.yml`) also builds this jar bundling `linux-x86_64` and
+`linux-aarch64` native libraries as a downloadable artifact on every push.
 See [Quick Start (JVM / Spark)](./quickstart-jvm.md) and
 [`jvm/README.md`](https://github.com/amaye15/json-tools-rs/blob/master/jvm/README.md)
 for the full Databricks integration walkthrough.

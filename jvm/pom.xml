@@ -6,14 +6,16 @@
 
   <groupId>io.github.amaye15</groupId>
   <artifactId>json-tools-rs-spark</artifactId>
-  <version>0.9.4</version>
+  <version>0.9.5</version>
   <packaging>jar</packaging>
 
   <name>json-tools-rs-spark</name>
   <description>
     JVM (Java/Scala) bindings for json-tools-rs, exposed as Apache Spark UDFs for use
-    in Databricks Lakeflow Declarative Pipelines and other Spark workloads. Backed by
-    a JNI shim over the Rust core (see ../src/jvm.rs).
+    in Databricks Jobs/notebooks on classic compute and other Spark workloads (not
+    usable inside a Lakeflow Declarative Pipeline -- Databricks does not permit JVM
+    libraries on pipeline compute at all). Backed by a JNI shim over the Rust core
+    (see ../src/jvm.rs).
   </description>
   <url>https://github.com/amaye15/json-tools-rs</url>
 
@@ -120,6 +122,45 @@
     `mvn -P release deploy`, only on a tag push; see ../.github/workflows/jvm-ci.yml.
   -->
   <profiles>
+    <!--
+      Standalone runnable examples live under examples/ (sibling to src/), mirroring
+      ../examples/*.rs and ../python/examples/*.py. Kept out of the default build so
+      `mvn test`/`mvn package` never compiles or ships them as part of the jar. Run
+      with, e.g.:
+        mvn -P examples compile exec:java \
+          -Dexec.mainClass=io.github.amaye15.jsontoolsrs.examples.FeatureByFeature
+    -->
+    <profile>
+      <id>examples</id>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.codehaus.mojo</groupId>
+            <artifactId>build-helper-maven-plugin</artifactId>
+            <version>3.6.0</version>
+            <executions>
+              <execution>
+                <id>add-example-source</id>
+                <phase>generate-sources</phase>
+                <goals>
+                  <goal>add-source</goal>
+                </goals>
+                <configuration>
+                  <sources>
+                    <source>examples</source>
+                  </sources>
+                </configuration>
+              </execution>
+            </executions>
+          </plugin>
+          <plugin>
+            <groupId>org.codehaus.mojo</groupId>
+            <artifactId>exec-maven-plugin</artifactId>
+            <version>3.5.0</version>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
     <profile>
       <id>release</id>
       <build>

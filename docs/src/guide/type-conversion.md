@@ -28,16 +28,17 @@ Date strings are detected and normalized to UTC:
 | `"2024-01-15"` | `"2024-01-15"` (kept as-is, not a number) |
 | `"2024-01-15T10:30:00+05:00"` | `"2024-01-15T05:30:00Z"` (UTC normalized) |
 | `"2024-01-15T10:30:00Z"` | `"2024-01-15T10:30:00Z"` |
-| `"2024-01-15T10:30:00"` | `"2024-01-15T10:30:00"` (naive, kept as-is) |
+| `"2024-01-15T10:30:00"` | `"2024-01-15T10:30:00Z"` (naive, assumed UTC -- `Z` appended, no shift) |
 
 ### Nulls
 
 | Input | Output |
 |-------|--------|
-| `"null"`, `"NULL"` | `null` |
-| `"nil"`, `"NIL"` | `null` |
-| `"none"`, `"NONE"` | `null` |
+| `"null"`, `"NULL"`, `"Null"` | `null` |
+| `"nil"`, `"NIL"`, `"Nil"` | `null` |
+| `"none"`, `"NONE"`, `"None"` | `null` |
 | `"N/A"`, `"n/a"` | `null` |
+| `"NA"`, `"na"` | `null` |
 
 ### Booleans
 
@@ -45,10 +46,10 @@ Date strings are detected and normalized to UTC:
 |-------|--------|
 | `"true"`, `"TRUE"`, `"True"` | `true` |
 | `"false"`, `"FALSE"`, `"False"` | `false` |
-| `"yes"`, `"YES"` | `true` |
-| `"no"`, `"NO"` | `false` |
-| `"on"`, `"ON"` | `true` |
-| `"off"`, `"OFF"` | `false` |
+| `"yes"`, `"YES"`, `"Yes"` | `true` |
+| `"no"`, `"NO"`, `"No"` | `false` |
+| `"on"`, `"ON"`, `"On"` | `true` |
+| `"off"`, `"OFF"`, `"Off"` | `false` |
 | `"y"`, `"Y"` | `true` |
 | `"n"`, `"N"` | `false` |
 
@@ -64,11 +65,20 @@ Date strings are detected and normalized to UTC:
 | US thousands | `"1,234.56"` | `1234.56` |
 | EU thousands | `"1.234,56"` | `1234.56` |
 | Space separators | `"1 234.56"` | `1234.56` |
-| Currency | `"$1,234.56"`, `"EUR999"` | `1234.56`, `999` |
-| Percentages | `"50%"`, `"12.5%"` | `50.0`, `12.5` |
+| Currency | `"$1,234.56"`, `"EUR 999"` | `1234.56`, `999` |
+| Percentages | `"50%"`, `"12.5%"` | `50`, `12.5` |
 | Scientific | `"1e5"`, `"1.23e-4"` | `100000`, `0.000123` |
 | Basis points | `"50bps"`, `"100 bp"` | `0.005`, `0.01` |
 | Suffixes | `"1K"`, `"2.5M"`, `"5B"` | `1000`, `2500000`, `5000000000` |
+
+> Note: a 3-letter currency code (`USD`, `EUR`, `GBP`, etc.) is only stripped when
+> followed by a space -- `"EUR 999"` converts to `999`, but `"EUR999"` (no space) does
+> not match and is left as the original string, to avoid misinterpreting things like
+> alphanumeric product codes.
+
+> Note: 64-bit integer strings (e.g. Snowflake/Discord/database bigint IDs, commonly
+> 17-19 digits) convert losslessly -- `"999999999999999999"` becomes the JSON integer
+> `999999999999999999`, not a precision-corrupted `f64` approximation.
 
 ### Non-Convertible Strings
 
@@ -99,7 +109,7 @@ let result = JSONTools::new()
 // {
 //   "id": 123,
 //   "price": 1234.56,
-//   "discount": 15.0,
+//   "discount": 15,
 //   "active": true,
 //   "created": "2024-01-15T05:30:00Z",
 //   "status": null,

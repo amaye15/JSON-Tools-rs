@@ -30,9 +30,17 @@ result = (jt.JSONTools()
 Use `.normal()` when you want to:
 
 - Clean data without changing its structure
-- Apply key transformations (lowercase, replacements) to top-level keys only
+- Apply key transformations (lowercase, replacements), filtering, and type conversion
+  recursively at every level of nesting, not just the top level
 - Filter out unwanted values while preserving nesting
 - Convert string types without flattening
+
+> Key replacement runs *before* `lowercase_keys` in normal mode (the opposite order
+> from `.flatten()`, where lowercasing happens first). A pattern like `r'^user_'`
+> is matched against the *original-case* key, so it won't match `"User_Name"` --
+> use `r'^User_'` (matching the actual input case) or a case-insensitive pattern
+> like `r'(?i)^user_'` instead. This ordering difference is easy to trip over when
+> porting a `key_replacement` pattern between `.flatten()` and `.normal()`.
 
 ## Example
 
@@ -49,7 +57,7 @@ data = {
 result = (jt.JSONTools()
     .normal()
     .lowercase_keys(True)
-    .key_replacement("r'^user_'", "")
+    .key_replacement("r'^User_'", "")
     .value_replacement("@example.com", "@company.org")
     .remove_empty_strings(True)
     .remove_nulls(True)

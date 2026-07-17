@@ -126,7 +126,7 @@ samply load /tmp/profile.json
 ## Release Process
 
 Pushing a version tag (`git tag vX.Y.Z && git push origin vX.Y.Z`) triggers three
-publishes at once, all gated to tag pushes only:
+publishes at once, all gated to a tag ref:
 
 - **crates.io** (`maturin-ci.yml`'s `release` job, `cargo publish`)
 - **PyPI** (same job, `maturin-action` upload)
@@ -144,9 +144,11 @@ CI enforces this and will fail the build otherwise:
 
 A GitHub Release with generated notes is created separately by `release.yml`
 (also tag-triggered). Both crates.io and Maven Central publishes are **permanent**
-(a version can be yanked/deprecated but not deleted) -- there's no `workflow_dispatch`
-fallback for either release job, deliberately, so a publish only ever happens from an
-actual tag push.
+(a version can be yanked/deprecated but not deleted) -- both release jobs (and, for
+`maturin-ci.yml`, the individual publish steps within it) are gated on `github.ref`
+starting with `refs/tags/`, so a publish only ever happens against a tag ref: an
+ordinary tag push, or a manual `workflow_dispatch` run explicitly targeting a tag.
+Dispatching either workflow against a branch does not publish anything.
 
 ## Architecture Overview
 

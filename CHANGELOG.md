@@ -7,6 +7,146 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.5] - 2026-07-18
+
+### Fixed
+- **Documentation-wide accuracy sweep**, covering every root-level doc, the full
+  mdBook site, and the JVM Java source's own doc comments -- four parallel audit
+  passes (root docs; Getting Started; User Guide; Reference/Resources), each
+  verifying every claim against actual source code or live runtime behavior
+  (`cargo run`/`cargo bench`, `python3` against the built extension, `mvn compile`)
+  rather than trusting existing prose, since several rounds of incremental doc edits
+  had let real drift accumulate. Highlights:
+  - **Fabricated/stale internals.** `architecture.md`, `performance.md`, `README.md`,
+    and `BENCHMARKS.md` described caching/hashing machinery that doesn't exist in this
+    codebase at all -- a `phf` perfect-hash key cache, a `KeyDeduplicator`, `rustc-hash`
+    (actually a hand-rolled `FxHasher` in `fxhash.rs`), `Arc<str>` key deduplication
+    (actual key storage is `CompactString` plus a `bumpalo` arena on flatten's slow
+    path), and flatten/unflatten function names (`FastStringBuilder`,
+    `flatten_value_with_threshold`, `quick_leaf_estimate`) that no longer exist post-tape-scanner-rewrite.
+    Rewritten to describe the real tape-based `scan_and_fixup()` engine, the actual
+    4-tier regex cache (compile-time table / sticky / thread-local / global LRU), and
+    `builder.rs`'s real ~19 public methods (previously claimed "35+").
+  - **Stale benchmark numbers**, some off by 3-14x (e.g. deep-nesting-100 claimed as
+    8.3µs, measured at ~2.1µs on current `master`). Replaced with numbers from a live
+    `cargo bench --bench stress_benchmarks` run against current code, with the exact
+    command noted so they're reproducible rather than another point-in-time snapshot
+    that silently rots.
+  - **Wrong error-handling semantics.** `.separator("")` was documented as panicking in
+    Rust; it actually returns `Err(ConfigurationError)` (`E005`) at `.execute()` time.
+    Python's error messages were documented as always starting with `[E00x]`; the
+    bindings actually prepend their own context (e.g. `"Failed to process JSON
+    string: "`) first, so the code is a substring, not a prefix. `E003`/`E004`/`E007`'s
+    documented trigger conditions were largely invented (e.g. E007 was said to cover
+    passing a raw `int`/DataFrame-to-`execute_to_output()`, which actually raise a
+    plain Python `ValueError` that `except JsonToolsError` does *not* catch -- real
+    `E007` triggers are empty input, >4GiB input, and an unflatten array index beyond
+    `max_array_index`). `E006`'s message was documented as including the underlying
+    per-item error; it only ever says "Failed to process item at index N".
+  - **Broken guide examples.** `normal-mode.md`'s example relied on
+    `key_replacement()` running after `lowercase_keys()`, matching `.flatten()`'s
+    order -- `.normal()` mode actually applies them in the opposite order, so the
+    documented output was never what the code produces (verified both ways with real
+    runs). `collision-handling.md`'s "collision with filtering" example was missing
+    the `key_replacement()` call needed to make the keys collide at all, and showed an
+    impossible output key alongside it. `dataframe-support.md`'s Polars example used a
+    JSON-*string* column, which flattening is a documented no-op on (there's nothing
+    nested inside a string); replaced with a struct-column example that actually
+    flattens. Also documented that PySpark DataFrame/Series inputs fall back to a
+    plain `list`/`list[dict]` on output rather than a reconstructed PySpark object,
+    correcting an implicit "perfect type preservation applies everywhere" claim.
+  - **`docs/src/resources/changelog.md`** (the mdBook mirror of this file) had several
+    bullet points, especially in the v0.4.0-v0.9.0 range, that don't correspond to
+    anything in this file's real history for those versions -- replaced with entries
+    traceable to the actual historical changes.
+  - **Stale distribution status.** Maven Central publishing has been live since v0.9.2
+    (`io.github.amaye15:json-tools-rs-spark`, confirmed live via a real `mvn
+    dependency:get` against the real coordinate), but `README.md`, `jvm/README.md`,
+    `docs/src/getting-started/installation.md`, and `quickstart-jvm.md` still said "not
+    yet published" / "once published", one with a fictional `0.10.0` placeholder
+    version. Corrected all four to the real, currently-published dependency
+    coordinates. Python's `pip install json-tools-rs` was similarly still flagged
+    "once published" in `databricks-setup.md` despite being live on PyPI throughout.
+  - **A genuine internal contradiction in the JVM Java source itself** (not just the
+    docs): `FlattenUDF.java`/`BatchTransform.java`'s javadoc and `jvm/pom.xml`'s
+    `<description>` described using the JVM UDFs from inside a Databricks Lakeflow
+    Declarative Pipeline via `spark._jvm`/`df._jdf` -- directly contradicting the
+    already-correct, already-verified restriction stated in `jvm/README.md` and
+    `CHANGELOG.md` (Databricks does not permit JVM libraries on pipeline compute at
+    all; confirmed against Databricks' own docs in an earlier round). The Java doc
+    comments had never been updated when that correction was made. Fixed to match:
+    Jobs/notebooks on classic compute only, pointing at the `pandas_udf` path for
+    genuine in-pipeline use.
+  - Python's documented minimum version (3.8+) didn't match `pyproject.toml`'s actual
+    `requires-python = ">=3.9"` -- pip would refuse 3.8 as documented. Fixed.
+  - A Markdown rendering bug in `replacements.md`: a backslash inside a code span
+    (`` `r'\d+'` ``) was silently dropped by the renderer, confirmed by inspecting the
+    built `docs/book/` HTML output before and after the fix.
+  - Added `docs/src/reference/jvm-api.md` (method tables, error handling, a complete
+    example), closing a real gap where Rust and Python each had a Reference API page
+    and the JVM bindings -- an equally complete, equally shipped public API -- had
+    none.
+
+### Added
+- **Runnable examples covering every `JSONTools` builder feature, individually and in
+  curated combination, mirrored across all three language bindings.** Two new files
+  per language: `feature_by_feature` (one isolated example per builder method --
+  mode, separator, lowercase_keys, key/value replacement in both literal and regex
+  form, all four empty-value filters, collision handling, type conversion, the
+  parallel-tuning knobs, max_array_index, and batch execution) and
+  `feature_combinations` (curated multi-feature pipelines -- not an exhaustive
+  combinatorial sweep, since the builder has ~10 independent toggles and a literal
+  power-set would be 1000+ cases, but realistic groupings commonly used together,
+  plus one "kitchen sink" pipeline). Rust: `examples/feature_by_feature.rs` /
+  `examples/feature_combinations.rs`. Python: `python/examples/feature_by_feature.py`
+  / `python/examples/feature_combinations.py`. Java:
+  `jvm/examples/.../FeatureByFeature.java` / `FeatureCombinations.java` (new, kept
+  out of the packaged jar via a dedicated `examples` Maven profile using
+  `build-helper-maven-plugin` + `exec-maven-plugin`). All three language versions
+  use matching inputs and were verified to produce byte-identical output.
+
+### Changed
+- **Regex pattern lookup for key/value replacements no longer re-hashes and re-walks
+  the cache on every single key/value check.** Found via sampling profiler on a
+  batch/parallel workload with a regex `key_replacement` configured:
+  `get_cached_regex` was the single largest hotspot by a wide margin (roughly a
+  fifth of all samples), because the same pattern -- shared by the same
+  `ProcessingConfig` across an entire `execute()` call, potentially a large batch
+  -- was being re-parsed and re-fetched from the (thread-local `FxHashMap` +
+  global `RwLock`) cache from scratch on every key. Added a tiny thread-local
+  "sticky" cache (`STICKY_REGEX_CACHE`, capacity 4) checked before the existing
+  tiers: a linear scan over a handful of recently-used `(pattern, regex)` pairs,
+  comparing full pattern strings directly instead of hashing them, which almost
+  always hits after the first call. Deliberately *not* a bigger architectural
+  change (pre-resolving patterns once into `ProcessingConfig`/`ReplacementConfig`
+  themselves, which an isolated benchmark showed would be faster still): those
+  types are re-exported as public API with all-`pub` fields and their own fluent
+  builder, so changing `key_replacements`/`value_replacements`' field type would
+  be a breaking change for anyone constructing them directly rather than through
+  `JSONTools`. The sticky cache gets the bulk of the win with zero public API
+  impact. Verified against the real `iso_04_key_replacement_only`/
+  `iso_05_value_replacement_only` Criterion benchmarks: regex scenarios 9-22%
+  faster, consistent across repeated runs. (Validation note: comparing the two
+  builds also surfaced a ~3-5% binary-layout noise floor from this project's
+  `lto = "fat"` + `codegen-units = 1` release profile -- confirmed by finding the
+  *same* magnitude of drift in `iso_01_baseline_flatten`, a benchmark that
+  touches none of this code at all -- so deltas below that floor elsewhere in
+  this round shouldn't be over-interpreted, but all the reported numbers here
+  are well clear of it.) Re-profiling the same batch workload after the fix
+  confirmed `get_cached_regex`'s sample count dropped by roughly a third.
+- Consolidated two separate, near-duplicate implementations of replacement-pattern
+  application (`apply_key_replacement_patterns` in `transform.rs`, used for keys,
+  and `apply_value_replacement_cow` in `flatten.rs`, used for values) into one
+  shared `apply_replacement_patterns` -- the logic never actually depended on
+  whether the string being processed was a key or a value. Found while
+  investigating the regex cache hotspot above: the value-replacement copy had
+  never received the SIMD literal-replace fix (`memchr::memmem`-based, faster
+  than `str::replace`) applied to the key-replacement path in an earlier round,
+  so `value_replacement` with literal (non-regex) patterns was needlessly still
+  on the slower std-matcher path. Fixed as a side effect of the consolidation;
+  picked up in the `iso_05_value_replacement_only` benchmark numbers above
+  (`literal_multiple` alone: ~15-19% faster).
+
 ## [0.9.4] - 2026-07-17
 
 ### Fixed

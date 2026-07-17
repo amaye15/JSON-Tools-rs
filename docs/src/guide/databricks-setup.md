@@ -37,8 +37,8 @@ running the pattern below before writing it here.
 ### 1. Add the dependency
 
 From the pipeline editor: **Settings → Pipeline environment → Edit environment → Add
-dependency**, then enter `json-tools-rs` (once published to PyPI -- see
-[Installation](../getting-started/installation.md)). Until then, build a wheel
+dependency**, then enter `json-tools-rs` (already published to PyPI -- see
+[Installation](../getting-started/installation.md)). Alternatively, build a wheel
 locally (`maturin build --release --features python`) and install it from a Unity
 Catalog Volume path instead, the same way pipeline dependencies support installing a
 wheel from a volume.

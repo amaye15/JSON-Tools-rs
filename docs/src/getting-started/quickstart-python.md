@@ -24,7 +24,7 @@ print(result)  # {'user.name': 'John', 'user.age': 30}
 
 # String input -> string output
 result = jt.JSONTools().flatten().execute('{"user": {"name": "John"}}')
-print(result)  # '{"user.name": "John"}'
+print(result)  # '{"user.name":"John"}'
 ```
 
 ## Basic Unflattening
@@ -72,7 +72,7 @@ print(results)  # [{'user.name': 'Alice'}, {'user.name': 'Bob'}]
 
 # List of strings -> list of strings
 results = tools.execute(['{"a": {"b": 1}}', '{"c": {"d": 2}}'])
-print(results)  # ['{"a.b": 1}', '{"c.d": 2}']
+print(results)  # ['{"a.b":1}', '{"c.d":2}']
 ```
 
 ## DataFrame Support

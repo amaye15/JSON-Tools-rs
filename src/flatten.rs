@@ -19,12 +19,11 @@ use smallvec::SmallVec;
 use std::borrow::Cow;
 use std::ops::Deref;
 
-use crate::cache::{get_cached_regex, parse_pattern, ParsedPattern};
 use crate::config::ProcessingConfig;
 use crate::convert::try_convert_string_to_json_bytes;
 use crate::error::JsonToolsError;
 use crate::json_parser;
-use crate::transform::{apply_key_replacement_patterns, apply_value_replacement_patterns};
+use crate::transform::{apply_replacement_patterns, apply_value_replacement_patterns};
 
 // ================================================================================================
 // SeparatorCache - Cached separator information for operations
@@ -303,8 +302,8 @@ impl KeyBuilder for CompactKeyBuilder {
             key.make_ascii_lowercase();
         }
         if config.replacements.has_key_replacements() {
-            if let Ok(Some(new_key)) =
-                apply_key_replacement_patterns(&key, &config.replacements.key_replacements)
+            if let Some(new_key) =
+                apply_replacement_patterns(&key, &config.replacements.key_replacements)
             {
                 key = CompactString::from(new_key);
             }
@@ -334,8 +333,8 @@ impl<'bump> KeyBuilder for BumpKeyBuilder<'bump> {
             key.make_ascii_lowercase();
         }
         if config.replacements.has_key_replacements() {
-            if let Ok(Some(new_key)) =
-                apply_key_replacement_patterns(&key, &config.replacements.key_replacements)
+            if let Some(new_key) =
+                apply_replacement_patterns(&key, &config.replacements.key_replacements)
             {
                 key = bumpalo::collections::String::from_str_in(&new_key, self.bump);
             }
@@ -869,7 +868,7 @@ impl<'a> DirectWalker<'a> {
 
             // Value replacement
             if has_value_replacements {
-                if let Some(replaced) = apply_value_replacement_cow(
+                if let Some(replaced) = apply_replacement_patterns(
                     unescaped.as_ref(),
                     &self.config.replacements.value_replacements,
                 ) {
@@ -1123,7 +1122,7 @@ impl<'a, KB: KeyBuilder> CollectingWalker<'a, KB> {
             };
 
             if has_value_replacements {
-                if let Some(replaced) = apply_value_replacement_cow(
+                if let Some(replaced) = apply_replacement_patterns(
                     unescaped.as_ref(),
                     &self.config.replacements.value_replacements,
                 ) {
@@ -1566,46 +1565,6 @@ pub(crate) fn trim_ascii(bytes: &[u8]) -> &[u8] {
     unsafe { bytes.get_unchecked(start..end) }
 }
 
-/// Apply value replacement patterns. Returns Some(replaced) if any change occurred.
-///
-/// A pattern wrapped as `r'...'` (e.g. `r'^admin_'`) is a regex; a bare pattern is matched
-/// literally. See `crate::cache::ParsedPattern`. A malformed r'...' regex is silently
-/// skipped (treated as no match) rather than propagating a compile error through this
-/// hot path -- there's no config-time validation point for replacement patterns today.
-#[inline(always)]
-pub(crate) fn apply_value_replacement_cow(
-    value: &str,
-    replacements: &[(String, String)],
-) -> Option<String> {
-    let mut current = Cow::Borrowed(value);
-    let mut changed = false;
-
-    for (pattern, replacement) in replacements {
-        match parse_pattern(pattern) {
-            ParsedPattern::Regex(inner) => {
-                if let Ok(regex) = get_cached_regex(inner) {
-                    if let Cow::Owned(s) = regex.replace_all(&current, replacement.as_str()) {
-                        current = Cow::Owned(s);
-                        changed = true;
-                    }
-                }
-            }
-            ParsedPattern::Literal(lit) => {
-                if memchr::memmem::find(current.as_bytes(), lit.as_bytes()).is_some() {
-                    current = Cow::Owned(current.replace(lit, replacement));
-                    changed = true;
-                }
-            }
-        }
-    }
-
-    if changed {
-        Some(current.into_owned())
-    } else {
-        None
-    }
-}
-
 // ================================================================================================
 // Parallelism Support
 // ================================================================================================
@@ -1857,7 +1816,7 @@ pub(crate) fn process_single_json(
     if first != b'{' && first != b'[' {
         let mut value = json_parser::parse_json(json)?;
         if !config.replacements.value_replacements.is_empty() {
-            apply_value_replacement_patterns(&mut value, &config.replacements.value_replacements)?;
+            apply_value_replacement_patterns(&mut value, &config.replacements.value_replacements);
         }
         return json_parser::to_string(&value).map_err(JsonToolsError::serialization_error);
     }

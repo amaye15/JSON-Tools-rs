@@ -11,11 +11,13 @@ src/
 ├── types.rs          Core types: JsonInput, JsonOutput
 ├── error.rs          Error types with codes E001-E008
 ├── config.rs         Configuration structs and operation modes
-├── cache.rs          Tiered caching: regex, key deduplication, phf
+├── cache.rs          Multi-tier regex pattern cache (compile-time table, sticky,
+│                     thread-local, global)
+├── fxhash.rs         Custom FxHash-style Hasher/BuildHasher for FxHashMap/FxIndexMap
 ├── convert.rs        Type conversion: numbers, dates, booleans, nulls
 ├── transform.rs      Filtering, key/value replacements, collision handling
-├── flatten.rs        Flattening algorithm with Rayon parallelism
-├── unflatten.rs      Unflattening with SIMD separator detection
+├── flatten.rs        Tape-based flattening engine (scan -> walk -> output)
+├── unflatten.rs      Tape-based unflattening with SIMD separator detection
 ├── builder.rs        Public JSONTools builder API and execute()
 ├── python.rs         Python bindings via PyO3
 ├── jvm.rs            JVM bindings via JNI (Java/Spark UDFs, see jvm/)
@@ -52,19 +54,26 @@ All configuration structs used by the builder:
 - `ReplacementConfig` -- Key and value replacement patterns
 - `OperationMode` -- Flatten, Unflatten, or Normal
 
-### `cache` -- Caching Infrastructure
+### `cache` -- Regex Pattern Caching
 
-Three-tier caching system for performance:
-1. **phf perfect hash** (`COMMON_JSON_KEYS`) -- Zero-cost lookup for common keys
-2. **Thread-local FxHashMap** (`KeyDeduplicator`) -- Per-thread key deduplication
-3. **Global `RwLock<FxHashMap>`** (`REGEX_CACHE`) -- Compiled regex pattern cache, evicts an arbitrary entry when at capacity
+Multi-tier cache for compiled regex patterns used by `key_replacement()`/`value_replacement()` (not a general key-deduplication cache -- there is no `phf`-based key cache or `KeyDeduplicator` in the current codebase; `phf` is not a dependency of this crate):
+1. **`COMMON_REGEX_PATTERNS`** -- a `LazyLock<FxHashMap<...>>` of ~60 pre-compiled common patterns (whitespace, UUIDs, dates, `user_`/`admin_` prefixes, etc.), checked first
+2. **`STICKY_REGEX_CACHE`** -- a tiny thread-local linear-scan cache (capacity 4) of the most recently used patterns, added to short-circuit the hashing/locking below for the common case of the same 1-2 patterns reused across an entire batch
+3. **`THREAD_LOCAL_REGEX_CACHE`** -- a larger thread-local `FxHashMap` (capacity 128)
+4. **`REGEX_CACHE`** -- a global `RwLock<FxHashMap<Arc<str>, (Arc<Regex>, AtomicU64)>>` (capacity 512)
+
+Tiers 2-4 track per-entry "last used" ticks and evict the genuinely least-recently-used entry when full (not an arbitrary one).
+
+### `fxhash` -- Fast Hashing
+
+Hand-rolled `FxHasher`/`FxBuildHasher` (the same algorithm popularized by `rustc-hash`, reimplemented in-tree rather than taken as a dependency) backing the `FxHashMap`/`FxIndexMap` type aliases used throughout `cache`, `flatten`, and `unflatten`.
 
 ### `convert` -- Type Conversion
 
-Automatic type conversion for string values (~1,000 lines, the largest leaf module):
+Automatic type conversion for string values (~1,200 lines, the largest leaf module):
 - Number parsing: integers, decimals, currency, percentages, basis points, scientific notation, suffixed (K/M/B)
 - Date parsing: ISO-8601 variants with UTC normalization
-- Boolean/null detection via phf perfect hash maps
+- Boolean/null detection via direct string matching (`try_parse_bool()`, `is_null_string()`) -- not a `phf` perfect hash map; `phf` is not a dependency of this crate
 - SIMD-optimized `clean_number_string()` with `extend_skipping_3/4` helpers
 
 ### `transform` -- Transformations
@@ -77,22 +86,24 @@ Core transformation logic applied after flatten/unflatten:
 
 ### `flatten` -- Flattening Algorithm
 
-Recursive JSON flattening with performance optimizations:
-- `SeparatorCache` for pre-computed separator properties
-- `FastStringBuilder` with thread-local caching
-- `flatten_value_with_threshold()` for Rayon-parallel flattening of large objects/arrays
-- `quick_leaf_estimate()` for O(1) HashMap pre-sizing
+Tape-based engine (`scan -> walk -> output`), not a naive recursive `serde_json::Value` walk:
+- `scan_and_fixup()` -- single-pass structural scanner producing a `TapeEntry` tape (merges structural scan, validation, container pairing, and string-length computation), with a byte-classification lookup table instead of multiple `memchr` calls
+- `SeparatorCache` for pre-computed separator properties (single-byte fast path vs. multi-byte)
+- Zero-copy `ValueRef::Raw` byte ranges into the original input, avoiding `serde_json::Value` tree allocation, with a direct-to-output fast path when no key transforms/collision handling are configured
+- `flatten_collecting_parallel()` for Rayon-parallel flattening of large objects/arrays once a document crosses `nested_parallel_threshold`
+- Arena-allocated (`bumpalo::Bump`) key storage on the slow path (key lowercasing/replacement/collision-handling), avoiding one heap allocation per dotted key path
 
 ### `unflatten` -- Unflattening Algorithm
 
-Reconstructs nested JSON from flat key-value pairs:
-- SIMD-accelerated separator detection (`find_separator*()` functions)
+Reconstructs nested JSON from flat key-value pairs using the same tape scanner as `flatten`:
+- SIMD-accelerated separator detection (`find_separator()`/`find_separator_offsets()`)
 - Path type analysis for array vs. object reconstruction
-- Recursive `set_nested_value()` and `set_nested_array_value()`
+- Recursive `set_nested_value()`/`set_nested_value_recursive()` and `set_nested_array_value()`
+- `FxIndexMap`-backed object tree (insertion-ordered, O(1) lookup) instead of a hash map + full key sort
 
 ### `builder` -- Public API
 
-The `JSONTools` struct and all 35+ builder methods. Routes `execute()` calls to the appropriate processing function based on operation mode (flatten, unflatten, normal).
+The `JSONTools` struct and its ~19 public methods (3 mode setters, 14 configuration methods, plus `new()` and `execute()`). Routes `execute()` calls to the appropriate processing function based on operation mode (flatten, unflatten, normal).
 
 ### `python` -- Python Bindings
 
@@ -104,7 +115,8 @@ PyO3-based Python bindings with:
 ### `jvm` -- JVM Bindings
 
 JNI-based Java bindings (see [`jvm/`](https://github.com/amaye15/json-tools-rs/tree/master/jvm)
-for the Maven project), primarily for use as Apache Spark UDFs:
+for the Maven project, and the [JVM API reference](./jvm-api.md) for the Java-side
+API), primarily for use as Apache Spark UDFs:
 - A single-JSON-config-blob handoff from a pure-Java fluent builder (`JsonTools`) to
   an immutable, `Send + Sync` boxed `JSONTools` handle -- no mutex needed, unlike the
   Python bindings' `Mutex<JSONTools>` (which exists there only to support Python's
@@ -121,6 +133,8 @@ Input → Parse → Flatten/Unflatten → Transform → Filter → Convert → S
     json_parser    flatten/         transform   transform   convert   json_parser
                    unflatten
 ```
+
+For a single JSON document, `flatten`/`unflatten`/`normal` all share one tape scanner (`scan_and_fixup()`, defined in `flatten.rs`, imported by `unflatten.rs` and `transform.rs`) and walk it directly to output. `json_parser`'s conditional SIMD parser (sonic-rs/simd-json) is reserved for a narrower case: a root-level JSON primitive (e.g. a bare `"hello"` or `42`, not an object/array), which falls back to a `serde_json::Value` round-trip in both `flatten` and `unflatten`.
 
 ## Public API Surface
 

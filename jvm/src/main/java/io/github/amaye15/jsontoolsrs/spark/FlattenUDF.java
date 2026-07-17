@@ -7,8 +7,13 @@ import org.apache.spark.sql.api.java.UDF1;
 /**
  * Row UDF: flattens a single JSON string per call.
  *
- * <p>Two ways to use this from a Databricks Lakeflow Declarative Pipeline (Python),
- * which only supports Python/SQL for pipeline definitions:
+ * <p>Databricks Lakeflow Declarative Pipelines cannot attach JVM libraries to pipeline
+ * compute at all (serverless or classic-backed) -- this UDF is for Databricks Jobs and
+ * notebooks running on classic compute, or other Spark workloads. For transforming JSON
+ * genuinely inside a Lakeflow pipeline, wrap the Python bindings in a {@code pandas_udf}
+ * instead -- see {@code docs/src/guide/databricks-setup.md}.
+ *
+ * <p>Two ways to use this from a Job/notebook (Python):
  *
  * <ul>
  *   <li>Default configuration ({@code "."} separator, no replacements/filters), via
@@ -34,8 +39,8 @@ import org.apache.spark.sql.api.java.UDF1;
  *
  * <p>Malformed input throws {@link JsonToolsException}, consistent with how both the
  * core Rust library and its Python bindings already behave -- it is not silently
- * swallowed to {@code null}. Wrap in SQL {@code TRY(...)} or a Lakeflow expectation if
- * you want {@code from_json}-style null-on-error semantics instead.
+ * swallowed to {@code null}. Wrap in SQL {@code TRY(...)} if you want {@code
+ * from_json}-style null-on-error semantics instead.
  */
 public class FlattenUDF implements UDF1<String, String> {
 

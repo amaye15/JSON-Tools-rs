@@ -23,8 +23,9 @@ library).
 > feed a Lakeflow pipeline.
 >
 > If your goal is specifically "call json-tools-rs from inside a Lakeflow pipeline,"
-> use the **Python bindings** instead (`pip install json-tools-rs` once published) --
-> Python wheels are supported in a pipeline's Environment settings, unlike JVM jars.
+> use the **Python bindings** instead (`pip install json-tools-rs`, already published
+> to PyPI) -- Python wheels are supported in a pipeline's Environment settings, unlike
+> JVM jars.
 
 If your need is just "flatten nested JSON into columns" with no custom key/value
 transforms, check whether Spark's built-in `VARIANT` type + `variant_explode()` /
@@ -66,6 +67,23 @@ runs JDK 17 or 21, so this only affects local test runs -- point `JAVA_HOME` at 
 export JAVA_HOME=$(/usr/libexec/java_home -v 17)   # or your platform's equivalent
 ```
 
+## Examples
+
+Standalone runnable examples live under [`examples/`](examples/) (kept out of the
+default build via a separate Maven profile, so `mvn test`/`mvn package` never compile
+or ship them in the jar): [`FeatureByFeature.java`](examples/io/github/amaye15/jsontoolsrs/examples/FeatureByFeature.java)
+covers every builder method in isolation, and
+[`FeatureCombinations.java`](examples/io/github/amaye15/jsontoolsrs/examples/FeatureCombinations.java)
+covers curated multi-feature pipelines. Mirrors `../examples/*.rs` and
+`../python/examples/*.py` -- same inputs, same output, across all three languages.
+
+```bash
+mvn -P examples compile exec:java \
+    -Dexec.mainClass=io.github.amaye15.jsontoolsrs.examples.FeatureByFeature
+mvn -P examples compile exec:java \
+    -Dexec.mainClass=io.github.amaye15.jsontoolsrs.examples.FeatureCombinations
+```
+
 ## Distribution to Databricks
 
 **Via CI artifact (any commit):** download the `json-tools-rs-spark-jar` artifact
@@ -76,16 +94,16 @@ from a `jvm-ci.yml` CI run (or build it locally per above), then:
    (Compute → your cluster → Libraries → Install new → Volumes). Not applicable to
    Lakeflow Pipeline compute -- see the note above.
 
-**Via Maven Central (tagged releases only):** pushing a git tag (e.g. `v0.10.0`)
+**Via Maven Central (tagged releases only):** pushing a git tag (e.g. `v0.9.5`)
 triggers `jvm-ci.yml`'s `release` job, which builds, GPG-signs, and publishes
-`io.github.amaye15:json-tools-rs-spark` to Maven Central automatically. Add it as a
-normal Maven/Gradle/sbt dependency once published:
+`io.github.amaye15:json-tools-rs-spark` to Maven Central automatically -- live since
+v0.9.2. Add it as a normal Maven/Gradle/sbt dependency:
 
 ```xml
 <dependency>
   <groupId>io.github.amaye15</groupId>
   <artifactId>json-tools-rs-spark</artifactId>
-  <version>0.10.0</version>
+  <version>0.9.5</version>
 </dependency>
 ```
 

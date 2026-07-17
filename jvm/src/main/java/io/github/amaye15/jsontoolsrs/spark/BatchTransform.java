@@ -22,10 +22,15 @@ import org.apache.spark.util.TaskCompletionListener;
  * row-at-a-time UDF invocation (see {@code FlattenUDF}/{@code UnflattenUDF} for that
  * simpler, SQL-native alternative).
  *
- * <p>Called from a Python Lakeflow Declarative Pipeline via the {@code df._jdf}
- * escape hatch, since a {@code mapPartitions} transform on a Java-backed {@code
- * Dataset} is not directly reachable from plain PySpark DataFrame calls -- see
- * {@code jvm/README.md} for the full worked example.
+ * <p>Databricks Lakeflow Declarative Pipelines cannot attach JVM libraries to pipeline
+ * compute at all, so this class -- like {@code FlattenUDF}/{@code UnflattenUDF} -- is
+ * for Databricks Jobs and notebooks on classic compute, or other Spark workloads, not
+ * for use inside a pipeline. Called from Python via the {@code df._jdf} escape hatch,
+ * since a {@code mapPartitions} transform on a Java-backed {@code Dataset} is not
+ * directly reachable from plain PySpark DataFrame calls -- see {@code jvm/README.md}
+ * for the full worked example. For transforming JSON genuinely inside a Lakeflow
+ * pipeline, wrap the Python bindings in a {@code pandas_udf} instead -- see {@code
+ * docs/src/guide/databricks-setup.md}.
  *
  * <p><b>Batch-failure isolation:</b> the native batch call ({@link
  * JsonToolsHandle#executeBatch}) fails the whole chunk if any single row in it is

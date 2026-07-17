@@ -25,10 +25,15 @@ transforms, check whether Spark's built-in `VARIANT` type + `variant_explode()` 
 native library at all. This binding earns its keep for the transform features
 `VARIANT` doesn't have.
 
-## Building
+## Installing
 
-There's no published artifact yet (see [Installation](./installation.md)) -- build
-from source:
+Available on Maven Central as `io.github.amaye15:json-tools-rs-spark` -- see
+[Installation](./installation.md) for the dependency snippet. The published jar
+bundles native libraries for `linux-x86_64` and `linux-aarch64` (standard Databricks
+compute and Graviton instances), so no separate native library install is needed on
+those platforms.
+
+To build from source instead:
 
 ```bash
 # From the repo root: build the native library, then the Java project
@@ -37,7 +42,7 @@ cd jvm && mvn package
 ```
 
 This produces `jvm/target/json-tools-rs-spark-<version>.jar`. CI
-(`.github/workflows/jvm-ci.yml`) builds a version of this jar bundling both
+(`.github/workflows/jvm-ci.yml`) also builds this jar bundling both
 `linux-x86_64` and `linux-aarch64` native libraries as a downloadable artifact on
 every push.
 

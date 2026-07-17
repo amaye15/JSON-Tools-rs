@@ -274,14 +274,14 @@ tools = jt.JSONTools().flatten().parallel_threshold(50)
 #### `.num_threads(n)`
 
 ```python
-tools.num_threads(n: int) -> JSONTools
+tools.num_threads(n: int | None) -> JSONTools
 ```
 
-Set the number of threads used for parallel processing.
+Set the number of threads used for parallel processing. Pass `None` (or omit the call) to use the system default.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `n` | `int` | CPU count | Number of worker threads |
+| `n` | `int \| None` | `None` (CPU count) | Number of worker threads |
 
 Default can be overridden with the `JSON_TOOLS_NUM_THREADS` environment variable.
 
@@ -342,8 +342,8 @@ Execute the configured operation. The return type mirrors the input type:
 | `polars.DataFrame` | `polars.DataFrame` |
 | `polars.Series` | `polars.Series` |
 | `pyarrow.Table` | `pyarrow.Table` |
-| `pyarrow.ChunkedArray` | `pyarrow.ChunkedArray` |
-| `pyspark.sql.DataFrame` | `pyspark.sql.DataFrame` |
+| `pyarrow.ChunkedArray` | `pyarrow.Array` (reconstructed via `pyarrow.array()`, not re-chunked) |
+| `pyspark.sql.DataFrame` | `list[dict]` (no `SparkSession` round-trip available for reconstruction; falls back to a plain list) |
 
 **Raises:** `JsonToolsError` if no mode is set, input is invalid, or processing fails.
 
@@ -440,18 +440,20 @@ JSON Tools RS natively supports Pandas, Polars, PyArrow, and PySpark DataFrames 
 
 ### Pandas DataFrame
 
+Each **row** is serialized to a JSON object (column names become keys) and processed as a whole document -- so flattening finds nested structure in columns holding actual nested Python objects (dicts/lists), not columns holding pre-serialized JSON-text strings (a string column's value is just a JSON string scalar, with nothing to flatten inside it).
+
 ```python
 import pandas as pd
 import json_tools_rs as jt
 
-df = pd.DataFrame({"json_col": [
-    '{"user": {"name": "Alice", "age": 30}}',
-    '{"user": {"name": "Bob", "age": 25}}',
+df = pd.DataFrame({"user": [
+    {"name": "Alice", "age": 30},
+    {"name": "Bob", "age": 25},
 ]})
 
 tools = jt.JSONTools().flatten().separator(".")
 
-# Process column containing JSON strings
+# Each row -> {"user": {"name": ..., "age": ...}} -> flattened
 result_df = tools.execute(df)
 # Returns a DataFrame with flattened columns: "user.name", "user.age"
 ```
@@ -470,15 +472,17 @@ result_series = jt.JSONTools().flatten().execute(series)
 
 ### Polars DataFrame
 
+Like Pandas, this flattens a column of nested `Struct` values -- a column of JSON-text strings round-trips unchanged, since there's no nested structure inside a string scalar for `.flatten()` to find.
+
 ```python
 import polars as pl
 
-df = pl.DataFrame({"json_col": [
-    '{"user": {"name": "Alice"}}',
-    '{"user": {"name": "Bob"}}',
-]})
+df = pl.DataFrame({
+    "user": [{"name": "Alice", "age": 30}, {"name": "Bob", "age": 25}]
+})
 
 result_df = jt.JSONTools().flatten().execute(df)
+# result_df columns: ["user.name", "user.age"]
 ```
 
 ### Polars Series
@@ -494,29 +498,34 @@ result_series = jt.JSONTools().flatten().execute(series)
 
 ### PyArrow Table
 
+Same rule as Pandas/Polars: flatten a `struct`-typed column, not a plain string column holding JSON text.
+
 ```python
 import pyarrow as pa
 
-table = pa.table({"json_col": [
-    '{"user": {"name": "Alice"}}',
-    '{"user": {"name": "Bob"}}',
-]})
+table = pa.table({
+    "user": pa.array([{"name": "Alice", "age": 30}, {"name": "Bob", "age": 25}])
+})
 
 result_table = jt.JSONTools().flatten().execute(table)
+# result_table columns: ["user.name", "user.age"]
 ```
 
 ### PySpark DataFrame
 
+`.execute(df)` collects the DataFrame to the driver via `toPandas()`, runs it through the same row-is-a-JSON-object pipeline as Pandas (so a `StructType` column flattens; a plain string column does not), and -- because there's no `SparkSession` available inside the native call to rebuild a distributed `DataFrame` -- returns a plain **`list[dict]`**, not a new `pyspark.sql.DataFrame`.
+
 ```python
-from pyspark.sql import SparkSession
+from pyspark.sql import SparkSession, Row
 
 spark = SparkSession.builder.getOrCreate()
 df = spark.createDataFrame([
-    ('{"user": {"name": "Alice"}}',),
-    ('{"user": {"name": "Bob"}}',),
-], ["json_col"])
+    Row(user=Row(name="Alice", age=30)),
+    Row(user=Row(name="Bob", age=25)),
+])
 
-result_df = jt.JSONTools().flatten().execute(df)
+result = jt.JSONTools().flatten().execute(df)
+# result is a list[dict], e.g. [{"user.name": "Alice", "user.age": 30}, ...]
 ```
 
 ## JsonToolsError
@@ -530,10 +539,10 @@ try:
     result = jt.JSONTools().flatten().execute("not valid json")
 except jt.JsonToolsError as e:
     print(f"Error: {e}")
-    # Error: [E001] JSON parsing failed: ...
+    # Error: Failed to process JSON string: [E001] JSON parsing failed: ...
 ```
 
-Error messages include a machine-readable code (`E001`-`E008`) at the start of the message. See [Error Codes](./error-codes.md) for the full reference.
+Error messages embed a machine-readable code (`E001`-`E008`) in square brackets. Note that the Python bindings prepend their own context before the underlying Rust message (e.g. `"Failed to process JSON string: "`, `"Failed to process Python dict: "`), so the code is not always the very first characters of `str(e)` -- check for `"[E00x]"` as a substring rather than a prefix. See [Error Codes](./error-codes.md) for the full reference.
 
 ### Error Codes Quick Reference
 
@@ -591,11 +600,13 @@ results = tools.execute([{"data": str(i)} for i in range(1000)])
 # JSON string
 result = tools.execute('{"User_Name": "Alice", "nested": {"User_Age": "30"}}')
 
-# DataFrame
+# DataFrame -- each row becomes {"User_Name": ..., "User_Age": ...} (column names
+# are the JSON keys); see "DataFrame and Series Support" above for why a column of
+# nested dict/struct values flattens but a column of JSON-text strings does not
 import pandas as pd
-df = pd.DataFrame({"json": [
-    '{"User_Name": "Alice", "nested": {"User_Age": "30"}}',
-    '{"User_Name": "Bob", "nested": {"User_Age": "25"}}',
-]})
+df = pd.DataFrame({
+    "User_Name": ["Alice", "Bob"],
+    "User_Age": ["30", "25"],
+})
 df_result = tools.execute(df)
 ```

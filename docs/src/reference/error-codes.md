@@ -18,11 +18,16 @@ All errors include a machine-readable code accessible via `.error_code()` (Rust)
 ```rust
 use json_tools_rs::{JSONTools, JsonToolsError};
 
-match JSONTools::new().flatten().execute(input) {
+match JSONTools::new().flatten().execute("not valid json") {
     Ok(result) => { /* success */ }
     Err(e) => {
-        eprintln!("[{}] {}", e.error_code(), e);
-        // [E001] JSON parse error: expected value at line 1 column 1
+        // e.error_code() -> "E001" (bare code, for match arms / logging fields)
+        // format!("{e}")  -> "[E001] JSON parsing failed: Invalid literal (`true`,
+        //                    `false`, or a `null`) while parsing at line 1 column 4
+        //                    ...
+        //                    💡 Suggestion: Verify your JSON syntax using a JSON
+        //                    validator. ..." (Display already includes the bracketed code)
+        eprintln!("{e}");
     }
 }
 ```
@@ -36,8 +41,27 @@ try:
     result = jt.JSONTools().flatten().execute("not valid json")
 except jt.JsonToolsError as e:
     print(f"Error: {e}")
-    # Error: [E001] JSON parse error: ...
+    # Error: Failed to process JSON string: [E001] JSON parsing failed: ...
 ```
+
+The Python bindings prepend their own context (e.g. `"Failed to process JSON string: "`) before the underlying Rust message, so the `[E00x]` code is embedded in `str(e)` but not necessarily its first characters -- match it as a substring (`"[E001]" in str(e)`), not a prefix.
+
+## JVM Error Handling
+
+```java
+import io.github.amaye15.jsontoolsrs.JsonTools;
+import io.github.amaye15.jsontoolsrs.JsonToolsHandle;
+import io.github.amaye15.jsontoolsrs.JsonToolsException;
+
+try (JsonToolsHandle tools = JsonTools.builder().flatten().build()) {
+    String result = tools.execute("not valid json");
+} catch (JsonToolsException e) {
+    System.err.println(e.getMessage());
+    // [E001] JSON parsing failed: ...
+}
+```
+
+`JsonToolsException` (an unchecked `RuntimeException`) carries the Rust error's `Display` text as its message, unmodified -- unlike the Python bindings, the JVM side adds no extra prefix, so `[E00x]` is at the very start of `getMessage()`. See the [JVM API reference](./jvm-api.md#error-handling) for details.
 
 ## Common Errors
 

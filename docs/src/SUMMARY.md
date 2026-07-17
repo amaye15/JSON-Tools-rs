@@ -25,6 +25,7 @@
 
 - [Rust API](./reference/rust-api.md)
 - [Python API](./reference/python-api.md)
+- [JVM API](./reference/jvm-api.md)
 - [Architecture](./reference/architecture.md)
 - [Error Codes](./reference/error-codes.md)
 

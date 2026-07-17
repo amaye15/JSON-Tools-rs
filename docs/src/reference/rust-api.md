@@ -68,7 +68,7 @@ All methods consume `self` and return `Self` for chaining. Marked `#[must_use]`.
 | `.nested_parallel_threshold(n)` | `usize` | `100` | Min keys/items for intra-document parallelism |
 | `.max_array_index(n)` | `usize` | `100_000` | Max array index during unflattening (DoS protection) |
 
-**Note:** `.separator()` panics if given an empty string. Defaults for `parallel_threshold`, `nested_parallel_threshold`, `num_threads`, and `max_array_index` can be overridden via environment variables (see [Performance Tuning](../resources/performance.md)).
+**Note:** `.separator()` itself never fails -- an empty separator is only rejected later, at `.execute()` time, with a `ConfigurationError` (`E005`), not a panic. Defaults for `parallel_threshold`, `nested_parallel_threshold`, `num_threads`, and `max_array_index` can be overridden via environment variables (see [Performance Tuning](../resources/performance.md)).
 
 ### Execution
 
@@ -183,8 +183,8 @@ pub enum JsonOutput {
 
 | Method | Returns | Description |
 |--------|---------|-------------|
-| `.into_single()` | `String` | Extract single result. **Panics** on `Multiple`. |
-| `.into_multiple()` | `Vec<String>` | Extract batch results. **Panics** on `Single`. |
+| `.into_single()` | `String` | **Deprecated since 0.10.0** (use `.try_into_single()`). Extract single result. **Panics** on `Multiple`. |
+| `.into_multiple()` | `Vec<String>` | **Deprecated since 0.10.0** (use `.try_into_multiple()`). Extract batch results. **Panics** on `Single`. |
 | `.try_into_single()` | `Result<String, JsonToolsError>` | Non-panicking single extraction |
 | `.try_into_multiple()` | `Result<Vec<String>, JsonToolsError>` | Non-panicking batch extraction |
 | `.into_vec()` | `Vec<String>` | Always returns a `Vec` (wraps `Single` in a one-element vec) |
@@ -216,7 +216,7 @@ assert_eq!(v.len(), 1);
 Comprehensive error enum with machine-readable error codes (`E001`-`E008`), human-readable messages, and actionable suggestions.
 
 ```rust
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug)]
 #[non_exhaustive]
 pub enum JsonToolsError {
     JsonParseError { .. },           // E001
@@ -229,6 +229,8 @@ pub enum JsonToolsError {
     SerializationError { .. },       // E008
 }
 ```
+
+`Display` and `std::error::Error` are implemented by hand (not via the `thiserror` crate, which is not a dependency of this crate) -- `Display` produces the `[E00x] ... 💡 Suggestion: ...` text shown below.
 
 ### Methods
 
@@ -303,12 +305,12 @@ pub struct ProcessingConfig {
 ### Builder Methods
 
 ```rust
-use json_tools_rs::ProcessingConfig;
+use json_tools_rs::{ProcessingConfig, FilteringConfig, CollisionConfig, ReplacementConfig};
 
 let config = ProcessingConfig::new()
     .separator("::")
     .lowercase_keys(true)
-    .filtering(FilteringConfig::new().set_remove_nulls(true))
+    .filtering(FilteringConfig::new().remove_nulls(true))
     .collision(CollisionConfig::new().handle_collisions(true))
     .replacements(
         ReplacementConfig::new()
@@ -318,10 +320,15 @@ let config = ProcessingConfig::new()
 
 ## FilteringConfig
 
-Configuration for value filtering, stored internally as a bitmask for single-instruction checks on the hot path.
+Configuration for value filtering. All fields are `pub` and can be read directly (e.g. `filtering.remove_nulls`); the builder methods below exist for fluent construction.
 
 ```rust
-pub struct FilteringConfig { /* bitmask */ }
+pub struct FilteringConfig {
+    pub remove_empty_strings: bool,
+    pub remove_nulls: bool,
+    pub remove_empty_objects: bool,
+    pub remove_empty_arrays: bool,
+}
 ```
 
 ### Builder Methods
@@ -330,31 +337,27 @@ All methods consume and return `Self`.
 
 | Method | Description |
 |--------|-------------|
-| `.set_remove_empty_strings(bool)` | Filter `""` values |
-| `.set_remove_nulls(bool)` | Filter `null` values |
-| `.set_remove_empty_objects(bool)` | Filter `{}` values |
-| `.set_remove_empty_arrays(bool)` | Filter `[]` values |
+| `.remove_empty_strings(bool)` | Filter `""` values |
+| `.remove_nulls(bool)` | Filter `null` values |
+| `.remove_empty_objects(bool)` | Filter `{}` values |
+| `.remove_empty_arrays(bool)` | Filter `[]` values |
 
 ### Query Methods
 
 | Method | Returns | Description |
 |--------|---------|-------------|
-| `.remove_empty_strings()` | `bool` | Is empty string filtering enabled? |
-| `.remove_nulls()` | `bool` | Is null filtering enabled? |
-| `.remove_empty_objects()` | `bool` | Is empty object filtering enabled? |
-| `.remove_empty_arrays()` | `bool` | Is empty array filtering enabled? |
 | `.has_any_filter()` | `bool` | Is any filter enabled? |
 
 ```rust
 use json_tools_rs::FilteringConfig;
 
 let filtering = FilteringConfig::new()
-    .set_remove_nulls(true)
-    .set_remove_empty_strings(true);
+    .remove_nulls(true)
+    .remove_empty_strings(true);
 
 assert!(filtering.has_any_filter());
-assert!(filtering.remove_nulls());
-assert!(!filtering.remove_empty_objects());
+assert!(filtering.remove_nulls); // public field, not a getter method
+assert!(!filtering.remove_empty_objects);
 ```
 
 ## CollisionConfig

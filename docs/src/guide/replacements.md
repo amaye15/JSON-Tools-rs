@@ -43,7 +43,7 @@ patterns that contain characters that would otherwise be regex metacharacters (`
 | `"old"` | Literal string replacement |
 | `"r'^prefix_'"` | Regex: match start of string |
 | `"r'(a\|b)_'"` | Regex: alternation |
-| `"r'\\d+'"` | Regex: digit sequences |
+| `"r'\d+'"` | Regex: digit sequences |
 
 A malformed `r'...'` pattern (invalid regex syntax) is silently treated as "no match" for
 that pattern rather than raising an error -- test your patterns to confirm they compile as
