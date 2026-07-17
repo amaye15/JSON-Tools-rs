@@ -25,7 +25,7 @@ Unlike simple JSON parsers, JSON Tools RS provides a complete toolkit for JSON t
 - 🚀 **Unified API**: Single `JSONTools` entry point for flattening, unflattening, or pass-through transforms (`.normal()`)
 - 🔧 **Builder Pattern**: Fluent, chainable API for easy configuration and method chaining
 - ⚡ **High Performance**: SIMD-accelerated JSON parsing with FxHashMap, SmallVec stack allocation, and tiered caching
-- 🚄 **Parallel Processing**: Built-in Rayon-based parallelism (persistent work-stealing pool) for 3-5x speedup on batch operations and large nested structures
+- 🚄 **Parallel Processing**: Built-in Rayon-based parallelism (persistent work-stealing pool) for faster batch operations and large nested structures
 - 🎯 **Complete Roundtrip**: Flatten JSON and unflatten back to original structure with perfect fidelity
 - 🧹 **Comprehensive Filtering**: Remove empty strings, nulls, empty objects, and empty arrays (works for both flatten and unflatten)
 - 🔄 **Advanced Replacements**: Key/value replacements, literal (exact substring match) by default, or regex by wrapping the pattern in `r'...'`
@@ -45,6 +45,7 @@ Unlike simple JSON parsers, JSON Tools RS provides a complete toolkit for JSON t
   - [Rust Examples](#rust---unified-jsontools-api)
   - [Python Examples](#python---unified-jsontools-api)
   - [JVM / Spark Examples](#jvm--spark)
+  - [Runnable Examples](#runnable-examples)
 - [Quick Reference](#quick-reference)
 - [Installation](#installation)
 - [Architecture](#architecture)
@@ -225,6 +226,40 @@ See [`jvm/README.md`](jvm/README.md) for the Spark UDF API and
 [Setting Up on Databricks](https://amaye15.github.io/JSON-Tools-rs/guide/databricks-setup.html)
 for the full deployment walkthrough (both this and the pandas_udf path).
 
+### Runnable Examples
+
+Every builder feature has a standalone, runnable example in all three languages,
+plus curated multi-feature pipelines (not an exhaustive combinatorial sweep --
+the builder has ~10 independent toggles -- but realistic groupings commonly used
+together, and one "kitchen sink" pipeline exercising nearly everything at once).
+All three language versions use matching inputs and produce matching output.
+
+| | Individual features | Curated combinations |
+| --- | --- | --- |
+| Rust | [`examples/feature_by_feature.rs`](examples/feature_by_feature.rs) | [`examples/feature_combinations.rs`](examples/feature_combinations.rs) |
+| Python | [`python/examples/feature_by_feature.py`](python/examples/feature_by_feature.py) | [`python/examples/feature_combinations.py`](python/examples/feature_combinations.py) |
+| Java | [`jvm/examples/.../FeatureByFeature.java`](jvm/examples/io/github/amaye15/jsontoolsrs/examples/FeatureByFeature.java) | [`jvm/examples/.../FeatureCombinations.java`](jvm/examples/io/github/amaye15/jsontoolsrs/examples/FeatureCombinations.java) |
+
+```bash
+# Rust
+cargo run --example feature_by_feature
+cargo run --example feature_combinations
+
+# Python
+python3 python/examples/feature_by_feature.py
+python3 python/examples/feature_combinations.py
+
+# Java (compiles examples/ as an extra source root, kept out of the packaged jar)
+cd jvm
+mvn -P examples compile exec:java -Dexec.mainClass=io.github.amaye15.jsontoolsrs.examples.FeatureByFeature
+mvn -P examples compile exec:java -Dexec.mainClass=io.github.amaye15.jsontoolsrs.examples.FeatureCombinations
+```
+
+There are also narrative walkthroughs for a quicker first read:
+[`examples/basic_usage.rs`](examples/basic_usage.rs) /
+[`examples/advance_usage.rs`](examples/advance_usage.rs) (Rust) and
+[`python/examples/examples.py`](python/examples/examples.py) (Python).
+
 ## Quick Reference
 
 ### Method Cheat Sheet
@@ -297,10 +332,20 @@ pip install json-tools-rs
 
 ### JVM / Spark
 
-No published artifact yet -- build from source (`cargo build --release --features
-jvm && cd jvm && mvn package`), or download the jar from a `jvm-ci.yml` CI run. See
-[`jvm/README.md`](jvm/README.md) for details; a Maven Central release
-(`io.github.amaye15:json-tools-rs-spark`) ships automatically on tagged releases.
+Published to Maven Central as `io.github.amaye15:json-tools-rs-spark` (live since
+v0.9.2, ships automatically on tagged releases):
+
+```xml
+<dependency>
+  <groupId>io.github.amaye15</groupId>
+  <artifactId>json-tools-rs-spark</artifactId>
+  <version>0.9.5</version>
+</dependency>
+```
+
+Or build from source (`cargo build --release --features jvm && cd jvm && mvn
+package`), or download the jar from a `jvm-ci.yml` CI run. See
+[`jvm/README.md`](jvm/README.md) for details.
 
 ## Architecture
 
@@ -313,7 +358,7 @@ src/
 ├── types.rs          Core types: JsonInput, JsonOutput
 ├── error.rs          Error types with codes E001-E008
 ├── config.rs         Configuration structs and operation modes
-├── cache.rs          Tiered caching: regex, key deduplication, phf perfect hash
+├── cache.rs          Tiered regex pattern caching (compile-time table, thread-local, global)
 ├── convert.rs        Type conversion: numbers, dates, booleans, nulls (SIMD-optimized)
 ├── transform.rs      Filtering, key/value replacements, collision handling
 ├── flatten.rs        Flattening algorithm with Rayon parallelism
@@ -327,7 +372,7 @@ src/
 
 The processing pipeline:
 1. **Parse** -- SIMD-accelerated JSON parsing (`json_parser`)
-2. **Flatten/Unflatten** -- Recursive traversal with Arc\<str\> key dedup (`flatten`/`unflatten`)
+2. **Flatten/Unflatten** -- Recursive traversal with `CompactString`/arena-backed key storage (`flatten`/`unflatten`)
 3. **Transform** -- Lowercase, replacements (cached regex), collision handling (`transform`)
 4. **Filter** -- Remove empty strings, nulls, empty objects/arrays (`transform`)
 5. **Convert** -- Type conversion with first-byte discriminators (`convert`)
@@ -339,23 +384,23 @@ The processing pipeline:
 
 | Benchmark | Time | Description |
 |-----------|------|-------------|
-| Deep nesting (100 levels) | 8.3 µs | Deeply nested JSON objects |
-| Wide objects (1,000 keys) | ~337 µs | Flat objects with many keys |
-| Large arrays (5,000 items) | ~2.11 ms | Arrays with many elements |
-| Parallel batch (10,000 items) | ~2.61 ms | Batch processing with Rayon |
+| Deep nesting (100 levels) | ~2.17 µs | Deeply nested JSON objects |
+| Wide objects (1,000 keys) | ~24.8 µs | Flat objects with many keys |
+| Large arrays (5,000 items) | ~406 µs | Arrays with many elements |
+| Parallel batch (10,000 items) | ~635 µs | Batch processing with Rayon (`nested_parallel_threshold`) |
 
-*Measured on Apple Silicon. Results may vary by platform and data shape.*
+*Measured on Apple Silicon (M4) via `cargo bench --bench stress_benchmarks`, v0.9.5. Results may vary by platform and data shape.*
 
 ### Optimization Techniques
 
-JSON Tools RS uses several techniques to achieve high performance (~2,000+ ops/ms):
+JSON Tools RS uses several techniques to achieve high performance:
 
 * **SIMD-JSON**: Hardware-accelerated parsing via sonic-rs (64-bit) / simd-json (32-bit).
 * **SIMD Byte Search**: memchr/memmem for SIMD-accelerated string operations and pattern matching.
-* **FxHashMap**: Faster hashing for string keys with rustc-hash.
-* **Tiered Caching**: Three-level regex cache (compile-time phf table → thread-local FxHashMap → global `RwLock<FxHashMap>`).
+* **FxHashMap**: Faster hashing for string keys via a hand-rolled FxHash-style hasher (`src/fxhash.rs`; no external hashing crate dependency).
+* **Tiered Caching**: Three-level regex cache (compile-time pattern table → thread-local FxHashMap → global `RwLock<FxHashMap>`).
 * **SmallVec & Cow**: Stack allocation for depth stacks and number buffers; zero-copy string handling.
-* **Arc\<str\> Deduplication**: Shared key storage to minimize allocations in wide/deep JSON.
+* **CompactString & Arena Keys**: Object keys are inlined via `CompactString` (no heap allocation up to 24 bytes); `flatten`'s slow path additionally uses a `bumpalo` arena for deep-nested keys, to minimize allocations in wide/deep JSON.
 * **First-Byte Discriminators**: Rapid rejection of non-convertible strings during type conversion.
 * **Parallelism**: Rayon's persistent work-stealing thread pool for batch processing and large nested structures (avoids per-call OS thread spawn cost).
 
@@ -373,9 +418,21 @@ This prints progressive examples covering basic flattening, unflattening, custom
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, testing, benchmarking, and PR guidelines.
 
+## License
+
+Dual-licensed under either [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option.
+
 ## Changelog
 
-### v0.9.4 (Current)
+### v0.9.5 (Current)
+
+* **Documentation-wide accuracy sweep**: every root-level doc, the full mdBook site, and the JVM Java source's own doc comments audited against actual source code and live runtime behavior (not just re-read) across four parallel passes. Corrected fabricated/stale internals (references to a `phf` key cache, `rustc-hash`, `Arc<str>` key dedup, and function names that no longer exist -- none of that is in the current codebase), stale benchmark numbers (some off by 3-14x), wrong error-handling semantics (e.g. `.separator("")` documented as panicking; it returns a config error), several broken guide examples, and stale "not yet published" claims for Maven Central/PyPI (both have been live for a while). Also fixed a real internal contradiction in the JVM Java source itself (`FlattenUDF`/`BatchTransform` javadoc claimed Lakeflow Pipeline support that Databricks doesn't actually allow) and added a missing [JVM API reference page](https://amaye15.github.io/JSON-Tools-rs/reference/jvm-api.html).
+* **New**: runnable examples covering every builder feature individually, plus curated multi-feature pipelines, mirrored across all three language bindings with matching inputs/outputs -- see [Runnable Examples](#runnable-examples) below.
+* **Performance**: regex pattern lookup for `key_replacement`/`value_replacement` no longer re-hashes and re-walks the cache on every key/value check (a thread-local "sticky" cache of recently-used patterns short-circuits the common case) -- regex scenarios 9-22% faster (Criterion). Consolidated two near-duplicate replacement-application code paths, which also fixed a missing SIMD fast-path for literal value replacement (~15-19% faster for that case).
+
+See [CHANGELOG.md](CHANGELOG.md) for full details on all of the above.
+
+### v0.9.4
 
 * **Bug fix**: `auto_convert_types` silently corrupted the trailing digits of large integer strings (17+ digits, e.g. Snowflake/Discord/database bigint IDs) by always round-tripping through `f64`, which only has ~15-17 significant decimal digits of exact precision. Now reuses already-canonical integer strings directly instead of reformatting through a float.
 * **Python bindings**: `dict`/`list[dict]`/DataFrame/Series conversion switched from the `pythonize` crate's generic serde-based traversal to direct calls to Python's own `json` module. Benchmarked against the actual built extension: ~18% faster for a single nested dict, ~1.6x faster for a 200-row pandas DataFrame (the realistic cases this library exists for); flat/tiny dicts see a smaller, reported-honestly regression. Removes the `pythonize` dependency entirely.
