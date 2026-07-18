@@ -59,7 +59,7 @@ compact_str = "0.10"
 # deep-nested-path collection. `collections` feature provides `bumpalo::collections::
 # String`, needed for in-place lowercasing/replacement before the final arena commit.
 bumpalo = { version = "3.20", features = ["collections"] }
-jni = { version = "0.21", optional = true }  # JNI bindings for JVM (Java/Scala/Spark) integration
+jni = { version = "0.22", optional = true }  # JNI bindings for JVM (Java/Scala/Spark) integration
 chrono = { version = "0.4.44", default-features = false, features = ["std", "clock"] }
 mimalloc = { version = "0.1.48", default-features = false, optional = true }  # High-performance allocator (~5-10% speedup)
 rayon = "1.12.0"  # Persistent work-stealing thread pool: avoids per-call OS thread spawn cost of std::thread::scope
