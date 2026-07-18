@@ -33,7 +33,7 @@ jobs:
             can_test: false
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@v1
         with:
           toolchain: stable
@@ -52,7 +52,7 @@ jobs:
         # so these Linux builds are portable by default.
         run: cargo build --locked --release --features jvm --target ${{ matrix.target }}
       - name: Upload native library artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: jvm-native-${{ matrix.target }}
           path: target/${{ matrix.target }}/release/libjson_tools_rs.so
@@ -66,14 +66,14 @@ jobs:
       matrix:
         java-version: ["17", "21"]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: ${{ matrix.java-version }}
           cache: maven
           cache-dependency-path: jvm/pom.xml
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: jvm-native-x86_64-unknown-linux-gnu
           path: jvm/src/main/resources/native/linux-x86_64
@@ -86,18 +86,18 @@ jobs:
     needs: [native-build, mvn-test]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "17"
           cache: maven
           cache-dependency-path: jvm/pom.xml
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: jvm-native-x86_64-unknown-linux-gnu
           path: jvm/src/main/resources/native/linux-x86_64
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: jvm-native-aarch64-unknown-linux-gnu
           path: jvm/src/main/resources/native/linux-aarch64
@@ -115,7 +115,7 @@ jobs:
         working-directory: jvm
         run: mvn -B package -DskipTests
       - name: Upload packaged jar
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: json-tools-rs-spark-jar
           path: jvm/target/json-tools-rs-spark-*.jar
@@ -134,8 +134,8 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "17"
@@ -150,11 +150,11 @@ jobs:
           server-password: MAVEN_CENTRAL_PASSWORD
           gpg-private-key: ${{ secrets.GPG_PRIVATE_KEY }}
           gpg-passphrase: GPG_PASSPHRASE
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: jvm-native-x86_64-unknown-linux-gnu
           path: jvm/src/main/resources/native/linux-x86_64
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: jvm-native-aarch64-unknown-linux-gnu
           path: jvm/src/main/resources/native/linux-aarch64
