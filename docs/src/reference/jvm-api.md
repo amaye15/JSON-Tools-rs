@@ -63,11 +63,33 @@ All methods return `this` for chaining.
 | `.keyReplacement(find, replace)` | `String, String` | -- | Add a key replacement pattern (literal by default, `r'...'` for regex); repeatable |
 | `.valueReplacement(find, replace)` | `String, String` | -- | Add a value replacement pattern (literal by default, `r'...'` for regex); repeatable |
 | `.handleKeyCollision(value)` | `boolean` | `false` | Collect colliding keys into arrays |
-| `.autoConvertTypes(value)` | `boolean` | `false` | Auto-convert string values to native types |
+| `.autoConvertTypes(value)` | `boolean` | `false` | Auto-convert string values to native types (all 4 categories below, default behavior) |
+| `.convertDates(value)` | `boolean` | `false` | Date/datetime conversion, independently toggleable |
+| `.dateNormalizeToUtc(value)` | `boolean` | `true` | Normalize recognized dates/datetimes to UTC; `false` leaves them unchanged |
+| `.dateAssumeUtcForNaive(value)` | `boolean` | `true` | Append `Z` to timezone-less datetimes; `false` leaves them unchanged |
+| `.convertNulls(value)` | `boolean` | `false` | Null-string conversion, independently toggleable |
+| `.nullExtraToken(token)` | `String` | -- | Additional string recognized as null, beyond the built-in list; repeatable, additive |
+| `.convertBooleans(value)` | `boolean` | `false` | Boolean-string conversion, independently toggleable |
+| `.booleanExtraTrueToken(token)` / `.booleanExtraFalseToken(token)` | `String` | -- | Additional true/false strings, beyond the built-in lists; repeatable, additive |
+| `.convertNumbers(value)` | `boolean` | `false` | Numeric-string conversion, independently toggleable |
+| `.numberCurrency(value)` | `boolean` | `true` | Currency symbol/code/credit-debit-suffix stripping |
+| `.numberPercent(value)` | `boolean` | `true` | `%`/permille/per-ten-thousand suffix parsing |
+| `.numberBasisPoints(value)` | `boolean` | `true` | Text basis-point suffixes (`"25bps"`) |
+| `.numberSuffixes(value)` | `boolean` | `true` | K/M/B/T magnitude suffixes |
+| `.numberFractions(value)` | `boolean` | `true` | Fractions (`"1/2"`) |
+| `.numberRadix(value)` | `boolean` | `true` | Hex/binary/octal literals (`"0x1A"`) |
 | `.parallelThreshold(n)` | `int` | `100` | Min batch size for parallel processing |
 | `.numThreads(n)` | `int` | CPU count | Thread count for parallelism |
 | `.nestedParallelThreshold(n)` | `int` | `100` | Min keys/items for intra-document parallelism |
 | `.maxArrayIndex(n)` | `int` | `100_000` | Max array index during unflattening (DoS protection) |
+
+`.autoConvertTypes(value)` only ever flips each category's on/off switch -- it never
+resets a category's customization (set via `.dateNormalizeToUtc`, `.nullExtraToken`,
+etc.) back to defaults, regardless of call order. Plain integers/decimals, scientific
+notation, and thousands-separator cleanup are always applied when `.convertNumbers`
+is enabled, regardless of the other `number*` settings. See
+[Automatic Type Conversion](../guide/type-conversion.md#fine-grained-control) for the
+full behavior reference (shared across all three language bindings).
 
 Defaults for `parallelThreshold`, `nestedParallelThreshold`, `numThreads`, and
 `maxArrayIndex` can be overridden process-wide via the same environment variables as

@@ -278,7 +278,8 @@ There are also narrative walkthroughs for a quicker first read:
 | `.key_replacement(find, repl)` | Replace key patterns (literal, or regex via `r'...'`) | `.key_replacement("r'user_'", "")` |
 | `.value_replacement(find, repl)` | Replace value patterns (literal, or regex via `r'...'`) | `.value_replacement("@old.com", "@new.com")` |
 | `.handle_key_collision(bool)` | Collect colliding keys into arrays | `.handle_key_collision(true)` |
-| `.auto_convert_types(bool)` | Convert types (nums, bools, dates) | `.auto_convert_types(true)` |
+| `.auto_convert_types(bool)` | Convert types (nums, bools, dates, nulls) -- all 4 categories, default behavior | `.auto_convert_types(true)` |
+| `.convert_dates/nulls/booleans/numbers(bool)` | Convert types independently per category, with optional `_config(...)` customization | `.convert_numbers(true)` |
 | `.parallel_threshold(n)` | Min batch size for parallelism | `.parallel_threshold(500)` |
 | `.num_threads(n)` | Number of threads (default: CPU count) | `.num_threads(Some(4))` |
 | `.nested_parallel_threshold(n)` | Nested object parallelism size | `.nested_parallel_threshold(50)` |
@@ -286,7 +287,7 @@ There are also narrative walkthroughs for a quicker first read:
 
 ## Automatic Type Conversion
 
-When `.auto_convert_types(true)` is enabled, the library performs smart parsing on string values:
+When `.auto_convert_types(true)` is enabled, the library performs smart parsing on string values. For independent control over each category below (e.g. only converting numbers, or customizing date/null/boolean matching), use `.convert_dates()`/`.convert_nulls()`/`.convert_booleans()`/`.convert_numbers()` instead -- see [Automatic Type Conversion](https://amaye15.github.io/JSON-Tools-rs/guide/type-conversion.html) for the full per-category reference across all three language bindings.
 
 1. **Date & Time (ISO-8601)**:
 * Detects date strings to avoid converting them to numbers (e.g., "2024-01-01").

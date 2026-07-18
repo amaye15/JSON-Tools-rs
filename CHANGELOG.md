@@ -7,6 +7,114 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Fine-grained, per-category control over automatic type conversion**, across
+  Rust, Python, and JVM: `.convert_dates()`, `.convert_nulls()`,
+  `.convert_booleans()`, `.convert_numbers()` let each category be enabled/disabled
+  independently instead of the previous all-or-nothing `.auto_convert_types(bool)`,
+  which is unchanged and continues to mean "all four categories, default behavior"
+  -- it now only flips each category's own `enabled` bit, preserving any
+  per-category customization already configured (regardless of call order).
+  Each category also accepts real customization via a `_config` method (Rust:
+  `.convert_dates_config(DateConversionConfig::new()...)`; Python: kwargs, e.g.
+  `.convert_dates(True, assume_utc_for_naive=False)`; JVM: dedicated fluent methods,
+  e.g. `.dateAssumeUtcForNaive(false)`):
+  - **Dates**: `normalize_to_utc` (disable UTC normalization, leaving a recognized
+    date unchanged but still protected from number-parsing fallthrough) and
+    `assume_utc_for_naive` (disable the `Z`-append-on-naive-datetime behavior).
+  - **Nulls** / **Booleans**: recognize additional tokens beyond the built-in lists
+    (additive only -- the built-in list stays active regardless).
+  - **Numbers**: individually disable currency, percent/permille, text basis
+    points, K/M/B/T suffixes, fractions, or hex/binary/octal parsing. Plain
+    integers/decimals, scientific notation, and thousands-separator cleanup remain
+    always-on core behavior whenever the category is enabled.
+  New public types: `TypeConversionConfig`, `DateConversionConfig`,
+  `NullConversionConfig`, `BooleanConversionConfig`, `NumberConversionConfig`
+  (mirroring `FilteringConfig`'s existing shape: plain `pub` fields, `::new()`,
+  fluent `#[must_use]` setters).
+- Runnable examples and tests for the new API added across all three languages
+  (`examples/feature_by_feature.rs`, `python/examples/feature_by_feature.py`,
+  `jvm/examples/.../FeatureByFeature.java`; `src/tests.rs`,
+  `python/tests/tests.py`, `jvm/src/test/java/.../JsonToolsTest.java`); the
+  `iso_07_auto_type_conversion_only` Criterion benchmark gained `all_default_via_new_api`
+  (confirmed within ~1% of `auto_convert_types`, i.e. no hot-path regression for
+  existing usage -- see below), `partial_enable`, and `custom_config` cases. A new
+  `iso_07b_type_conversion_per_category` benchmark group isolates each category's
+  own per-string cost and specifically quantifies the extra-tokens fallback path's
+  overhead (~50% slower than the no-customization case for a mixed document, since
+  it adds a linear-scan check for every string that didn't match via the main
+  byte-dispatch -- a real, now-documented cost of using extra tokens, not a
+  regression in existing behavior).
+- Edge case coverage for the new per-category/customization surface, cross-checked
+  across all three languages: every number sub-format disabled at once (core
+  parsing still works), a negative radix-looking string with radix disabled, an
+  extra token appearing in both true/false lists (locks in true-wins precedence),
+  an extra token duplicating a built-in one (harmless), a disabled category with
+  leftover/inert customization (no effect), category-priority-order interactions
+  between dates and null-extra-tokens (dates win when enabled; the null extra
+  token wins when dates are off), fine-grained config across a full batch
+  (exercises the parallel dispatch path), and extra tokens matching against the
+  *trimmed* value rather than the raw string (consistent with every other
+  category -- e.g. `"si "` still matches an extra token `"si"`, discovered while
+  porting the Rust test to Python and locked in on both sides). Python additionally
+  covers its `extra_tokens` kwarg's bulk-replace semantics (a second call's list
+  replaces, not merges with, an earlier one -- unlike Rust/Java's additive
+  `add_extra_token()`/`.nullExtraToken()`), unicode extra tokens round-tripping
+  correctly across the Python↔Rust FFI boundary, and the distinction between
+  `extra_tokens=[]` (explicit empty list -- clears previously-set customization)
+  vs. omitting the kwarg entirely (`None` -- preserves it).
+- Two further rounds of edge cases, again cross-checked across all three
+  languages: a numeric-looking extra boolean/null token (e.g. `"1"`) is only
+  reachable through the extra-tokens fallback pass, so it loses to plain number
+  parsing when `convert_numbers` is also enabled (the digit-dispatch arm claims
+  the string first) but wins when numbers is disabled -- a genuinely non-obvious
+  interaction, now locked in explicitly rather than left as an accident of
+  implementation order. Also: extra-token case-sensitivity, a malformed
+  superficially-date-shaped string (`"2024-13-45T99:99:99"`) failing safely
+  without corruption, an invalid leap-year date (`"2023-02-29"`, 2023 isn't a
+  leap year) correctly falling through rather than being misrecognized, a valid
+  leap-year date recognized but left unchanged (already canonical), the compact
+  datetime format (`"20240115T103000"`, no separators) exercised through the
+  configured code path for the first time, keys never being type-converted
+  (only values are candidates), and each number sub-format tested individually
+  enabled (complementing the existing "all-but-one-disabled" coverage). One
+  finding worth calling out specifically: **replacement-then-conversion
+  chaining is a pre-existing (not introduced by this feature) inconsistency
+  across processing modes** -- `.flatten()`/`.unflatten()` return as soon as a
+  `value_replacement` matches, without ever trying type conversion on the
+  replaced value, while `.normal()` chains the two. Confirmed identical through
+  the new fine-grained API in all three languages and locked in with tests, so a
+  future refactor of any of the three walkers doesn't silently change it.
+
+### Changed (BREAKING)
+- **`ProcessingConfig` (and `FilteringConfig`/`CollisionConfig`/`ReplacementConfig`)
+  are now `#[non_exhaustive]`**, matching `JsonToolsError`'s existing precedent.
+  Breaks external code constructing these via a bare struct literal instead of
+  `::new()` + the fluent builder methods; does not affect the `JSONTools` builder
+  (the recommended interface) or any code already using `::new()`. Added now,
+  deliberately, so that future config additions (to any of these four structs) don't
+  need this same breaking-change deliberation again.
+- **`ProcessingConfig.auto_convert_types: bool` removed**, replaced by
+  `ProcessingConfig.type_conversion: TypeConversionConfig`. Breaks external code
+  that directly *read* `config.auto_convert_types` (constructing via struct literal
+  was already blocked by `#[non_exhaustive]` above); avoids a dual-source-of-truth
+  bug class between a flat bool and the new per-category structure. The `JSONTools`
+  builder's own `.auto_convert_types(bool)` method is unaffected.
+
+### Performance
+- The existing, heavily-profiled `try_convert_string_to_json_bytes` hot-path
+  function is **not modified at all** by this change -- it remains the code path
+  for the common case (all four categories enabled with untouched default
+  sub-settings, which is what `.auto_convert_types(true)` alone produces),
+  selected via a `TypeConversionMode` (`Disabled`/`AllDefault`/`Custom`) computed
+  once per `execute()` call and cached on `ProcessingConfig`, not recomputed per
+  string. A new, separate `_configured` code path (real, not thin-wrapper,
+  duplication of the per-category-gated logic) only runs for genuinely new usage
+  (partial-enable or customized knobs). Verified via the extended
+  `iso_07_auto_type_conversion_only` benchmark: `all_default_via_new_api` lands
+  within ~1% of `auto_convert_types` across repeated runs, well inside this
+  project's own established ~3-5% binary-layout noise floor.
+
 ## [0.9.5] - 2026-07-18
 
 ### Fixed

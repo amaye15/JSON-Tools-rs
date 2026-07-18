@@ -43,6 +43,7 @@ pub(crate) enum OperationMode {
 
 /// Configuration for filtering operations
 #[derive(Debug, Clone, Default)]
+#[non_exhaustive]
 pub struct FilteringConfig {
     /// Remove keys with empty string values
     pub remove_empty_strings: bool,
@@ -99,6 +100,7 @@ impl FilteringConfig {
 
 /// Configuration for collision handling strategies
 #[derive(Debug, Clone, Default)]
+#[non_exhaustive]
 pub struct CollisionConfig {
     /// Handle key collisions by collecting values into arrays
     pub handle_collisions: bool,
@@ -125,6 +127,7 @@ impl CollisionConfig {
 
 /// Configuration for replacement operations
 #[derive(Debug, Clone, Default)]
+#[non_exhaustive]
 pub struct ReplacementConfig {
     /// Key replacement patterns (find, replace)
     /// Uses SmallVec to avoid heap allocation for 0-2 replacements (common case)
@@ -176,8 +179,368 @@ impl ReplacementConfig {
     }
 }
 
+/// Configuration for date/datetime string detection and UTC normalization, used by
+/// [`TypeConversionConfig`].
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub struct DateConversionConfig {
+    /// Enable date/datetime detection and conversion
+    pub enabled: bool,
+    /// Normalize recognized dates/datetimes to UTC (default: true). When false, a
+    /// value recognized as a date/datetime is left byte-for-byte unchanged, but is
+    /// still protected from being misinterpreted as a number by the numbers category.
+    pub normalize_to_utc: bool,
+    /// For naive datetimes with no timezone info (e.g. `"2024-01-15T10:30:00"`),
+    /// assume UTC and append `Z` (default: true). When false, naive datetimes are
+    /// left as-is (still protected from number parsing, but not rewritten) since
+    /// their true offset is unknown.
+    pub assume_utc_for_naive: bool,
+}
+
+impl Default for DateConversionConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            normalize_to_utc: true,
+            assume_utc_for_naive: true,
+        }
+    }
+}
+
+impl DateConversionConfig {
+    /// Create a new DateConversionConfig with default settings (disabled)
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Enable or disable date/datetime conversion
+    #[must_use]
+    pub fn enabled(mut self, enabled: bool) -> Self {
+        self.enabled = enabled;
+        self
+    }
+
+    /// Configure UTC normalization of recognized dates/datetimes
+    #[must_use]
+    pub fn normalize_to_utc(mut self, enabled: bool) -> Self {
+        self.normalize_to_utc = enabled;
+        self
+    }
+
+    /// Configure whether naive (timezone-less) datetimes are assumed to be UTC
+    #[must_use]
+    pub fn assume_utc_for_naive(mut self, enabled: bool) -> Self {
+        self.assume_utc_for_naive = enabled;
+        self
+    }
+}
+
+/// Configuration for null-string detection, used by [`TypeConversionConfig`].
+#[derive(Debug, Clone, PartialEq, Default)]
+#[non_exhaustive]
+pub struct NullConversionConfig {
+    /// Enable null-string detection and conversion
+    pub enabled: bool,
+    /// Additional strings recognized as null, beyond the built-in list (`"null"`,
+    /// `"NULL"`, `"Null"`, `"nil"`, `"NIL"`, `"Nil"`, `"none"`, `"NONE"`, `"None"`,
+    /// `"N/A"`, `"n/a"`, `"NA"`, `"na"`). Additive only -- cannot narrow the built-in
+    /// list. Matched exactly (case-sensitive).
+    pub extra_tokens: SmallVec<[String; 2]>,
+}
+
+impl NullConversionConfig {
+    /// Create a new NullConversionConfig with default settings (disabled)
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Enable or disable null-string conversion
+    #[must_use]
+    pub fn enabled(mut self, enabled: bool) -> Self {
+        self.enabled = enabled;
+        self
+    }
+
+    /// Add an additional string to recognize as null, beyond the built-in list
+    #[must_use]
+    pub fn add_extra_token(mut self, token: impl Into<String>) -> Self {
+        self.extra_tokens.push(token.into());
+        self
+    }
+
+    /// Check if any extra null tokens are configured
+    pub fn has_extra_tokens(&self) -> bool {
+        !self.extra_tokens.is_empty()
+    }
+}
+
+/// Configuration for boolean-string detection, used by [`TypeConversionConfig`].
+#[derive(Debug, Clone, PartialEq, Default)]
+#[non_exhaustive]
+pub struct BooleanConversionConfig {
+    /// Enable boolean-string detection and conversion
+    pub enabled: bool,
+    /// Additional strings recognized as `true`, beyond the built-in list (`"true"`,
+    /// `"TRUE"`, `"True"`, `"yes"`, `"YES"`, `"Yes"`, `"y"`, `"Y"`, `"on"`, `"ON"`,
+    /// `"On"`). Additive only. Matched exactly (case-sensitive).
+    pub extra_true_tokens: SmallVec<[String; 2]>,
+    /// Additional strings recognized as `false`, beyond the built-in list (`"false"`,
+    /// `"FALSE"`, `"False"`, `"no"`, `"NO"`, `"No"`, `"n"`, `"N"`, `"off"`, `"OFF"`,
+    /// `"Off"`). Additive only. Matched exactly (case-sensitive).
+    pub extra_false_tokens: SmallVec<[String; 2]>,
+}
+
+impl BooleanConversionConfig {
+    /// Create a new BooleanConversionConfig with default settings (disabled)
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Enable or disable boolean-string conversion
+    #[must_use]
+    pub fn enabled(mut self, enabled: bool) -> Self {
+        self.enabled = enabled;
+        self
+    }
+
+    /// Add an additional string to recognize as `true`, beyond the built-in list
+    #[must_use]
+    pub fn add_extra_true_token(mut self, token: impl Into<String>) -> Self {
+        self.extra_true_tokens.push(token.into());
+        self
+    }
+
+    /// Add an additional string to recognize as `false`, beyond the built-in list
+    #[must_use]
+    pub fn add_extra_false_token(mut self, token: impl Into<String>) -> Self {
+        self.extra_false_tokens.push(token.into());
+        self
+    }
+
+    /// Check if any extra boolean tokens are configured
+    pub fn has_extra_tokens(&self) -> bool {
+        !self.extra_true_tokens.is_empty() || !self.extra_false_tokens.is_empty()
+    }
+}
+
+/// Configuration for numeric-string detection, used by [`TypeConversionConfig`].
+///
+/// Plain integers/decimals, scientific notation, and thousands-separator cleanup
+/// (`"1,234.56"`, `"1.234,56"`, `"1 234.56"`) are always-on "core" behavior whenever
+/// `enabled` is true -- no one asked to disable unambiguous number parsing. The
+/// remaining sub-formats are individually toggleable because each is "opinionated"
+/// (can reinterpret a string that wasn't meant to be a number) in a way plain numeric
+/// parsing isn't.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub struct NumberConversionConfig {
+    /// Enable numeric-string detection and conversion
+    pub enabled: bool,
+    /// Strip currency symbols (`$`, etc.), 3-letter currency codes (`USD`, `EUR`,
+    /// ... -- only when followed by a space), and credit/debit suffixes (`CR`/`DR`).
+    /// Default: true.
+    pub currency: bool,
+    /// Parse `%`, `\u{2030}` (permille), and `\u{2031}` (per-ten-thousand) suffixes.
+    /// Default: true.
+    pub percent: bool,
+    /// Parse text basis-point suffixes: `"25bp"`/`"25bps"`/`"25 bp"`/`"25 bps"`.
+    /// Default: true.
+    pub basis_points: bool,
+    /// Parse K/M/B/T magnitude suffixes: `"1K"`, `"2.5M"`, `"3B"`, `"1T"`.
+    /// Default: true.
+    pub suffixes: bool,
+    /// Parse fractions: `"1/2"`, `"2 1/2"`. Default: true.
+    pub fractions: bool,
+    /// Parse hex/binary/octal literals: `"0x1A2B"`, `"0b1010"`, `"0o777"`.
+    /// Default: true.
+    pub radix: bool,
+}
+
+impl Default for NumberConversionConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            currency: true,
+            percent: true,
+            basis_points: true,
+            suffixes: true,
+            fractions: true,
+            radix: true,
+        }
+    }
+}
+
+impl NumberConversionConfig {
+    /// Create a new NumberConversionConfig with default settings (disabled)
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Enable or disable numeric-string conversion
+    #[must_use]
+    pub fn enabled(mut self, enabled: bool) -> Self {
+        self.enabled = enabled;
+        self
+    }
+
+    /// Configure currency symbol/code/credit-debit-suffix stripping
+    #[must_use]
+    pub fn currency(mut self, enabled: bool) -> Self {
+        self.currency = enabled;
+        self
+    }
+
+    /// Configure percent/permille/per-ten-thousand suffix parsing
+    #[must_use]
+    pub fn percent(mut self, enabled: bool) -> Self {
+        self.percent = enabled;
+        self
+    }
+
+    /// Configure text basis-point suffix parsing
+    #[must_use]
+    pub fn basis_points(mut self, enabled: bool) -> Self {
+        self.basis_points = enabled;
+        self
+    }
+
+    /// Configure K/M/B/T magnitude suffix parsing
+    #[must_use]
+    pub fn suffixes(mut self, enabled: bool) -> Self {
+        self.suffixes = enabled;
+        self
+    }
+
+    /// Configure fraction parsing
+    #[must_use]
+    pub fn fractions(mut self, enabled: bool) -> Self {
+        self.fractions = enabled;
+        self
+    }
+
+    /// Configure hex/binary/octal literal parsing
+    #[must_use]
+    pub fn radix(mut self, enabled: bool) -> Self {
+        self.radix = enabled;
+        self
+    }
+}
+
+/// Bundles all four type-conversion categories (dates, nulls, booleans, numbers).
+/// Assembled by [`crate::JSONTools`]'s `convert_*`/`convert_*_config`/
+/// `auto_convert_types` builder methods and consumed by the processing engine.
+#[derive(Debug, Clone, Default)]
+#[non_exhaustive]
+pub struct TypeConversionConfig {
+    /// Date/datetime conversion settings
+    pub dates: DateConversionConfig,
+    /// Null-string conversion settings
+    pub nulls: NullConversionConfig,
+    /// Boolean-string conversion settings
+    pub booleans: BooleanConversionConfig,
+    /// Numeric-string conversion settings
+    pub numbers: NumberConversionConfig,
+}
+
+impl TypeConversionConfig {
+    /// Create a new TypeConversionConfig with all categories disabled
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Configure date/datetime conversion
+    #[must_use]
+    pub fn dates(mut self, config: DateConversionConfig) -> Self {
+        self.dates = config;
+        self
+    }
+
+    /// Configure null-string conversion
+    #[must_use]
+    pub fn nulls(mut self, config: NullConversionConfig) -> Self {
+        self.nulls = config;
+        self
+    }
+
+    /// Configure boolean-string conversion
+    #[must_use]
+    pub fn booleans(mut self, config: BooleanConversionConfig) -> Self {
+        self.booleans = config;
+        self
+    }
+
+    /// Configure numeric-string conversion
+    #[must_use]
+    pub fn numbers(mut self, config: NumberConversionConfig) -> Self {
+        self.numbers = config;
+        self
+    }
+
+    /// Check if any type-conversion category is enabled
+    pub fn has_any_enabled(&self) -> bool {
+        self.dates.enabled || self.nulls.enabled || self.booleans.enabled || self.numbers.enabled
+    }
+
+    /// Classify into the fast-path bucket used by the hot per-string call sites in
+    /// `flatten.rs`/`unflatten.rs`/`transform.rs`. Cheap (a handful of field/
+    /// `is_empty()` comparisons, no allocation) -- computed once per `execute()` call
+    /// in `ProcessingConfig::from_json_tools()`, not per string. See
+    /// `TypeConversionMode`'s own doc comment for why this split exists.
+    pub(crate) fn classify(&self) -> TypeConversionMode {
+        if !self.has_any_enabled() {
+            return TypeConversionMode::Disabled;
+        }
+        let all_default = self.dates
+            == DateConversionConfig {
+                enabled: true,
+                ..DateConversionConfig::default()
+            }
+            && self.nulls
+                == NullConversionConfig {
+                    enabled: true,
+                    ..NullConversionConfig::default()
+                }
+            && self.booleans
+                == BooleanConversionConfig {
+                    enabled: true,
+                    ..BooleanConversionConfig::default()
+                }
+            && self.numbers
+                == NumberConversionConfig {
+                    enabled: true,
+                    ..NumberConversionConfig::default()
+                };
+        if all_default {
+            TypeConversionMode::AllDefault
+        } else {
+            TypeConversionMode::Custom
+        }
+    }
+}
+
+/// Precomputed fast-path classification of a [`TypeConversionConfig`], cached on
+/// [`ProcessingConfig`]. Not part of the public API -- purely an internal dispatch
+/// optimization that lets the hot per-string call sites in `flatten.rs`/
+/// `unflatten.rs`/`transform.rs` avoid re-deriving "is this the untouched-default
+/// case" on every single string value. `AllDefault` routes to the original,
+/// unmodified `try_convert_string_to_json_bytes` (zero behavior/performance change
+/// from before this type existed); `Custom` routes to the new
+/// `try_convert_string_to_json_bytes_configured`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub(crate) enum TypeConversionMode {
+    /// No type-conversion category is enabled
+    Disabled,
+    /// All four categories are enabled with untouched default sub-settings
+    AllDefault,
+    /// At least one category is enabled with non-default sub-settings, or only a
+    /// subset of categories is enabled
+    Custom,
+}
+
 /// Comprehensive configuration for JSON processing operations
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct ProcessingConfig {
     /// Separator for nested keys (default: ".")
     pub separator: String,
@@ -189,8 +552,12 @@ pub struct ProcessingConfig {
     pub collision: CollisionConfig,
     /// Replacement configuration
     pub replacements: ReplacementConfig,
-    /// Automatically convert string values to numbers and booleans
-    pub auto_convert_types: bool,
+    /// Type-conversion configuration (dates, nulls, booleans, numbers)
+    pub type_conversion: TypeConversionConfig,
+    /// Precomputed fast-path classification of `type_conversion`, cached here so the
+    /// hot per-string call sites never re-derive it. See `TypeConversionMode`'s doc
+    /// comment.
+    pub(crate) type_conversion_mode: TypeConversionMode,
     /// Minimum batch size for parallel processing
     pub parallel_threshold: usize,
     /// Number of threads for parallel processing (None = use system default)
@@ -212,7 +579,8 @@ impl Default for ProcessingConfig {
             filtering: FilteringConfig::default(),
             collision: CollisionConfig::default(),
             replacements: ReplacementConfig::default(),
-            auto_convert_types: false,
+            type_conversion: TypeConversionConfig::default(),
+            type_conversion_mode: TypeConversionMode::Disabled,
             parallel_threshold: *DEFAULT_PARALLEL_THRESHOLD,
             num_threads: None, // Use system default (number of logical CPUs)
             nested_parallel_threshold: *DEFAULT_NESTED_PARALLEL_THRESHOLD,
@@ -270,6 +638,14 @@ impl ProcessingConfig {
     #[must_use]
     pub fn replacements(mut self, replacements: ReplacementConfig) -> Self {
         self.replacements = replacements;
+        self
+    }
+
+    /// Configure type-conversion options (dates, nulls, booleans, numbers)
+    #[must_use]
+    pub fn type_conversion(mut self, type_conversion: TypeConversionConfig) -> Self {
+        self.type_conversion_mode = type_conversion.classify();
+        self.type_conversion = type_conversion;
         self
     }
 }

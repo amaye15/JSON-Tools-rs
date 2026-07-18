@@ -163,8 +163,62 @@ public final class FeatureByFeature {
             System.out.println("   Out: " + tools.execute(input) + "\n");
         }
 
-        // 16. .maxArrayIndex() - DoS guard during unflatten
-        System.out.println("16. .maxArrayIndex()");
+        // 16. .convertDates() - independent date/datetime conversion
+        System.out.println("16. .convertDates() / .dateAssumeUtcForNaive()");
+        input = "{\"d\":\"2024-01-15T10:30:00\",\"b\":\"true\"}";
+        try (JsonToolsHandle tools = JsonTools.builder()
+                .flatten()
+                .convertDates(true)
+                .dateAssumeUtcForNaive(false)
+                .build()) {
+            System.out.println("   In:  " + input);
+            System.out.println("   Out: " + tools.execute(input));
+            System.out.println(
+                    "   Note: only dates convert (dateAssumeUtcForNaive(false) keeps this one unchanged)\n");
+        }
+
+        // 17. .convertNulls() - independent null conversion, with extra tokens
+        System.out.println("17. .convertNulls() / .nullExtraToken()");
+        input = "{\"a\":\"missing\",\"b\":\"N/A\",\"c\":\"not_a_token\"}";
+        try (JsonToolsHandle tools = JsonTools.builder()
+                .flatten()
+                .convertNulls(true)
+                .nullExtraToken("missing")
+                .build()) {
+            System.out.println("   In:  " + input);
+            System.out.println("   Out: " + tools.execute(input));
+            System.out.println("   Note: 'missing' is a custom extra token; built-in 'N/A' still works\n");
+        }
+
+        // 18. .convertBooleans() - independent boolean conversion, with extra tokens
+        System.out.println("18. .convertBooleans() / .booleanExtraTrueToken() / .booleanExtraFalseToken()");
+        input = "{\"a\":\"si\",\"b\":\"nope\",\"c\":\"true\"}";
+        try (JsonToolsHandle tools = JsonTools.builder()
+                .flatten()
+                .convertBooleans(true)
+                .booleanExtraTrueToken("si")
+                .booleanExtraFalseToken("nope")
+                .build()) {
+            System.out.println("   In:  " + input);
+            System.out.println("   Out: " + tools.execute(input) + "\n");
+        }
+
+        // 19. .convertNumbers() - independent number conversion, sub-format toggles
+        System.out.println("19. .convertNumbers() / .numberCurrency()");
+        input = "{\"price\":\"$45.67\",\"count\":\"1,234.56\"}";
+        try (JsonToolsHandle tools = JsonTools.builder()
+                .flatten()
+                .convertNumbers(true)
+                .numberCurrency(false)
+                .build()) {
+            System.out.println("   In:  " + input);
+            System.out.println("   Out: " + tools.execute(input));
+            System.out.println(
+                    "   Note: numberCurrency(false) leaves '$45.67' as a string; thousands-separator cleanup is still core\n");
+        }
+
+        // 20. .maxArrayIndex() - DoS guard during unflatten
+        System.out.println("20. .maxArrayIndex()");
         String okInput = "{\"items.0\":\"a\",\"items.1\":\"b\"}";
         try (JsonToolsHandle tools =
                 JsonTools.builder().unflatten().maxArrayIndex(10).build()) {
@@ -181,8 +235,8 @@ public final class FeatureByFeature {
             System.out.println("                  Err: " + e.getMessage() + "\n");
         }
 
-        // 17. Parallel processing tuning knobs
-        System.out.println("17. .parallelThreshold() / .numThreads() / .nestedParallelThreshold()");
+        // 21. Parallel processing tuning knobs
+        System.out.println("21. .parallelThreshold() / .numThreads() / .nestedParallelThreshold()");
         String[] batch = new String[200];
         for (int i = 0; i < batch.length; i++) {
             batch[i] = "{\"id\":" + i + ",\"data\":{\"value\":" + (i * 10) + "}}";
@@ -198,8 +252,8 @@ public final class FeatureByFeature {
             System.out.println("   Sample: " + results[0] + "\n");
         }
 
-        // 18. Batch processing - a single executeBatch() call over many documents
-        System.out.println("18. Batch processing (String[] input -> String[] output)");
+        // 22. Batch processing - a single executeBatch() call over many documents
+        System.out.println("22. Batch processing (String[] input -> String[] output)");
         String[] smallBatch = {"{\"a\":{\"b\":1}}", "{\"c\":{\"d\":2}}"};
         try (JsonToolsHandle tools = JsonTools.builder().flatten().build()) {
             String[] results = tools.executeBatch(smallBatch);
