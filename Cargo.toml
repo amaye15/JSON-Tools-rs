@@ -66,14 +66,14 @@ rayon = "1.12.0"  # Persistent work-stealing thread pool: avoids per-call OS thr
 # O(1) lookup + insertion order, for unflatten's object tree (no per-node sort needed).
 # Pinned <2.12: indexmap 2.12.0 raised its own rust-version to 1.82, and 2.14.0 requires
 # edition2024 (~1.85) -- both above this crate's MSRV of 1.80. 2.11.x's MSRV is 1.63.
-indexmap = ">=2.11, <2.12"
+indexmap = ">=2.11, <2.15"
 
 [target.'cfg(target_pointer_width = "64")'.dependencies]
 # sonic-rs is fastest but only works on 64-bit architectures.
 # Pinned to exactly 0.5.7: 0.5.8 uses exposed_provenance/strict_provenance, which
 # require a newer rustc than this crate's MSRV of 1.80 (confirmed via a real MSRV CI
 # failure) despite being a semver-patch bump upstream.
-sonic-rs = "=0.5.7"
+sonic-rs = "=0.5.8"
 
 [target.'cfg(target_pointer_width = "32")'.dependencies]
 # simd-json fallback for 32-bit architectures
