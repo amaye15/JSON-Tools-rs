@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.6] - 2026-07-19
+
 ### Added
 - **Fine-grained, per-category control over automatic type conversion**, across
   Rust, Python, and JVM: `.convert_dates()`, `.convert_nulls()`,

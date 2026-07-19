@@ -533,24 +533,28 @@ impl JSONTools {
 
     /// Read the currently configured date-conversion settings. `pub(crate)` --
     /// used by the Python bindings' read-modify-write kwargs bridging.
+    #[cfg(feature = "python")]
     pub(crate) fn date_conversion(&self) -> &DateConversionConfig {
         &self.date_conversion
     }
 
     /// Read the currently configured null-conversion settings. `pub(crate)` --
     /// used by the Python bindings' read-modify-write kwargs bridging.
+    #[cfg(feature = "python")]
     pub(crate) fn null_conversion(&self) -> &NullConversionConfig {
         &self.null_conversion
     }
 
     /// Read the currently configured boolean-conversion settings. `pub(crate)` --
     /// used by the Python bindings' read-modify-write kwargs bridging.
+    #[cfg(feature = "python")]
     pub(crate) fn boolean_conversion(&self) -> &BooleanConversionConfig {
         &self.boolean_conversion
     }
 
     /// Read the currently configured number-conversion settings. `pub(crate)` --
     /// used by the Python bindings' read-modify-write kwargs bridging.
+    #[cfg(feature = "python")]
     pub(crate) fn number_conversion(&self) -> &NumberConversionConfig {
         &self.number_conversion
     }
