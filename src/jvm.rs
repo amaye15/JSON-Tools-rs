@@ -13,11 +13,11 @@
 //! panic that crosses the JNI boundary into JVM frames is undefined behavior, so
 //! every single entry point must go through it, not just the ones that look risky.
 
-use std::panic::{catch_unwind, AssertUnwindSafe};
-
+use jni::errors::ErrorPolicy;
 use jni::objects::{JClass, JObject, JObjectArray, JString};
+use jni::strings::JNIString;
 use jni::sys::{jlong, jobjectArray, jsize, jstring};
-use jni::JNIEnv;
+use jni::{Env, EnvUnowned};
 use serde::Deserialize;
 
 use crate::builder::JSONTools;
@@ -229,10 +229,11 @@ fn build_tools(config_json: &str) -> Result<JSONTools, JsonToolsError> {
     Ok(tools)
 }
 
-fn throw(env: &mut JNIEnv, message: &str) {
+fn throw(env: &mut Env, message: &str) {
     // If throwing itself fails (e.g. OOM), there's nothing more we can do here; the
     // JVM will surface whatever pending-exception state exists on return.
-    let _ = env.throw_new(EXCEPTION_CLASS, message);
+    // `throw_new` needs `AsRef<JNIStr>` args, not plain `&str` (since jni 0.22).
+    let _ = env.throw_new(JNIString::from(EXCEPTION_CLASS), JNIString::from(message));
 }
 
 fn panic_message(panic: &(dyn std::any::Any + Send)) -> String {
@@ -245,24 +246,41 @@ fn panic_message(panic: &(dyn std::any::Any + Send)) -> String {
     }
 }
 
-/// Run `body`, catching panics and converting any `Err`/panic into a thrown
-/// `JsonToolsException`, returning `default` in both cases.
-fn guard<'local, R>(
-    env: &mut JNIEnv<'local>,
-    default: R,
-    body: impl FnOnce(&mut JNIEnv<'local>) -> Result<R, JsonToolsError>,
-) -> R {
-    match catch_unwind(AssertUnwindSafe(|| body(env))) {
-        Ok(Ok(value)) => value,
-        Ok(Err(e)) => {
-            throw(env, &e.to_string());
-            default
-        }
-        Err(panic) => {
-            let message = panic_message(&*panic);
-            throw(env, &format!("internal panic in native code: {message}"));
-            default
-        }
+/// Error policy for [`EnvOutcome::resolve`]: converts any `Err`/panic from a
+/// native entry point's body into a thrown `JsonToolsException`, returning
+/// `T::default()` in both cases. `EnvUnowned::with_env` already wraps the body
+/// in `catch_unwind` for us, so this only needs to handle the two outcomes.
+struct ThrowJsonToolsException;
+
+impl<T: Default> ErrorPolicy<T, JsonToolsError> for ThrowJsonToolsException {
+    type Captures<'unowned_env_local, 'native_method>
+        = ()
+    where
+        'unowned_env_local: 'native_method;
+
+    fn on_error<'unowned_env_local, 'native_method>(
+        env: &mut Env<'unowned_env_local>,
+        _cap: &mut Self::Captures<'unowned_env_local, 'native_method>,
+        err: JsonToolsError,
+    ) -> jni::errors::Result<T>
+    where
+        'unowned_env_local: 'native_method,
+    {
+        throw(env, &err.to_string());
+        Ok(T::default())
+    }
+
+    fn on_panic<'unowned_env_local, 'native_method>(
+        env: &mut Env<'unowned_env_local>,
+        _cap: &mut Self::Captures<'unowned_env_local, 'native_method>,
+        payload: Box<dyn std::any::Any + Send + 'static>,
+    ) -> jni::errors::Result<T>
+    where
+        'unowned_env_local: 'native_method,
+    {
+        let message = panic_message(&*payload);
+        throw(env, &format!("internal panic in native code: {message}"));
+        Ok(T::default())
     }
 }
 
@@ -271,34 +289,36 @@ fn guard<'local, R>(
 #[allow(non_snake_case)]
 #[no_mangle]
 pub extern "system" fn Java_io_github_amaye15_jsontoolsrs_JsonToolsNative_nativeCreate<'local>(
-    mut env: JNIEnv<'local>,
+    mut env: EnvUnowned<'local>,
     _class: JClass<'local>,
     config_json: JString<'local>,
 ) -> jlong {
-    guard(&mut env, 0i64, |env| {
-        let config_str: String = env.get_string(&config_json)?.into();
+    env.with_env(|env| -> Result<jlong, JsonToolsError> {
+        let config_str = config_json.try_to_string(env)?;
         let tools = build_tools(&config_str)?;
         Ok(Box::into_raw(Box::new(tools)) as jlong)
     })
+    .resolve::<ThrowJsonToolsException>()
 }
 
 /// Process a single JSON document through the handle built by `nativeCreate`.
 #[allow(non_snake_case)]
 #[no_mangle]
 pub extern "system" fn Java_io_github_amaye15_jsontoolsrs_JsonToolsNative_nativeExecute<'local>(
-    mut env: JNIEnv<'local>,
+    mut env: EnvUnowned<'local>,
     _class: JClass<'local>,
     handle: jlong,
     json: JString<'local>,
 ) -> jstring {
-    guard(&mut env, std::ptr::null_mut(), |env| {
+    env.with_env(|env| -> Result<jstring, JsonToolsError> {
         // SAFETY: `handle` is a pointer previously returned by `nativeCreate` and not
         // yet passed to `nativeDestroy` -- the Java-side handle owner enforces this.
         let tools = unsafe { &*(handle as *const JSONTools) };
-        let json_str: String = env.get_string(&json)?.into();
+        let json_str = json.try_to_string(env)?;
         let result = tools.execute(json_str.as_str())?.try_into_single()?;
         Ok(env.new_string(result)?.into_raw())
     })
+    .resolve::<ThrowJsonToolsException>()
 }
 
 /// Process a batch of JSON documents in one native call, using the existing
@@ -309,39 +329,42 @@ pub extern "system" fn Java_io_github_amaye15_jsontoolsrs_JsonToolsNative_native
 pub extern "system" fn Java_io_github_amaye15_jsontoolsrs_JsonToolsNative_nativeExecuteBatch<
     'local,
 >(
-    mut env: JNIEnv<'local>,
+    mut env: EnvUnowned<'local>,
     _class: JClass<'local>,
     handle: jlong,
-    json_array: JObjectArray<'local>,
+    json_array: JObjectArray<'local, JString<'local>>,
 ) -> jobjectArray {
-    guard(&mut env, std::ptr::null_mut(), |env| {
+    env.with_env(|env| -> Result<jobjectArray, JsonToolsError> {
         // SAFETY: see nativeExecute.
         let tools = unsafe { &*(handle as *const JSONTools) };
-        let len = env.get_array_length(&json_array)?.max(0) as usize;
+        let len = json_array.len(env)?;
 
         // JNI's default local-reference-table capacity (~512 on most JVMs) is
         // trivially exhausted by extracting/constructing thousands of JStrings in
         // one call otherwise -- request enough up front for both the input reads
         // and the output writes below.
-        env.ensure_local_capacity(2 * (len as jsize) + 16)?;
+        env.ensure_local_capacity(2 * len + 16)?;
 
         let mut inputs: Vec<String> = Vec::with_capacity(len);
         for i in 0..len {
-            let element = env.get_object_array_element(&json_array, i as jsize)?;
-            let jstr = JString::from(element);
-            inputs.push(env.get_string(&jstr)?.into());
+            let jstr = json_array.get_element(env, i)?;
+            inputs.push(jstr.try_to_string(env)?);
         }
 
         let results = tools.execute(inputs)?.try_into_multiple()?;
 
-        let out_array =
-            env.new_object_array(results.len() as jsize, "java/lang/String", JObject::null())?;
+        let out_array = env.new_object_array(
+            results.len() as jsize,
+            JNIString::from("java/lang/String"),
+            JObject::null(),
+        )?;
         for (i, s) in results.into_iter().enumerate() {
             let js = env.new_string(s)?;
-            env.set_object_array_element(&out_array, i as jsize, &js)?;
+            out_array.set_element(env, i, &js)?;
         }
         Ok(out_array.into_raw())
     })
+    .resolve::<ThrowJsonToolsException>()
 }
 
 /// Free a handle previously returned by `nativeCreate`. Tier-1 (row UDF) handles are
@@ -351,11 +374,11 @@ pub extern "system" fn Java_io_github_amaye15_jsontoolsrs_JsonToolsNative_native
 #[allow(non_snake_case)]
 #[no_mangle]
 pub extern "system" fn Java_io_github_amaye15_jsontoolsrs_JsonToolsNative_nativeDestroy<'local>(
-    mut env: JNIEnv<'local>,
+    mut env: EnvUnowned<'local>,
     _class: JClass<'local>,
     handle: jlong,
 ) {
-    guard(&mut env, (), |_env| {
+    env.with_env(|_env| -> Result<(), JsonToolsError> {
         if handle != 0 {
             // SAFETY: see nativeExecute; this is the one call site allowed to
             // invalidate the pointer, and callers must not use it afterward.
@@ -365,4 +388,5 @@ pub extern "system" fn Java_io_github_amaye15_jsontoolsrs_JsonToolsNative_native
         }
         Ok(())
     })
+    .resolve::<ThrowJsonToolsException>()
 }
