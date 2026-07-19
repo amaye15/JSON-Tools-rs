@@ -462,6 +462,10 @@ mod tests;
 // ================================================================================================
 
 pub use builder::JSONTools;
-pub use config::{CollisionConfig, FilteringConfig, ProcessingConfig, ReplacementConfig};
+pub use config::{
+    BooleanConversionConfig, CollisionConfig, DateConversionConfig, FilteringConfig,
+    NullConversionConfig, NumberConversionConfig, ProcessingConfig, ReplacementConfig,
+    TypeConversionConfig,
+};
 pub use error::JsonToolsError;
 pub use types::{JsonInput, JsonOutput};

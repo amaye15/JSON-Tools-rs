@@ -3,7 +3,10 @@
 //! Companion to `feature_combinations.rs`, which shows curated multi-feature
 //! pipelines. Run with: `cargo run --example feature_by_feature`
 
-use json_tools_rs::{JSONTools, JsonOutput};
+use json_tools_rs::{
+    BooleanConversionConfig, DateConversionConfig, JSONTools, JsonOutput, NullConversionConfig,
+    NumberConversionConfig,
+};
 
 fn single(result: Result<JsonOutput, impl std::fmt::Display>) -> String {
     match result {
@@ -160,8 +163,70 @@ fn main() {
     );
     println!("   In:  {input}\n   Out: {out}\n");
 
-    // 16. max_array_index() - DoS guard during unflatten
-    println!("16. max_array_index()");
+    // 16. convert_dates() - independent date/datetime conversion
+    println!("16. convert_dates() / convert_dates_config()");
+    let input = r#"{"d":"2024-01-15T10:30:00","b":"true"}"#;
+    let out = single(
+        JSONTools::new()
+            .flatten()
+            .convert_dates_config(
+                DateConversionConfig::new()
+                    .enabled(true)
+                    .assume_utc_for_naive(false),
+            )
+            .execute(input),
+    );
+    println!("   In:  {input}\n   Out: {out}");
+    println!(
+        "   Note: only dates convert (assume_utc_for_naive(false) keeps this one unchanged)\n"
+    );
+
+    // 17. convert_nulls() - independent null conversion, with extra tokens
+    println!("17. convert_nulls() / convert_nulls_config()");
+    let input = r#"{"a":"missing","b":"N/A","c":"not_a_token"}"#;
+    let out = single(
+        JSONTools::new()
+            .flatten()
+            .convert_nulls_config(
+                NullConversionConfig::new()
+                    .enabled(true)
+                    .add_extra_token("missing"),
+            )
+            .execute(input),
+    );
+    println!("   In:  {input}\n   Out: {out}");
+    println!("   Note: 'missing' is a custom extra token; built-in 'N/A' still works\n");
+
+    // 18. convert_booleans() - independent boolean conversion, with extra tokens
+    println!("18. convert_booleans() / convert_booleans_config()");
+    let input = r#"{"a":"si","b":"nope","c":"true"}"#;
+    let out = single(
+        JSONTools::new()
+            .flatten()
+            .convert_booleans_config(
+                BooleanConversionConfig::new()
+                    .enabled(true)
+                    .add_extra_true_token("si")
+                    .add_extra_false_token("nope"),
+            )
+            .execute(input),
+    );
+    println!("   In:  {input}\n   Out: {out}\n");
+
+    // 19. convert_numbers() - independent number conversion, sub-format toggles
+    println!("19. convert_numbers() / convert_numbers_config()");
+    let input = r#"{"price":"$45.67","count":"1,234.56"}"#;
+    let out = single(
+        JSONTools::new()
+            .flatten()
+            .convert_numbers_config(NumberConversionConfig::new().enabled(true).currency(false))
+            .execute(input),
+    );
+    println!("   In:  {input}\n   Out: {out}");
+    println!("   Note: currency(false) leaves '$45.67' as a string; thousands-separator cleanup is still core\n");
+
+    // 20. max_array_index() - DoS guard during unflatten
+    println!("20. max_array_index()");
     let ok_input = r#"{"items.0":"a","items.1":"b"}"#;
     let ok_out = single(
         JSONTools::new()
@@ -180,8 +245,8 @@ fn main() {
         Err(e) => println!("   Exceeds limit  -> In:  {bad_input}\n                  Err: {e}\n"),
     }
 
-    // 17. Parallel processing tuning knobs
-    println!("17. parallel_threshold() / num_threads() / nested_parallel_threshold()");
+    // 21. Parallel processing tuning knobs
+    println!("21. parallel_threshold() / num_threads() / nested_parallel_threshold()");
     let batch: Vec<String> = (0..200)
         .map(|i| format!(r#"{{"id":{i},"data":{{"value":{}}}}}"#, i * 10))
         .collect();
@@ -201,8 +266,8 @@ fn main() {
         _ => println!("   Unexpected result\n"),
     }
 
-    // 18. Batch processing - a single execute() call over many documents
-    println!("18. Batch processing (Vec<&str> input -> Vec<String> output)");
+    // 22. Batch processing - a single execute() call over many documents
+    println!("22. Batch processing (Vec<&str> input -> Vec<String> output)");
     let batch = vec![r#"{"a":{"b":1}}"#, r#"{"c":{"d":2}}"#];
     match JSONTools::new().flatten().execute(batch.as_slice()) {
         Ok(JsonOutput::Multiple(results)) => {
