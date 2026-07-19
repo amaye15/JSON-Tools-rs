@@ -2991,7 +2991,7 @@ mod max_array_index_tests {
 
 #[cfg(test)]
 mod validation_and_edge_case_tests {
-    use crate::tests::extract_single;
+    use crate::tests::{extract_multiple, extract_single};
     use crate::JSONTools;
     use serde_json::Value;
 
@@ -3444,5 +3444,893 @@ mod validation_and_edge_case_tests {
         let result = JSONTools::new().flatten().execute(r#"{"a": 1}"#).unwrap();
         let vec = result.into_vec();
         assert_eq!(vec.len(), 1);
+    }
+
+    // ===== FINE-GRAINED TYPE CONVERSION TESTS =====
+
+    #[test]
+    fn test_convert_dates_independent() {
+        // Only dates enabled: date strings normalize, null/boolean/number strings
+        // stay untouched.
+        let json = r#"{"d": "2024-01-15T10:30:00+05:00", "n": "null", "b": "true", "num": "123"}"#;
+        let result = JSONTools::new()
+            .flatten()
+            .convert_dates(true)
+            .execute(json)
+            .unwrap();
+        let parsed: Value = serde_json::from_str(&extract_single(result)).unwrap();
+
+        assert_eq!(parsed["d"], "2024-01-15T05:30:00Z");
+        assert_eq!(parsed["n"], "null"); // still a string, not JSON null
+        assert_eq!(parsed["b"], "true"); // still a string, not JSON true
+        assert_eq!(parsed["num"], "123"); // still a string, not JSON number
+    }
+
+    #[test]
+    fn test_convert_nulls_independent() {
+        let json = r#"{"n": "null", "b": "true", "num": "123"}"#;
+        let result = JSONTools::new()
+            .flatten()
+            .convert_nulls(true)
+            .execute(json)
+            .unwrap();
+        let parsed: Value = serde_json::from_str(&extract_single(result)).unwrap();
+
+        assert!(parsed["n"].is_null());
+        assert_eq!(parsed["b"], "true");
+        assert_eq!(parsed["num"], "123");
+    }
+
+    #[test]
+    fn test_convert_booleans_independent() {
+        let json = r#"{"n": "null", "b": "true", "num": "123"}"#;
+        let result = JSONTools::new()
+            .flatten()
+            .convert_booleans(true)
+            .execute(json)
+            .unwrap();
+        let parsed: Value = serde_json::from_str(&extract_single(result)).unwrap();
+
+        assert_eq!(parsed["n"], "null");
+        assert_eq!(parsed["b"], true);
+        assert_eq!(parsed["num"], "123");
+    }
+
+    #[test]
+    fn test_convert_numbers_independent() {
+        let json = r#"{"n": "null", "b": "true", "num": "123", "price": "$45.67"}"#;
+        let result = JSONTools::new()
+            .flatten()
+            .convert_numbers(true)
+            .execute(json)
+            .unwrap();
+        let parsed: Value = serde_json::from_str(&extract_single(result)).unwrap();
+
+        assert_eq!(parsed["n"], "null");
+        assert_eq!(parsed["b"], "true");
+        assert_eq!(parsed["num"], 123);
+        assert_eq!(parsed["price"], 45.67);
+    }
+
+    #[test]
+    fn test_auto_convert_types_then_per_category_disable() {
+        // Call order: auto_convert_types(true) then convert_dates(false) -- dates
+        // should stay off, other three categories on.
+        let json = r#"{"d": "2024-01-15T10:30:00Z", "b": "true", "num": "123"}"#;
+        let result = JSONTools::new()
+            .flatten()
+            .auto_convert_types(true)
+            .convert_dates(false)
+            .execute(json)
+            .unwrap();
+        let parsed: Value = serde_json::from_str(&extract_single(result)).unwrap();
+
+        assert_eq!(parsed["d"], "2024-01-15T10:30:00Z"); // unchanged string, not re-parsed as a number
+        assert_eq!(parsed["b"], true);
+        assert_eq!(parsed["num"], 123);
+    }
+
+    #[test]
+    fn test_per_category_disable_then_auto_convert_types_reenables() {
+        // Call order reversed: convert_dates(false) then auto_convert_types(true) --
+        // last-call-wins means auto_convert_types(true) re-enables dates too.
+        let json = r#"{"d": "2024-01-15T10:30:00+05:00"}"#;
+        let result = JSONTools::new()
+            .flatten()
+            .convert_dates(false)
+            .auto_convert_types(true)
+            .execute(json)
+            .unwrap();
+        let parsed: Value = serde_json::from_str(&extract_single(result)).unwrap();
+
+        assert_eq!(parsed["d"], "2024-01-15T05:30:00Z");
+    }
+
+    #[test]
+    fn test_auto_convert_types_preserves_prior_customization() {
+        // A per-category customization set before auto_convert_types(true) must
+        // survive -- auto_convert_types only ever flips the `enabled` bit, it must
+        // not reset sub-settings back to their own defaults.
+        let json = r#"{"d": "2024-01-15T10:30:00"}"#; // naive datetime
+        let result = JSONTools::new()
+            .flatten()
+            .convert_dates_config(
+                crate::DateConversionConfig::new()
+                    .enabled(false)
+                    .assume_utc_for_naive(false),
+            )
+            .auto_convert_types(true)
+            .execute(json)
+            .unwrap();
+        let parsed: Value = serde_json::from_str(&extract_single(result)).unwrap();
+
+        // enabled flips true (auto_convert_types wins), but assume_utc_for_naive(false)
+        // must still be respected -- naive datetime left unchanged.
+        assert_eq!(parsed["d"], "2024-01-15T10:30:00");
+    }
+
+    #[test]
+    fn test_convert_nulls_extra_tokens_additive() {
+        let json = r#"{"a": "missing", "b": "N/A", "c": "not_a_token"}"#;
+        let result = JSONTools::new()
+            .flatten()
+            .convert_nulls_config(
+                crate::NullConversionConfig::new()
+                    .enabled(true)
+                    .add_extra_token("missing"),
+            )
+            .execute(json)
+            .unwrap();
+        let parsed: Value = serde_json::from_str(&extract_single(result)).unwrap();
+
+        assert!(parsed["a"].is_null()); // extra token
+        assert!(parsed["b"].is_null()); // built-in list still active
+        assert_eq!(parsed["c"], "not_a_token");
+    }
+
+    #[test]
+    fn test_convert_booleans_extra_tokens_additive() {
+        let json = r#"{"a": "si", "b": "nope", "c": "true", "d": "not_a_token"}"#;
+        let result = JSONTools::new()
+            .flatten()
+            .convert_booleans_config(
+                crate::BooleanConversionConfig::new()
+                    .enabled(true)
+                    .add_extra_true_token("si")
+                    .add_extra_false_token("nope"),
+            )
+            .execute(json)
+            .unwrap();
+        let parsed: Value = serde_json::from_str(&extract_single(result)).unwrap();
+
+        assert_eq!(parsed["a"], true); // extra true token
+        assert_eq!(parsed["b"], false); // extra false token
+        assert_eq!(parsed["c"], true); // built-in list still active
+        assert_eq!(parsed["d"], "not_a_token");
+    }
+
+    #[test]
+    fn test_convert_dates_normalize_to_utc_false() {
+        // Offset-bearing datetime left byte-for-byte unchanged, but still protected
+        // from falling through to number parsing.
+        let json = r#"{"d": "2024-01-15T10:30:00+05:00"}"#;
+        let result = JSONTools::new()
+            .flatten()
+            .convert_dates_config(
+                crate::DateConversionConfig::new()
+                    .enabled(true)
+                    .normalize_to_utc(false),
+            )
+            .execute(json)
+            .unwrap();
+        let parsed: Value = serde_json::from_str(&extract_single(result)).unwrap();
+
+        assert_eq!(parsed["d"], "2024-01-15T10:30:00+05:00");
+    }
+
+    #[test]
+    fn test_convert_dates_assume_utc_for_naive_false() {
+        // Naive (timezone-less) datetime left unchanged -- no `Z` appended.
+        let json = r#"{"d": "2024-01-15T10:30:00"}"#;
+        let result = JSONTools::new()
+            .flatten()
+            .convert_dates_config(
+                crate::DateConversionConfig::new()
+                    .enabled(true)
+                    .assume_utc_for_naive(false),
+            )
+            .execute(json)
+            .unwrap();
+        let parsed: Value = serde_json::from_str(&extract_single(result)).unwrap();
+
+        assert_eq!(parsed["d"], "2024-01-15T10:30:00");
+    }
+
+    #[test]
+    fn test_convert_numbers_currency_disabled() {
+        let json = r#"{"price": "$45.67", "count": "1,234.56"}"#;
+        let result = JSONTools::new()
+            .flatten()
+            .convert_numbers_config(
+                crate::NumberConversionConfig::new()
+                    .enabled(true)
+                    .currency(false),
+            )
+            .execute(json)
+            .unwrap();
+        let parsed: Value = serde_json::from_str(&extract_single(result)).unwrap();
+
+        assert_eq!(parsed["price"], "$45.67"); // currency stripping disabled
+        assert_eq!(parsed["count"], 1234.56); // thousands-separator cleanup still core behavior
+    }
+
+    #[test]
+    fn test_convert_numbers_percent_disabled() {
+        let json = r#"{"pct": "50%", "count": "123"}"#;
+        let result = JSONTools::new()
+            .flatten()
+            .convert_numbers_config(
+                crate::NumberConversionConfig::new()
+                    .enabled(true)
+                    .percent(false),
+            )
+            .execute(json)
+            .unwrap();
+        let parsed: Value = serde_json::from_str(&extract_single(result)).unwrap();
+
+        assert_eq!(parsed["pct"], "50%");
+        assert_eq!(parsed["count"], 123);
+    }
+
+    #[test]
+    fn test_convert_numbers_basis_points_disabled() {
+        let json = r#"{"bp": "25bps", "count": "123"}"#;
+        let result = JSONTools::new()
+            .flatten()
+            .convert_numbers_config(
+                crate::NumberConversionConfig::new()
+                    .enabled(true)
+                    .basis_points(false),
+            )
+            .execute(json)
+            .unwrap();
+        let parsed: Value = serde_json::from_str(&extract_single(result)).unwrap();
+
+        assert_eq!(parsed["bp"], "25bps");
+        assert_eq!(parsed["count"], 123);
+    }
+
+    #[test]
+    fn test_convert_numbers_suffixes_disabled() {
+        let json = r#"{"mag": "2.5M", "count": "123"}"#;
+        let result = JSONTools::new()
+            .flatten()
+            .convert_numbers_config(
+                crate::NumberConversionConfig::new()
+                    .enabled(true)
+                    .suffixes(false),
+            )
+            .execute(json)
+            .unwrap();
+        let parsed: Value = serde_json::from_str(&extract_single(result)).unwrap();
+
+        assert_eq!(parsed["mag"], "2.5M");
+        assert_eq!(parsed["count"], 123);
+    }
+
+    #[test]
+    fn test_convert_numbers_fractions_disabled() {
+        let json = r#"{"frac": "1/2", "count": "123"}"#;
+        let result = JSONTools::new()
+            .flatten()
+            .convert_numbers_config(
+                crate::NumberConversionConfig::new()
+                    .enabled(true)
+                    .fractions(false),
+            )
+            .execute(json)
+            .unwrap();
+        let parsed: Value = serde_json::from_str(&extract_single(result)).unwrap();
+
+        assert_eq!(parsed["frac"], "1/2");
+        assert_eq!(parsed["count"], 123);
+    }
+
+    #[test]
+    fn test_convert_numbers_radix_disabled() {
+        let json = r#"{"hex": "0x1A", "count": "123"}"#;
+        let result = JSONTools::new()
+            .flatten()
+            .convert_numbers_config(
+                crate::NumberConversionConfig::new()
+                    .enabled(true)
+                    .radix(false),
+            )
+            .execute(json)
+            .unwrap();
+        let parsed: Value = serde_json::from_str(&extract_single(result)).unwrap();
+
+        assert_eq!(parsed["hex"], "0x1A");
+        assert_eq!(parsed["count"], 123);
+    }
+
+    #[test]
+    fn test_normal_mode_fine_grained_type_conversion() {
+        // Fine-grained categories must work identically in normal mode (nesting
+        // preserved), matching auto_convert_types' existing "works for all
+        // operations" guarantee.
+        let json = r#"{"user": {"active": "true", "id": "42"}}"#;
+        let result = JSONTools::new()
+            .normal()
+            .convert_booleans(true)
+            .execute(json)
+            .unwrap();
+        let parsed: Value = serde_json::from_str(&extract_single(result)).unwrap();
+
+        assert_eq!(parsed["user"]["active"], true);
+        assert_eq!(parsed["user"]["id"], "42"); // numbers category not enabled
+    }
+
+    #[test]
+    fn test_unflatten_fine_grained_type_conversion() {
+        let json = r#"{"user.active": "true", "user.id": "42"}"#;
+        let result = JSONTools::new()
+            .unflatten()
+            .convert_booleans(true)
+            .execute(json)
+            .unwrap();
+        let parsed: Value = serde_json::from_str(&extract_single(result)).unwrap();
+
+        assert_eq!(parsed["user"]["active"], true);
+        assert_eq!(parsed["user"]["id"], "42");
+    }
+
+    #[test]
+    fn test_type_conversion_mode_classify() {
+        use crate::config::{
+            BooleanConversionConfig, DateConversionConfig, NullConversionConfig,
+            NumberConversionConfig, TypeConversionConfig, TypeConversionMode,
+        };
+
+        assert_eq!(
+            TypeConversionConfig::new().classify(),
+            TypeConversionMode::Disabled
+        );
+
+        let all_default = TypeConversionConfig::new()
+            .dates(DateConversionConfig::new().enabled(true))
+            .nulls(NullConversionConfig::new().enabled(true))
+            .booleans(BooleanConversionConfig::new().enabled(true))
+            .numbers(NumberConversionConfig::new().enabled(true));
+        assert_eq!(all_default.classify(), TypeConversionMode::AllDefault);
+
+        // Single-category enable (not all four) is Custom.
+        let partial =
+            TypeConversionConfig::new().numbers(NumberConversionConfig::new().enabled(true));
+        assert_eq!(partial.classify(), TypeConversionMode::Custom);
+
+        // All four enabled but one knob deviates from default is Custom.
+        let custom = TypeConversionConfig::new()
+            .dates(
+                DateConversionConfig::new()
+                    .enabled(true)
+                    .normalize_to_utc(false),
+            )
+            .nulls(NullConversionConfig::new().enabled(true))
+            .booleans(BooleanConversionConfig::new().enabled(true))
+            .numbers(NumberConversionConfig::new().enabled(true));
+        assert_eq!(custom.classify(), TypeConversionMode::Custom);
+    }
+
+    #[test]
+    fn test_auto_convert_types_is_all_default_mode() {
+        // Regression guard for the hot-path claim: JSONTools::auto_convert_types(true)
+        // (with no per-category customization) must classify as AllDefault, so it
+        // routes through the untouched, unmodified original fast-path function.
+        let tools = JSONTools::new().flatten().auto_convert_types(true);
+        let config = crate::config::ProcessingConfig::from_json_tools(&tools);
+        assert_eq!(
+            config.type_conversion_mode,
+            crate::config::TypeConversionMode::AllDefault
+        );
+    }
+
+    // ===== FINE-GRAINED TYPE CONVERSION EDGE CASES =====
+
+    #[test]
+    fn test_convert_numbers_all_subformats_disabled_core_still_works() {
+        // Every "opinionated" sub-format off; plain integers/decimals, scientific
+        // notation, and thousands-separator cleanup are always-on core behavior and
+        // must still work.
+        let json = r#"{
+            "int": "123",
+            "dec": "45.67",
+            "neg": "-10",
+            "sci": "1.23e-4",
+            "us_thousands": "1,234.56",
+            "eu_thousands": "1.234,56",
+            "currency": "$99.99",
+            "pct": "50%",
+            "bp": "25bps",
+            "suffixed": "2.5M",
+            "fraction": "1/2",
+            "hex": "0x1A"
+        }"#;
+        let result = JSONTools::new()
+            .flatten()
+            .convert_numbers_config(
+                crate::NumberConversionConfig::new()
+                    .enabled(true)
+                    .currency(false)
+                    .percent(false)
+                    .basis_points(false)
+                    .suffixes(false)
+                    .fractions(false)
+                    .radix(false),
+            )
+            .execute(json)
+            .unwrap();
+        let parsed: Value = serde_json::from_str(&extract_single(result)).unwrap();
+
+        // Core: always converts.
+        assert_eq!(parsed["int"], 123);
+        assert_eq!(parsed["dec"], 45.67);
+        assert_eq!(parsed["neg"], -10);
+        assert_eq!(parsed["sci"], 0.000123);
+        assert_eq!(parsed["us_thousands"], 1234.56);
+        assert_eq!(parsed["eu_thousands"], 1234.56);
+        // Opinionated sub-formats: all disabled, all stay as the original string.
+        assert_eq!(parsed["currency"], "$99.99");
+        assert_eq!(parsed["pct"], "50%");
+        assert_eq!(parsed["bp"], "25bps");
+        assert_eq!(parsed["suffixed"], "2.5M");
+        assert_eq!(parsed["fraction"], "1/2");
+        assert_eq!(parsed["hex"], "0x1A");
+    }
+
+    #[test]
+    fn test_convert_numbers_radix_disabled_negative_hex_stays_string() {
+        // A negative radix-looking string must not be picked up by any other
+        // sub-format when radix is disabled -- it should fall through untouched,
+        // not get mangled by the always-on core parser.
+        let json = r#"{"a": "-0x1A", "b": "-123"}"#;
+        let result = JSONTools::new()
+            .flatten()
+            .convert_numbers_config(
+                crate::NumberConversionConfig::new()
+                    .enabled(true)
+                    .radix(false),
+            )
+            .execute(json)
+            .unwrap();
+        let parsed: Value = serde_json::from_str(&extract_single(result)).unwrap();
+
+        assert_eq!(parsed["a"], "-0x1A"); // radix disabled, not a valid plain number either
+        assert_eq!(parsed["b"], -123); // core plain-number parsing unaffected
+    }
+
+    #[test]
+    fn test_convert_booleans_token_in_both_lists_true_wins() {
+        // A token added to both extra_true_tokens and extra_false_tokens is an
+        // ambiguous user configuration; lock in the actual (deterministic)
+        // precedence rather than leaving it unspecified: true is checked first.
+        let json = r#"{"a": "maybe"}"#;
+        let result = JSONTools::new()
+            .flatten()
+            .convert_booleans_config(
+                crate::BooleanConversionConfig::new()
+                    .enabled(true)
+                    .add_extra_true_token("maybe")
+                    .add_extra_false_token("maybe"),
+            )
+            .execute(json)
+            .unwrap();
+        let parsed: Value = serde_json::from_str(&extract_single(result)).unwrap();
+        assert_eq!(parsed["a"], true);
+    }
+
+    #[test]
+    fn test_convert_nulls_extra_token_duplicating_builtin_is_harmless() {
+        // Adding an extra token that's already in the built-in list must not
+        // panic or double-count; behavior is identical to not adding it.
+        let json = r#"{"a": "null", "b": "not_null"}"#;
+        let result = JSONTools::new()
+            .flatten()
+            .convert_nulls_config(
+                crate::NullConversionConfig::new()
+                    .enabled(true)
+                    .add_extra_token("null"),
+            )
+            .execute(json)
+            .unwrap();
+        let parsed: Value = serde_json::from_str(&extract_single(result)).unwrap();
+        assert!(parsed["a"].is_null());
+        assert_eq!(parsed["b"], "not_null");
+    }
+
+    #[test]
+    fn test_extra_tokens_match_after_trimming_not_raw_bytes() {
+        // Extra tokens are matched against the *trimmed* value, consistent with
+        // every other category and the built-in token lists (e.g. `auto_convert_types`
+        // already converts `" 123 "` to `123`) -- not a byte-for-byte match against
+        // the untrimmed raw string. Discovered while porting this exact case to the
+        // Python test suite (an initial "trailing space should NOT match" assumption
+        // was wrong).
+        let json = r#"{"a": "si ", "b": " si", "c": "siX"}"#;
+        let result = JSONTools::new()
+            .flatten()
+            .convert_booleans_config(
+                crate::BooleanConversionConfig::new()
+                    .enabled(true)
+                    .add_extra_true_token("si"),
+            )
+            .execute(json)
+            .unwrap();
+        let parsed: Value = serde_json::from_str(&extract_single(result)).unwrap();
+        assert_eq!(parsed["a"], true); // trailing whitespace trimmed before comparison
+        assert_eq!(parsed["b"], true); // leading whitespace trimmed before comparison
+        assert_eq!(parsed["c"], "siX"); // not a match at all -- extra text, not whitespace
+    }
+
+    #[test]
+    fn test_disabled_category_customization_has_no_effect() {
+        // A category left disabled must produce zero observable effect even when
+        // it carries leftover/inert customization -- confirms `enabled` really
+        // gates everything, and that a still-Custom-mode classification (since the
+        // config deviates from the "all four AllDefault" shape) doesn't leak any
+        // partial behavior for the disabled category.
+        let json = r#"{"price": "$45.67", "count": "123"}"#;
+        let result = JSONTools::new()
+            .flatten()
+            .convert_numbers_config(
+                crate::NumberConversionConfig::new()
+                    .enabled(false)
+                    .currency(false), // inert: category itself is off
+            )
+            .convert_booleans(true) // ensures TypeConversionMode::Custom is reached
+            .execute(json)
+            .unwrap();
+        let parsed: Value = serde_json::from_str(&extract_single(result)).unwrap();
+        // Numbers category entirely off: neither value converts, regardless of
+        // the inert `currency(false)` setting.
+        assert_eq!(parsed["price"], "$45.67");
+        assert_eq!(parsed["count"], "123");
+    }
+
+    #[test]
+    fn test_date_priority_wins_over_null_extra_token() {
+        // Dates are checked before nulls in priority order. A string that's both a
+        // valid recognized date AND (contrived) also configured as an extra null
+        // token must still be date-normalized, not nulled out -- priority order
+        // must hold even when a later category's customization could also match.
+        let json = r#"{"d": "2024-01-15T10:30:00+05:00"}"#;
+        let result = JSONTools::new()
+            .flatten()
+            .convert_dates(true)
+            .convert_nulls_config(
+                crate::NullConversionConfig::new()
+                    .enabled(true)
+                    .add_extra_token("2024-01-15T10:30:00+05:00"),
+            )
+            .execute(json)
+            .unwrap();
+        let parsed: Value = serde_json::from_str(&extract_single(result)).unwrap();
+        assert_eq!(parsed["d"], "2024-01-15T05:30:00Z"); // date normalization won, not null
+    }
+
+    #[test]
+    fn test_null_extra_token_wins_when_dates_disabled() {
+        // Same contrived string as above, but with dates disabled this time --
+        // the null category's extra-token fallback should now be free to match it.
+        let json = r#"{"d": "2024-01-15T10:30:00+05:00"}"#;
+        let result = JSONTools::new()
+            .flatten()
+            .convert_nulls_config(
+                crate::NullConversionConfig::new()
+                    .enabled(true)
+                    .add_extra_token("2024-01-15T10:30:00+05:00"),
+            )
+            .execute(json)
+            .unwrap();
+        let parsed: Value = serde_json::from_str(&extract_single(result)).unwrap();
+        assert!(parsed["d"].is_null());
+    }
+
+    #[test]
+    fn test_fine_grained_type_conversion_in_batch() {
+        // The Custom-mode dispatch must work correctly across a whole batch
+        // (including the parallel dispatch path for batches at/above
+        // parallel_threshold), not just a single document.
+        let batch: Vec<String> = (0..150)
+            .map(|i| format!(r#"{{"id": "{i}", "active": "yes", "extra": "missing"}}"#))
+            .collect();
+        let tools = JSONTools::new()
+            .flatten()
+            .convert_numbers(true)
+            .convert_booleans(true)
+            .convert_nulls_config(
+                crate::NullConversionConfig::new()
+                    .enabled(true)
+                    .add_extra_token("missing"),
+            );
+        let results = extract_multiple(tools.execute(batch.as_slice()).unwrap());
+        assert_eq!(results.len(), 150);
+        for (i, r) in results.iter().enumerate() {
+            let parsed: Value = serde_json::from_str(r).unwrap();
+            assert_eq!(parsed["id"], i as i64);
+            assert_eq!(parsed["active"], true);
+            assert!(parsed["extra"].is_null());
+        }
+    }
+
+    #[test]
+    fn test_classify_disabled_even_with_inert_leftover_customization() {
+        use crate::config::{
+            BooleanConversionConfig, NumberConversionConfig, TypeConversionConfig,
+            TypeConversionMode,
+        };
+
+        // `has_any_enabled()` is checked first: a config where every category is
+        // disabled correctly classifies as Disabled (the cheapest dispatch path)
+        // even when a disabled category carries leftover/inert customization --
+        // classify() doesn't need to inspect sub-settings at all once nothing is
+        // enabled.
+        let all_disabled_with_junk = TypeConversionConfig::new()
+            .numbers(NumberConversionConfig::new().enabled(false).currency(false))
+            .booleans(
+                BooleanConversionConfig::new()
+                    .enabled(false)
+                    .add_extra_true_token("x"),
+            );
+        assert_eq!(
+            all_disabled_with_junk.classify(),
+            TypeConversionMode::Disabled
+        );
+
+        // Once *something* is enabled, a disabled-but-customized category still
+        // makes the overall config deviate from the "all four AllDefault" shape,
+        // so classify() correctly falls to Custom (see
+        // test_disabled_category_customization_has_no_effect for the behavioral
+        // guarantee this dispatch decision must not break -- the disabled
+        // category's customization stays functionally inert either way).
+        let one_enabled_one_disabled_with_junk = TypeConversionConfig::new()
+            .numbers(NumberConversionConfig::new().enabled(false).currency(false))
+            .booleans(BooleanConversionConfig::new().enabled(true));
+        assert_eq!(
+            one_enabled_one_disabled_with_junk.classify(),
+            TypeConversionMode::Custom
+        );
+    }
+
+    #[test]
+    fn test_numeric_extra_boolean_token_loses_to_numbers_when_both_enabled() {
+        // A numeric-looking extra token ("1") is reachable only via the fallback
+        // pass at the end of `try_convert_string_to_json_bytes_configured` (see its
+        // doc comment) -- but the digit-dispatch arm tries numbers *before* falling
+        // through to that pass, so when numbers is also enabled, plain number
+        // parsing claims "1" first and the fallback is never reached. Non-obvious
+        // enough to lock in explicitly rather than leave undocumented.
+        let json = r#"{"a": "1"}"#;
+        let result = JSONTools::new()
+            .flatten()
+            .convert_numbers(true)
+            .convert_booleans_config(
+                crate::BooleanConversionConfig::new()
+                    .enabled(true)
+                    .add_extra_true_token("1"),
+            )
+            .execute(json)
+            .unwrap();
+        let parsed: Value = serde_json::from_str(&extract_single(result)).unwrap();
+        assert_eq!(parsed["a"], 1); // number, not boolean
+    }
+
+    #[test]
+    fn test_numeric_extra_boolean_token_wins_when_numbers_disabled() {
+        // Same input as above, but with numbers disabled -- now nothing claims "1"
+        // via the digit-dispatch arm, so the fallback pass reaches the extra token.
+        let json = r#"{"a": "1"}"#;
+        let result = JSONTools::new()
+            .flatten()
+            .convert_booleans_config(
+                crate::BooleanConversionConfig::new()
+                    .enabled(true)
+                    .add_extra_true_token("1"),
+            )
+            .execute(json)
+            .unwrap();
+        let parsed: Value = serde_json::from_str(&extract_single(result)).unwrap();
+        assert_eq!(parsed["a"], true); // boolean, via the extra-token fallback
+    }
+
+    #[test]
+    fn test_extra_tokens_are_case_sensitive() {
+        let json = r#"{"a": "missing", "b": "MISSING"}"#;
+        let result = JSONTools::new()
+            .flatten()
+            .convert_nulls_config(
+                crate::NullConversionConfig::new()
+                    .enabled(true)
+                    .add_extra_token("missing"),
+            )
+            .execute(json)
+            .unwrap();
+        let parsed: Value = serde_json::from_str(&extract_single(result)).unwrap();
+        assert!(parsed["a"].is_null());
+        assert_eq!(parsed["b"], "MISSING"); // different case, no match
+    }
+
+    #[test]
+    fn test_malformed_date_stays_as_string_no_crash() {
+        // A string that superficially looks date-shaped (passes `could_be_date`'s
+        // cheap prefilter) but has out-of-range components must not panic and must
+        // be left untouched, exactly like the original (non-fine-grained) behavior.
+        let json = r#"{"a": "2024-13-45T99:99:99"}"#;
+        let result = JSONTools::new()
+            .flatten()
+            .convert_dates(true)
+            .execute(json)
+            .unwrap();
+        let parsed: Value = serde_json::from_str(&extract_single(result)).unwrap();
+        assert_eq!(parsed["a"], "2024-13-45T99:99:99");
+    }
+
+    #[test]
+    fn test_invalid_leap_year_date_stays_as_string() {
+        // 2023 is not a leap year -- "2023-02-29" looks date-shaped but
+        // NaiveDate::from_ymd_opt correctly rejects it, so it's not recognized as a
+        // date at all and must fall through (safely, without corruption) rather
+        // than being misinterpreted as a number.
+        let json = r#"{"a": "2023-02-29"}"#;
+        let result = JSONTools::new()
+            .flatten()
+            .convert_dates(true)
+            .execute(json)
+            .unwrap();
+        let parsed: Value = serde_json::from_str(&extract_single(result)).unwrap();
+        assert_eq!(parsed["a"], "2023-02-29");
+    }
+
+    #[test]
+    fn test_valid_leap_year_date_recognized_but_unchanged() {
+        // 2024 is a leap year -- "2024-02-29" is a genuinely valid date, recognized
+        // and left unchanged because it's already canonical (date-only, no
+        // time/offset to normalize).
+        let json = r#"{"a": "2024-02-29"}"#;
+        let result = JSONTools::new()
+            .flatten()
+            .convert_dates(true)
+            .execute(json)
+            .unwrap();
+        let parsed: Value = serde_json::from_str(&extract_single(result)).unwrap();
+        assert_eq!(parsed["a"], "2024-02-29");
+    }
+
+    #[test]
+    fn test_compact_naive_datetime_through_configured_path() {
+        // Compact format (YYYYMMDDTHHMMSS, no separators) exercises a different
+        // internal sub-parser than the standard YYYY-MM-DD format used elsewhere
+        // in this test suite -- confirms `has_explicit_timezone`'s compact-format
+        // fallback branch (checking for '-' past the fixed 15-char prefix) doesn't
+        // misfire on a naive compact datetime with no dashes at all.
+        let json = r#"{"a": "20240115T103000"}"#;
+
+        let default_result = JSONTools::new()
+            .flatten()
+            .convert_dates(true)
+            .execute(json)
+            .unwrap();
+        let parsed: Value = serde_json::from_str(&extract_single(default_result)).unwrap();
+        assert_eq!(parsed["a"], "2024-01-15T10:30:00Z"); // normalized + reformatted
+
+        let no_naive_utc_result = JSONTools::new()
+            .flatten()
+            .convert_dates_config(
+                crate::DateConversionConfig::new()
+                    .enabled(true)
+                    .assume_utc_for_naive(false),
+            )
+            .execute(json)
+            .unwrap();
+        let parsed: Value = serde_json::from_str(&extract_single(no_naive_utc_result)).unwrap();
+        assert_eq!(parsed["a"], "20240115T103000"); // left byte-for-byte unchanged
+    }
+
+    #[test]
+    fn test_extra_null_token_respects_remove_nulls_filtering() {
+        // A value converted to null via an *extra* token must be filtered exactly
+        // like a built-in-recognized null, confirming filtering runs after the
+        // configured conversion path, not just the AllDefault one.
+        let json = r#"{"a": "missing", "b": "keep"}"#;
+        let result = JSONTools::new()
+            .flatten()
+            .convert_nulls_config(
+                crate::NullConversionConfig::new()
+                    .enabled(true)
+                    .add_extra_token("missing"),
+            )
+            .remove_nulls(true)
+            .execute(json)
+            .unwrap();
+        let parsed: Value = serde_json::from_str(&extract_single(result)).unwrap();
+        assert!(parsed.get("a").is_none());
+        assert_eq!(parsed["b"], "keep");
+    }
+
+    #[test]
+    fn test_replacement_and_conversion_chaining_differs_by_mode() {
+        // Pre-existing (not introduced by fine-grained control) architectural
+        // quirk, confirmed to still hold identically through the new `convert_*`
+        // API: `.flatten()`/`.unflatten()` return as soon as a value_replacement
+        // matches, without ever trying type conversion on the replaced value;
+        // `.normal()` chains replacement into conversion. Locking this in so a
+        // future refactor of any of the three walkers doesn't silently change it.
+        let json = r#"{"a": "ACTIVE"}"#;
+
+        let flatten_result = JSONTools::new()
+            .flatten()
+            .value_replacement("ACTIVE", "true")
+            .convert_booleans(true)
+            .execute(json)
+            .unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(&extract_single(flatten_result)).unwrap()["a"],
+            "true" // still a string -- conversion never sees the replaced value
+        );
+
+        let normal_result = JSONTools::new()
+            .normal()
+            .value_replacement("ACTIVE", "true")
+            .convert_booleans(true)
+            .execute(json)
+            .unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(&extract_single(normal_result)).unwrap()["a"],
+            true // chained: replacement's output was then converted
+        );
+    }
+
+    #[test]
+    fn test_keys_are_never_type_converted() {
+        // Only values are ever candidates for type conversion; a key that happens
+        // to look like a recognized token must never be touched.
+        let json = r#"{"true": "something", "123": "also something"}"#;
+        let result = JSONTools::new()
+            .flatten()
+            .convert_booleans(true)
+            .convert_numbers(true)
+            .execute(json)
+            .unwrap();
+        let parsed: Value = serde_json::from_str(&extract_single(result)).unwrap();
+        assert_eq!(parsed["true"], "something");
+        assert_eq!(parsed["123"], "also something");
+    }
+
+    #[test]
+    fn test_number_subformats_individually_enabled() {
+        // Complementary to the existing "disable one, rest default true" tests:
+        // here only one sub-format is explicitly true and the rest explicitly
+        // false, confirming each flag genuinely gates its own format independent
+        // of the others (not just "everything but this one" coverage).
+        let json = r#"{"currency": "$45.67", "pct": "50%", "frac": "1/2", "core": "123"}"#;
+        let result = JSONTools::new()
+            .flatten()
+            .convert_numbers_config(
+                crate::NumberConversionConfig::new()
+                    .enabled(true)
+                    .currency(true)
+                    .percent(false)
+                    .basis_points(false)
+                    .suffixes(false)
+                    .fractions(false)
+                    .radix(false),
+            )
+            .execute(json)
+            .unwrap();
+        let parsed: Value = serde_json::from_str(&extract_single(result)).unwrap();
+        assert_eq!(parsed["currency"], 45.67); // the one enabled sub-format
+        assert_eq!(parsed["pct"], "50%"); // disabled
+        assert_eq!(parsed["frac"], "1/2"); // disabled
+        assert_eq!(parsed["core"], 123); // always-on core parsing
     }
 }

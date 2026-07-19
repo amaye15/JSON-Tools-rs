@@ -242,12 +242,107 @@ fn main() {
         assert_eq!(parsed["num_str"], 100); // number conversion last
     }
 
+    // Test 13: Fine-grained control - independent categories
+    println!("Test 13: Fine-Grained Control (convert_numbers only)");
+    let json = r#"{"b": "true", "num": "123"}"#;
+    let result = JSONTools::new()
+        .flatten()
+        .convert_numbers(true)
+        .execute(json)
+        .unwrap();
+
+    if let JsonOutput::Single(output) = result {
+        println!("Input:  {}", json);
+        println!("Output: {}\n", output);
+
+        let parsed: Value = serde_json::from_str(&output).unwrap();
+        assert_eq!(parsed["b"], "true"); // booleans not enabled, stays a string
+        assert_eq!(parsed["num"], 123);
+    }
+
+    // Test 14: Date customization - opt out of naive-datetime UTC assumption
+    println!("Test 14: Date Customization (assume_utc_for_naive(false))");
+    let json = r#"{"naive": "2024-01-15T10:30:00", "offset": "2024-01-15T10:30:00+05:00"}"#;
+    let result = JSONTools::new()
+        .flatten()
+        .convert_dates_config(
+            json_tools_rs::DateConversionConfig::new()
+                .enabled(true)
+                .assume_utc_for_naive(false),
+        )
+        .execute(json)
+        .unwrap();
+
+    if let JsonOutput::Single(output) = result {
+        println!("Input:  {}", json);
+        println!("Output: {}\n", output);
+
+        let parsed: Value = serde_json::from_str(&output).unwrap();
+        assert_eq!(parsed["naive"], "2024-01-15T10:30:00"); // unchanged, no Z appended
+        assert_eq!(parsed["offset"], "2024-01-15T05:30:00Z"); // still normalized (explicit tz)
+    }
+
+    // Test 15: Extra tokens for nulls/booleans (additive, not a replacement)
+    println!("Test 15: Extra Tokens (additive to the built-in list)");
+    let json = r#"{"a": "missing", "b": "N/A", "c": "si", "d": "true"}"#;
+    let result = JSONTools::new()
+        .flatten()
+        .convert_nulls_config(
+            json_tools_rs::NullConversionConfig::new()
+                .enabled(true)
+                .add_extra_token("missing"),
+        )
+        .convert_booleans_config(
+            json_tools_rs::BooleanConversionConfig::new()
+                .enabled(true)
+                .add_extra_true_token("si"),
+        )
+        .execute(json)
+        .unwrap();
+
+    if let JsonOutput::Single(output) = result {
+        println!("Input:  {}", json);
+        println!("Output: {}\n", output);
+
+        let parsed: Value = serde_json::from_str(&output).unwrap();
+        assert_eq!(parsed["a"], Value::Null); // custom extra token
+        assert_eq!(parsed["b"], Value::Null); // built-in list still active
+        assert_eq!(parsed["c"], true); // custom extra token
+        assert_eq!(parsed["d"], true); // built-in list still active
+    }
+
+    // Test 16: Number sub-format toggles (currency disabled, core parsing unaffected)
+    println!("Test 16: Number Sub-Format Toggle (currency disabled)");
+    let json = r#"{"price": "$45.67", "count": "1,234.56"}"#;
+    let result = JSONTools::new()
+        .flatten()
+        .convert_numbers_config(
+            json_tools_rs::NumberConversionConfig::new()
+                .enabled(true)
+                .currency(false),
+        )
+        .execute(json)
+        .unwrap();
+
+    if let JsonOutput::Single(output) = result {
+        println!("Input:  {}", json);
+        println!("Output: {}\n", output);
+
+        let parsed: Value = serde_json::from_str(&output).unwrap();
+        assert_eq!(parsed["price"], "$45.67"); // currency stripping disabled
+        assert_eq!(parsed["count"], 1234.56); // thousands-separator cleanup still core behavior
+    }
+
     println!("==========================================");
-    println!("✅ All 12 tests passed!");
+    println!("✅ All 16 tests passed!");
     println!("\nNew Features Demonstrated:");
     println!("  • Extended boolean variants (yes/no, y/n, on/off)");
     println!("  • Percentage string support (50% → 50.0)");
     println!("  • Null string variants (null, nil, none, N/A)");
     println!("  • Conversion priority: null → boolean → number");
     println!("  • Note: '1' and '0' are treated as numbers, not booleans");
+    println!("  • Fine-grained per-category control (convert_dates/nulls/booleans/numbers)");
+    println!("  • Date customization (assume_utc_for_naive, normalize_to_utc)");
+    println!("  • Additive extra tokens for nulls/booleans");
+    println!("  • Individually toggleable number sub-formats (currency, percent, etc.)");
 }
