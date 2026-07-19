@@ -127,8 +127,59 @@ def main() -> None:
     out = json_tools_rs.JSONTools().flatten().auto_convert_types(True).execute(data)
     print(f"   In:  {data}\n   Out: {out}\n")
 
-    # 16. .max_array_index() - DoS guard during unflatten
-    print("16. .max_array_index()")
+    # 16. .convert_dates() - independent date/datetime conversion
+    print("16. .convert_dates()")
+    data = {"d": "2024-01-15T10:30:00", "b": "true"}
+    out = (
+        json_tools_rs.JSONTools()
+        .flatten()
+        .convert_dates(True, assume_utc_for_naive=False)
+        .execute(data)
+    )
+    print(f"   In:  {data}\n   Out: {out}")
+    print(
+        "   Note: only dates convert (assume_utc_for_naive=False keeps this one unchanged)\n"
+    )
+
+    # 17. .convert_nulls() - independent null conversion, with extra tokens
+    print("17. .convert_nulls()")
+    data = {"a": "missing", "b": "N/A", "c": "not_a_token"}
+    out = (
+        json_tools_rs.JSONTools()
+        .flatten()
+        .convert_nulls(True, extra_tokens=["missing"])
+        .execute(data)
+    )
+    print(f"   In:  {data}\n   Out: {out}")
+    print("   Note: 'missing' is a custom extra token; built-in 'N/A' still works\n")
+
+    # 18. .convert_booleans() - independent boolean conversion, with extra tokens
+    print("18. .convert_booleans()")
+    data = {"a": "si", "b": "nope", "c": "true"}
+    out = (
+        json_tools_rs.JSONTools()
+        .flatten()
+        .convert_booleans(True, extra_true_tokens=["si"], extra_false_tokens=["nope"])
+        .execute(data)
+    )
+    print(f"   In:  {data}\n   Out: {out}\n")
+
+    # 19. .convert_numbers() - independent number conversion, sub-format toggles
+    print("19. .convert_numbers()")
+    data = {"price": "$45.67", "count": "1,234.56"}
+    out = (
+        json_tools_rs.JSONTools()
+        .flatten()
+        .convert_numbers(True, currency=False)
+        .execute(data)
+    )
+    print(f"   In:  {data}\n   Out: {out}")
+    print(
+        "   Note: currency=False leaves '$45.67' as a string; thousands-separator cleanup is still core\n"
+    )
+
+    # 20. .max_array_index() - DoS guard during unflatten
+    print("20. .max_array_index()")
     ok_data = {"items.0": "a", "items.1": "b"}
     ok_out = json_tools_rs.JSONTools().unflatten().max_array_index(10).execute(ok_data)
     print(f"   Within limit -> In:  {ok_data}\n                  Out: {ok_out}")
@@ -139,8 +190,8 @@ def main() -> None:
     except json_tools_rs.JsonToolsError as e:
         print(f"   Exceeds limit  -> In:  {bad_data}\n                  Err: {e}\n")
 
-    # 17. Parallel processing tuning knobs
-    print("17. .parallel_threshold() / .num_threads() / .nested_parallel_threshold()")
+    # 21. Parallel processing tuning knobs
+    print("21. .parallel_threshold() / .num_threads() / .nested_parallel_threshold()")
     batch = [{"id": i, "data": {"value": i * 10}} for i in range(200)]
     tools = (
         json_tools_rs.JSONTools()
@@ -153,8 +204,8 @@ def main() -> None:
     print(f"   Processed {len(results)} documents with tuned parallelism")
     print(f"   Sample: {results[0]}\n")
 
-    # 18. Batch processing - a single execute() call over many documents
-    print("18. Batch processing (list input -> list output, type preserved)")
+    # 22. Batch processing - a single execute() call over many documents
+    print("22. Batch processing (list input -> list output, type preserved)")
     batch = [{"a": {"b": 1}}, {"c": {"d": 2}}]
     results = json_tools_rs.JSONTools().flatten().execute(batch)
     print(f"   In:  {batch}\n   Out: {results}\n")

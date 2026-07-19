@@ -21,6 +21,9 @@ use jni::JNIEnv;
 use serde::Deserialize;
 
 use crate::builder::JSONTools;
+use crate::config::{
+    BooleanConversionConfig, DateConversionConfig, NullConversionConfig, NumberConversionConfig,
+};
 use crate::error::JsonToolsError;
 
 /// Binary name (slashes, not dots) of the Java exception thrown for any error or panic.
@@ -46,10 +49,57 @@ struct JvmConfig {
     remove_empty_arrays: Option<bool>,
     handle_key_collision: Option<bool>,
     auto_convert_types: Option<bool>,
+    convert_dates: Option<bool>,
+    date_conversion_config: Option<JvmDateConversionConfig>,
+    convert_nulls: Option<bool>,
+    null_conversion_config: Option<JvmNullConversionConfig>,
+    convert_booleans: Option<bool>,
+    boolean_conversion_config: Option<JvmBooleanConversionConfig>,
+    convert_numbers: Option<bool>,
+    number_conversion_config: Option<JvmNumberConversionConfig>,
     parallel_threshold: Option<usize>,
     num_threads: Option<usize>,
     nested_parallel_threshold: Option<usize>,
     max_array_index: Option<usize>,
+}
+
+/// Per-category customization mirrors of `DateConversionConfig`/etc. -- kept as
+/// separate wire types (rather than deserializing the public config structs
+/// directly) since `#[non_exhaustive]` blocks constructing those outside this
+/// crate, and because every field here is optional (unset = "don't override this
+/// knob"), unlike the public structs' plain bools.
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields, rename_all = "snake_case")]
+struct JvmDateConversionConfig {
+    normalize_to_utc: Option<bool>,
+    assume_utc_for_naive: Option<bool>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields, rename_all = "snake_case")]
+struct JvmNullConversionConfig {
+    #[serde(default)]
+    extra_tokens: Vec<String>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields, rename_all = "snake_case")]
+struct JvmBooleanConversionConfig {
+    #[serde(default)]
+    extra_true_tokens: Vec<String>,
+    #[serde(default)]
+    extra_false_tokens: Vec<String>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields, rename_all = "snake_case")]
+struct JvmNumberConversionConfig {
+    currency: Option<bool>,
+    percent: Option<bool>,
+    basis_points: Option<bool>,
+    suffixes: Option<bool>,
+    fractions: Option<bool>,
+    radix: Option<bool>,
 }
 
 fn build_tools(config_json: &str) -> Result<JSONTools, JsonToolsError> {
@@ -98,6 +148,71 @@ fn build_tools(config_json: &str) -> Result<JSONTools, JsonToolsError> {
     }
     if let Some(v) = config.auto_convert_types {
         tools = tools.auto_convert_types(v);
+    }
+    // Nested customization applied first, then the top-level bool -- the bool only
+    // ever touches `enabled`, so applying it last preserves customization already
+    // set via the nested config block (same ordering principle as the Rust/Python
+    // builders' `_config` methods).
+    if let Some(date_cfg) = config.date_conversion_config {
+        let mut cfg = DateConversionConfig::new();
+        if let Some(v) = date_cfg.normalize_to_utc {
+            cfg = cfg.normalize_to_utc(v);
+        }
+        if let Some(v) = date_cfg.assume_utc_for_naive {
+            cfg = cfg.assume_utc_for_naive(v);
+        }
+        tools = tools.convert_dates_config(cfg);
+    }
+    if let Some(v) = config.convert_dates {
+        tools = tools.convert_dates(v);
+    }
+    if let Some(null_cfg) = config.null_conversion_config {
+        let mut cfg = NullConversionConfig::new();
+        for token in null_cfg.extra_tokens {
+            cfg = cfg.add_extra_token(token);
+        }
+        tools = tools.convert_nulls_config(cfg);
+    }
+    if let Some(v) = config.convert_nulls {
+        tools = tools.convert_nulls(v);
+    }
+    if let Some(bool_cfg) = config.boolean_conversion_config {
+        let mut cfg = BooleanConversionConfig::new();
+        for token in bool_cfg.extra_true_tokens {
+            cfg = cfg.add_extra_true_token(token);
+        }
+        for token in bool_cfg.extra_false_tokens {
+            cfg = cfg.add_extra_false_token(token);
+        }
+        tools = tools.convert_booleans_config(cfg);
+    }
+    if let Some(v) = config.convert_booleans {
+        tools = tools.convert_booleans(v);
+    }
+    if let Some(num_cfg) = config.number_conversion_config {
+        let mut cfg = NumberConversionConfig::new();
+        if let Some(v) = num_cfg.currency {
+            cfg = cfg.currency(v);
+        }
+        if let Some(v) = num_cfg.percent {
+            cfg = cfg.percent(v);
+        }
+        if let Some(v) = num_cfg.basis_points {
+            cfg = cfg.basis_points(v);
+        }
+        if let Some(v) = num_cfg.suffixes {
+            cfg = cfg.suffixes(v);
+        }
+        if let Some(v) = num_cfg.fractions {
+            cfg = cfg.fractions(v);
+        }
+        if let Some(v) = num_cfg.radix {
+            cfg = cfg.radix(v);
+        }
+        tools = tools.convert_numbers_config(cfg);
+    }
+    if let Some(v) = config.convert_numbers {
+        tools = tools.convert_numbers(v);
     }
     if let Some(v) = config.parallel_threshold {
         tools = tools.parallel_threshold(v);

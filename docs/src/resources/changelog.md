@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.9.6 (2026-07-19)
+
+### Added
+- **Fine-grained, per-category control over automatic type conversion**, across Rust, Python, and JVM: `.convert_dates()`, `.convert_nulls()`, `.convert_booleans()`, `.convert_numbers()` let each category be enabled/disabled independently instead of the previous all-or-nothing `.auto_convert_types(bool)` (unchanged, still means "all four categories, default behavior"). Each category also accepts real customization via a `_config` method/kwargs/dedicated fluent methods (per language idiom) -- dates: `normalize_to_utc`/`assume_utc_for_naive`; nulls/booleans: extra recognized tokens (additive); numbers: individually disable currency, percent/permille, text basis points, K/M/B/T suffixes, fractions, or hex/binary/octal parsing. See [Type Conversion](../guide/type-conversion.md#fine-grained-control).
+- New public types: `TypeConversionConfig`, `DateConversionConfig`, `NullConversionConfig`, `BooleanConversionConfig`, `NumberConversionConfig`, plus runnable examples, tests, and benchmarks for the new API across all three languages.
+
+### Changed (BREAKING)
+- `ProcessingConfig` (and `FilteringConfig`/`CollisionConfig`/`ReplacementConfig`) are now `#[non_exhaustive]`, matching `JsonToolsError`'s existing precedent. Breaks external code constructing these via a bare struct literal instead of `::new()` + the fluent builder methods.
+- `ProcessingConfig.auto_convert_types: bool` removed, replaced by `ProcessingConfig.type_conversion: TypeConversionConfig`. The `JSONTools` builder's own `.auto_convert_types(bool)` method is unaffected.
+
+### Performance
+- The existing, heavily-profiled `try_convert_string_to_json_bytes` hot path is unmodified -- it remains the code path for the common (all-default) case, selected via a mode cached once per `execute()` call. `all_default_via_new_api` benchmark confirms within ~1% of the prior `auto_convert_types` cost.
+
+See the repository's [CHANGELOG.md](https://github.com/amaye15/json-tools-rs/blob/master/CHANGELOG.md) for the full, itemized list including edge-case coverage details.
+
 ## v0.9.5 (2026-07-18)
 
 ### Fixed

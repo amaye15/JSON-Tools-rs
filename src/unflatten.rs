@@ -13,8 +13,8 @@ use compact_str::CompactString;
 use memchr::{memchr, memmem};
 use smallvec::SmallVec;
 
-use crate::config::{FilteringConfig, ProcessingConfig};
-use crate::convert::try_convert_string_to_json_bytes;
+use crate::config::{FilteringConfig, ProcessingConfig, TypeConversionMode};
+use crate::convert::convert_string_for_mode;
 use crate::error::JsonToolsError;
 use crate::flatten::{
     escape_json_string, scan_and_fixup, skip_tape_value, tape_content_str, tape_entry,
@@ -222,14 +222,18 @@ fn extract_value<'a>(
             let content_str = tape_content_str(input, entry);
 
             // Type conversion: "123" → 123, "true" → true
-            if config.auto_convert_types {
+            if config.type_conversion_mode != TypeConversionMode::Disabled {
                 let unescaped = if entry.string_has_escapes() {
                     unescape_json_string(content_str)
                 } else {
                     Cow::Borrowed(content_str)
                 };
 
-                if let Some(converted) = try_convert_string_to_json_bytes(unescaped.as_ref()) {
+                if let Some(converted) = convert_string_for_mode(
+                    unescaped.as_ref(),
+                    config.type_conversion_mode,
+                    &config.type_conversion,
+                ) {
                     return ValueRef::Owned(converted.into_owned());
                 }
             }
