@@ -62,13 +62,17 @@ All methods consume `self` and return `Self` for chaining. Marked `#[must_use]`.
 | `.key_replacement(find, replace)` | `impl Into<String>, impl Into<String>` | -- | Add a key replacement pattern (literal by default, `r'...'` for regex) |
 | `.value_replacement(find, replace)` | `impl Into<String>, impl Into<String>` | -- | Add a value replacement pattern (literal by default, `r'...'` for regex) |
 | `.handle_key_collision(flag)` | `bool` | `false` | Collect colliding keys into arrays |
-| `.auto_convert_types(flag)` | `bool` | `false` | Auto-convert string values to native types |
+| `.auto_convert_types(flag)` | `bool` | `false` | Auto-convert string values to native types (all 4 categories below, default behavior) |
+| `.convert_dates(flag)` / `.convert_dates_config(cfg)` | `bool` / `DateConversionConfig` | `false` | Date/datetime conversion, independently toggleable/customizable |
+| `.convert_nulls(flag)` / `.convert_nulls_config(cfg)` | `bool` / `NullConversionConfig` | `false` | Null-string conversion, independently toggleable/customizable |
+| `.convert_booleans(flag)` / `.convert_booleans_config(cfg)` | `bool` / `BooleanConversionConfig` | `false` | Boolean-string conversion, independently toggleable/customizable |
+| `.convert_numbers(flag)` / `.convert_numbers_config(cfg)` | `bool` / `NumberConversionConfig` | `false` | Numeric-string conversion, independently toggleable/customizable |
 | `.parallel_threshold(n)` | `usize` | `100` | Min batch size for parallel processing |
 | `.num_threads(n)` | `Option<usize>` | `None` (CPU count) | Thread count for parallelism |
 | `.nested_parallel_threshold(n)` | `usize` | `100` | Min keys/items for intra-document parallelism |
 | `.max_array_index(n)` | `usize` | `100_000` | Max array index during unflattening (DoS protection) |
 
-**Note:** `.separator()` itself never fails -- an empty separator is only rejected later, at `.execute()` time, with a `ConfigurationError` (`E005`), not a panic. Defaults for `parallel_threshold`, `nested_parallel_threshold`, `num_threads`, and `max_array_index` can be overridden via environment variables (see [Performance Tuning](../resources/performance.md)).
+**Note:** `.separator()` itself never fails -- an empty separator is only rejected later, at `.execute()` time, with a `ConfigurationError` (`E005`), not a panic. Defaults for `parallel_threshold`, `nested_parallel_threshold`, `num_threads`, and `max_array_index` can be overridden via environment variables (see [Performance Tuning](../resources/performance.md)). See [Automatic Type Conversion](../guide/type-conversion.md#fine-grained-control) for the `DateConversionConfig`/`NullConversionConfig`/`BooleanConversionConfig`/`NumberConversionConfig` field reference and customization examples; `.auto_convert_types(flag)` only ever flips each category's `enabled` bit and preserves prior customization set via the `_config` methods.
 
 ### Execution
 
@@ -287,6 +291,8 @@ See [Error Codes](./error-codes.md) for the full error reference.
 
 Low-level configuration struct used internally by `JSONTools`. You can construct it directly for advanced use cases, but the `JSONTools` builder is the recommended interface.
 
+`ProcessingConfig` and its sub-config structs (`FilteringConfig`, `CollisionConfig`, `ReplacementConfig`, `TypeConversionConfig`, and the four per-category type-conversion configs) are all `#[non_exhaustive]` -- construct them via `::new()` and the fluent setter methods, not a bare struct literal, so new fields can be added in a future release without breaking existing code.
+
 ```rust
 pub struct ProcessingConfig {
     pub separator: String,
@@ -294,18 +300,22 @@ pub struct ProcessingConfig {
     pub filtering: FilteringConfig,
     pub collision: CollisionConfig,
     pub replacements: ReplacementConfig,
-    pub auto_convert_types: bool,
+    pub type_conversion: TypeConversionConfig,
     pub parallel_threshold: usize,
     pub num_threads: Option<usize>,
     pub nested_parallel_threshold: usize,
     pub max_array_index: usize,
+    // some fields omitted (non_exhaustive)
 }
 ```
 
 ### Builder Methods
 
 ```rust
-use json_tools_rs::{ProcessingConfig, FilteringConfig, CollisionConfig, ReplacementConfig};
+use json_tools_rs::{
+    ProcessingConfig, FilteringConfig, CollisionConfig, ReplacementConfig,
+    TypeConversionConfig, NumberConversionConfig,
+};
 
 let config = ProcessingConfig::new()
     .separator("::")
@@ -315,6 +325,10 @@ let config = ProcessingConfig::new()
     .replacements(
         ReplacementConfig::new()
             .add_key_replacement("r'^old_'", "new_")
+    )
+    .type_conversion(
+        TypeConversionConfig::new()
+            .numbers(NumberConversionConfig::new().enabled(true).currency(false))
     );
 ```
 

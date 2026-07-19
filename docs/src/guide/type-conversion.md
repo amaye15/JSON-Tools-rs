@@ -15,6 +15,97 @@ let result = JSONTools::new()
 result = jt.JSONTools().flatten().auto_convert_types(True).execute(data)
 ```
 
+```java
+try (JsonToolsHandle tools = JsonTools.builder().flatten().autoConvertTypes(true).build()) {
+    String result = tools.execute(json);
+}
+```
+
+## Fine-Grained Control
+
+`auto_convert_types(true)` turns on all four categories below (dates, nulls,
+booleans, numbers) with their default behavior. For independent control -- enabling
+only some categories, or customizing how a category matches -- use the per-category
+methods instead. Each accepts a plain `bool` for the common case, plus an optional
+customized config for the less common case.
+
+```rust
+use json_tools_rs::{JSONTools, DateConversionConfig, NullConversionConfig};
+
+// Only convert numbers; leave dates/nulls/booleans as plain strings.
+let result = JSONTools::new()
+    .flatten()
+    .convert_numbers(true)
+    .execute(json)?;
+
+// Customize a category: don't assume UTC for timezone-less datetimes, and
+// recognize an extra null token.
+let result = JSONTools::new()
+    .flatten()
+    .convert_dates_config(DateConversionConfig::new().enabled(true).assume_utc_for_naive(false))
+    .convert_nulls_config(NullConversionConfig::new().enabled(true).add_extra_token("missing"))
+    .execute(json)?;
+```
+
+```python
+# Only convert booleans.
+result = jt.JSONTools().flatten().convert_booleans(True).execute(data)
+
+# Customize with kwargs -- unset kwargs preserve whatever a previous call set.
+result = (
+    jt.JSONTools()
+    .flatten()
+    .convert_dates(True, assume_utc_for_naive=False)
+    .convert_nulls(True, extra_tokens=["missing"])
+    .execute(data)
+)
+```
+
+```java
+try (JsonToolsHandle tools = JsonTools.builder()
+        .flatten()
+        .convertDates(true)
+        .dateAssumeUtcForNaive(false)
+        .convertNulls(true)
+        .nullExtraToken("missing")
+        .build()) {
+    String result = tools.execute(json);
+}
+```
+
+Calling `auto_convert_types(bool)` only ever flips each category's own on/off
+switch -- it never resets a category's customization back to its own defaults. So
+`.convert_dates_config(...).auto_convert_types(true)` keeps the customization while
+turning every category on, regardless of call order.
+
+### Per-Category Reference
+
+| Category | Rust | Python | Java |
+|----------|------|--------|------|
+| Dates | `.convert_dates(bool)` / `.convert_dates_config(DateConversionConfig)` | `.convert_dates(enable, normalize_to_utc=None, assume_utc_for_naive=None)` | `.convertDates(boolean)` / `.dateNormalizeToUtc(boolean)` / `.dateAssumeUtcForNaive(boolean)` |
+| Nulls | `.convert_nulls(bool)` / `.convert_nulls_config(NullConversionConfig)` | `.convert_nulls(enable, extra_tokens=None)` | `.convertNulls(boolean)` / `.nullExtraToken(String)` |
+| Booleans | `.convert_booleans(bool)` / `.convert_booleans_config(BooleanConversionConfig)` | `.convert_booleans(enable, extra_true_tokens=None, extra_false_tokens=None)` | `.convertBooleans(boolean)` / `.booleanExtraTrueToken(String)` / `.booleanExtraFalseToken(String)` |
+| Numbers | `.convert_numbers(bool)` / `.convert_numbers_config(NumberConversionConfig)` | `.convert_numbers(enable, currency=None, percent=None, basis_points=None, suffixes=None, fractions=None, radix=None)` | `.convertNumbers(boolean)` / `.numberCurrency(boolean)` / `.numberPercent(boolean)` / `.numberBasisPoints(boolean)` / `.numberSuffixes(boolean)` / `.numberFractions(boolean)` / `.numberRadix(boolean)` |
+
+**Dates** (`DateConversionConfig`):
+- `normalize_to_utc` (default `true`) -- when `false`, a recognized date/datetime is left byte-for-byte unchanged (still protected from being misread as a number).
+- `assume_utc_for_naive` (default `true`) -- when `false`, a timezone-less datetime (e.g. `"2024-01-15T10:30:00"`) is left unchanged instead of getting a `Z` appended.
+
+**Nulls** (`NullConversionConfig`) / **Booleans** (`BooleanConversionConfig`):
+- `extra_tokens` / `extra_true_tokens` / `extra_false_tokens` -- additional strings recognized beyond the built-in list. **Additive only**: the built-in list stays active regardless, this only extends it. Matched exactly (case-sensitive) against the *trimmed* value -- consistent with every other category and the built-in lists (e.g. `" 123 "` already converts to `123`), so a token like `"si"` also matches `"si "` (trailing whitespace), not only a byte-for-byte match against the raw string. In Rust, add one token per call (`.add_extra_token("missing")`, matching `key_replacement()`'s idiom); in Python, `extra_tokens=[...]` is bulk-replace (a later call's list replaces, not merges with, an earlier one); in Java, add one token per call (`.nullExtraToken("missing")`, additive like Rust).
+
+**Numbers** (`NumberConversionConfig`) -- plain integers/decimals, scientific
+notation, and thousands-separator cleanup are always applied when the category is
+enabled (no one asked to disable unambiguous number parsing); the remaining
+sub-formats can each be disabled independently since they're more "opinionated"
+(each can reinterpret a string that wasn't meant to be a number):
+- `currency` (default `true`) -- currency symbol/code/credit-debit-suffix stripping.
+- `percent` (default `true`) -- `%`/permille/per-ten-thousand suffix parsing.
+- `basis_points` (default `true`) -- text basis-point suffixes (`"25bps"`).
+- `suffixes` (default `true`) -- K/M/B/T magnitude suffixes.
+- `fractions` (default `true`) -- fractions (`"1/2"`).
+- `radix` (default `true`) -- hex/binary/octal literals (`"0x1A"`).
+
 ## Conversion Rules
 
 Conversions are applied in priority order: **dates -> nulls -> booleans -> numbers**.
