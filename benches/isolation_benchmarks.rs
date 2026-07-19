@@ -441,7 +441,178 @@ fn iso_07_auto_type_conversion_only(c: &mut Criterion) {
                 black_box(result);
             });
         });
+
+        // Fine-grained API, all four categories enabled with untouched default
+        // sub-settings -- must land within noise of `auto_convert` above, since both
+        // classify as TypeConversionMode::AllDefault and route through the exact
+        // same untouched `try_convert_string_to_json_bytes` fast path. This is the
+        // concrete regression check for that claim.
+        group.bench_with_input(
+            BenchmarkId::new("all_default_via_new_api", size),
+            &json,
+            |b, json| {
+                b.iter(|| {
+                    let result = JSONTools::new()
+                        .flatten()
+                        .convert_dates(true)
+                        .convert_nulls(true)
+                        .convert_booleans(true)
+                        .convert_numbers(true)
+                        .execute(black_box(*json))
+                        .expect("Failed");
+                    black_box(result);
+                });
+            },
+        );
+
+        // Only one of four categories enabled -- exercises TypeConversionMode::Custom
+        // (not a regression concern against prior behavior, since nothing existing
+        // used this path; establishes a baseline for future work).
+        group.bench_with_input(
+            BenchmarkId::new("partial_enable", size),
+            &json,
+            |b, json| {
+                b.iter(|| {
+                    let result = JSONTools::new()
+                        .flatten()
+                        .convert_numbers(true)
+                        .execute(black_box(*json))
+                        .expect("Failed");
+                    black_box(result);
+                });
+            },
+        );
+
+        // All four categories enabled but with non-default sub-settings -- also
+        // exercises TypeConversionMode::Custom, via the fully-configured code path.
+        group.bench_with_input(BenchmarkId::new("custom_config", size), &json, |b, json| {
+            b.iter(|| {
+                let result = JSONTools::new()
+                    .flatten()
+                    .convert_dates_config(
+                        json_tools_rs::DateConversionConfig::new()
+                            .enabled(true)
+                            .assume_utc_for_naive(false),
+                    )
+                    .convert_nulls(true)
+                    .convert_booleans(true)
+                    .convert_numbers_config(
+                        json_tools_rs::NumberConversionConfig::new()
+                            .enabled(true)
+                            .currency(false),
+                    )
+                    .execute(black_box(*json))
+                    .expect("Failed");
+                black_box(result);
+            });
+        });
     }
+
+    group.finish();
+}
+
+// ============================================================================
+// ISOLATION 7b: Type Conversion - per-category cost and extra-tokens fallback
+// ============================================================================
+
+fn iso_07b_type_conversion_per_category(c: &mut Criterion) {
+    let mut group = c.benchmark_group("iso_07b_type_conversion_per_category");
+    group.measurement_time(Duration::from_secs(3));
+
+    // Representative document exercising all four categories at once, unlike
+    // small_json/medium_json (which have no date or null-like string fields) --
+    // needed so each single-category benchmark below has real conversions to do,
+    // not just rejected attempts.
+    let json = r#"{
+        "created": "2024-01-15T10:30:00+05:00",
+        "updated": "2024-01-15T10:30:00",
+        "deleted_at": "N/A",
+        "notes": "none",
+        "active": "true",
+        "verified": "yes",
+        "price": "$1,234.56",
+        "discount": "15%",
+        "quantity": "42",
+        "label": "just a plain string"
+    }"#;
+
+    // Each category isolated -- quantifies its own per-string cost independent of
+    // the others (all via the Custom code path, since only one category is on).
+    group.bench_function("dates_only", |b| {
+        b.iter(|| {
+            let result = JSONTools::new()
+                .flatten()
+                .convert_dates(true)
+                .execute(black_box(json))
+                .expect("Failed");
+            black_box(result);
+        });
+    });
+
+    group.bench_function("nulls_only", |b| {
+        b.iter(|| {
+            let result = JSONTools::new()
+                .flatten()
+                .convert_nulls(true)
+                .execute(black_box(json))
+                .expect("Failed");
+            black_box(result);
+        });
+    });
+
+    group.bench_function("booleans_only", |b| {
+        b.iter(|| {
+            let result = JSONTools::new()
+                .flatten()
+                .convert_booleans(true)
+                .execute(black_box(json))
+                .expect("Failed");
+            black_box(result);
+        });
+    });
+
+    group.bench_function("numbers_only", |b| {
+        b.iter(|| {
+            let result = JSONTools::new()
+                .flatten()
+                .convert_numbers(true)
+                .execute(black_box(json))
+                .expect("Failed");
+            black_box(result);
+        });
+    });
+
+    // Extra-tokens fallback path: nulls/booleans enabled with no customization vs
+    // with extra tokens configured (which adds the end-of-function fallback check
+    // for every string that didn't match via the main byte-dispatch). Quantifies
+    // that fallback's cost specifically.
+    group.bench_function("nulls_no_extra_tokens", |b| {
+        b.iter(|| {
+            let result = JSONTools::new()
+                .flatten()
+                .convert_nulls_config(json_tools_rs::NullConversionConfig::new().enabled(true))
+                .execute(black_box(json))
+                .expect("Failed");
+            black_box(result);
+        });
+    });
+
+    group.bench_function("nulls_with_extra_tokens", |b| {
+        b.iter(|| {
+            let result = JSONTools::new()
+                .flatten()
+                .convert_nulls_config(
+                    json_tools_rs::NullConversionConfig::new()
+                        .enabled(true)
+                        .add_extra_token("missing")
+                        .add_extra_token("unavailable")
+                        .add_extra_token("unset"),
+                )
+                .execute(black_box(json))
+                .expect("Failed");
+            black_box(result);
+        });
+    });
 
     group.finish();
 }
@@ -586,6 +757,7 @@ criterion_group!(
     iso_05_value_replacement_only,
     iso_06_filters_individual,
     iso_07_auto_type_conversion_only,
+    iso_07b_type_conversion_per_category,
     iso_08_key_collision_only,
     iso_09_normal_mode,
     iso_10_unflatten_only,

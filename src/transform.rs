@@ -8,8 +8,8 @@
 //! value transforms, key transforms, and rollback-based filtering.
 
 use crate::cache::{get_cached_regex, parse_pattern, ParsedPattern};
-use crate::config::ProcessingConfig;
-use crate::convert::try_convert_string_to_json_bytes;
+use crate::config::{ProcessingConfig, TypeConversionMode};
+use crate::convert::convert_string_for_mode;
 use crate::error::JsonToolsError;
 use crate::flatten::{
     escape_json_string, scan_and_fixup, skip_tape_value, tape_content_str, tape_is_empty_array,
@@ -225,13 +225,17 @@ fn handle_root_primitive(
         }
 
         // Type conversion
-        if config.auto_convert_types {
+        if config.type_conversion_mode != TypeConversionMode::Disabled {
             let unescaped = if memchr::memchr(b'\\', content.as_bytes()).is_some() {
                 unescape_json_string(content)
             } else {
                 Cow::Borrowed(content)
             };
-            if let Some(converted) = try_convert_string_to_json_bytes(unescaped.as_ref()) {
+            if let Some(converted) = convert_string_for_mode(
+                unescaped.as_ref(),
+                config.type_conversion_mode,
+                &config.type_conversion,
+            ) {
                 return Ok(converted.into_owned());
             }
         }
@@ -264,7 +268,8 @@ fn emit_string_value_shared(
 ) -> (bool, bool) {
     let content_str = tape_content_str(input, entry);
     let has_replacements = config.replacements.has_value_replacements();
-    let auto_convert = config.auto_convert_types;
+    let type_conversion_mode = config.type_conversion_mode;
+    let auto_convert = type_conversion_mode != TypeConversionMode::Disabled;
 
     // Early exit: nothing to transform
     if !has_replacements && !auto_convert {
@@ -288,7 +293,11 @@ fn emit_string_value_shared(
             }
             // Type convert the replaced value
             if auto_convert {
-                if let Some(converted) = try_convert_string_to_json_bytes(&replaced) {
+                if let Some(converted) = convert_string_for_mode(
+                    &replaced,
+                    type_conversion_mode,
+                    &config.type_conversion,
+                ) {
                     if config.filtering.remove_nulls && converted == "null" {
                         return (true, true);
                     }
@@ -306,7 +315,11 @@ fn emit_string_value_shared(
 
     // Type conversion (no replacement occurred)
     if auto_convert {
-        if let Some(converted) = try_convert_string_to_json_bytes(unescaped.as_ref()) {
+        if let Some(converted) = convert_string_for_mode(
+            unescaped.as_ref(),
+            type_conversion_mode,
+            &config.type_conversion,
+        ) {
             if config.filtering.remove_nulls && converted == "null" {
                 return (true, true);
             }

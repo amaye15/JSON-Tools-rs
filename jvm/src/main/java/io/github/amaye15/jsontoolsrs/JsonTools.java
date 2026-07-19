@@ -38,6 +38,21 @@ public final class JsonTools {
     private Boolean removeEmptyArrays;
     private Boolean handleKeyCollision;
     private Boolean autoConvertTypes;
+    private Boolean convertDates;
+    private Boolean dateNormalizeToUtc;
+    private Boolean dateAssumeUtcForNaive;
+    private Boolean convertNulls;
+    private final List<String> nullExtraTokens = new ArrayList<>();
+    private Boolean convertBooleans;
+    private final List<String> booleanExtraTrueTokens = new ArrayList<>();
+    private final List<String> booleanExtraFalseTokens = new ArrayList<>();
+    private Boolean convertNumbers;
+    private Boolean numberCurrency;
+    private Boolean numberPercent;
+    private Boolean numberBasisPoints;
+    private Boolean numberSuffixes;
+    private Boolean numberFractions;
+    private Boolean numberRadix;
     private Integer parallelThreshold;
     private Integer numThreads;
     private Integer nestedParallelThreshold;
@@ -115,8 +130,148 @@ public final class JsonTools {
         return this;
     }
 
+    /**
+     * Enables all four type-conversion categories (dates, nulls, booleans, numbers)
+     * with default behavior. Equivalent to calling {@link #convertDates},
+     * {@link #convertNulls}, {@link #convertBooleans}, and {@link #convertNumbers}
+     * all with the same value -- only flips each category's own on/off switch,
+     * preserving any per-category customization already configured via the other
+     * {@code convert*}/{@code *Extra*Token}/{@code number*} methods. For independent
+     * control or customization of a single category, use the {@code convert*}
+     * methods directly instead of this one.
+     */
     public JsonTools autoConvertTypes(boolean value) {
         this.autoConvertTypes = value;
+        return this;
+    }
+
+    /**
+     * Enables or disables date/datetime string conversion independently of the other
+     * type-conversion categories. See {@link #dateNormalizeToUtc} and
+     * {@link #dateAssumeUtcForNaive} to customize its behavior.
+     */
+    public JsonTools convertDates(boolean value) {
+        this.convertDates = value;
+        return this;
+    }
+
+    /**
+     * Configures whether recognized dates/datetimes are normalized to UTC (default:
+     * {@code true}). When {@code false}, a recognized date is left unchanged but is
+     * still protected from being misread as a number.
+     */
+    public JsonTools dateNormalizeToUtc(boolean value) {
+        this.dateNormalizeToUtc = value;
+        return this;
+    }
+
+    /**
+     * Configures whether timezone-less datetimes (e.g. {@code "2024-01-15T10:30:00"})
+     * are assumed to be UTC and get a {@code Z} appended (default: {@code true}).
+     * When {@code false}, naive datetimes are left unchanged.
+     */
+    public JsonTools dateAssumeUtcForNaive(boolean value) {
+        this.dateAssumeUtcForNaive = value;
+        return this;
+    }
+
+    /**
+     * Enables or disables null-string conversion independently of the other
+     * type-conversion categories. See {@link #nullExtraToken} to recognize
+     * additional tokens.
+     */
+    public JsonTools convertNulls(boolean value) {
+        this.convertNulls = value;
+        return this;
+    }
+
+    /**
+     * Adds an additional string to recognize as null, beyond the built-in list
+     * ({@code "null"}, {@code "NULL"}, {@code "nil"}, {@code "none"}, {@code "N/A"},
+     * {@code "NA"}, etc.). Additive only -- repeatable, matches
+     * {@link #keyReplacement}'s one-call-per-item idiom.
+     */
+    public JsonTools nullExtraToken(String token) {
+        this.nullExtraTokens.add(token);
+        return this;
+    }
+
+    /**
+     * Enables or disables boolean-string conversion independently of the other
+     * type-conversion categories. See {@link #booleanExtraTrueToken} and
+     * {@link #booleanExtraFalseToken} to recognize additional tokens.
+     */
+    public JsonTools convertBooleans(boolean value) {
+        this.convertBooleans = value;
+        return this;
+    }
+
+    /**
+     * Adds an additional string to recognize as {@code true}, beyond the built-in
+     * list ({@code "true"}, {@code "yes"}, {@code "on"}, {@code "y"}, etc.).
+     * Additive only -- repeatable.
+     */
+    public JsonTools booleanExtraTrueToken(String token) {
+        this.booleanExtraTrueTokens.add(token);
+        return this;
+    }
+
+    /**
+     * Adds an additional string to recognize as {@code false}, beyond the built-in
+     * list ({@code "false"}, {@code "no"}, {@code "off"}, {@code "n"}, etc.).
+     * Additive only -- repeatable.
+     */
+    public JsonTools booleanExtraFalseToken(String token) {
+        this.booleanExtraFalseTokens.add(token);
+        return this;
+    }
+
+    /**
+     * Enables or disables numeric-string conversion independently of the other
+     * type-conversion categories. Plain integers/decimals, scientific notation, and
+     * thousands-separator cleanup are always applied when enabled; the remaining
+     * sub-formats can each be disabled independently via {@link #numberCurrency},
+     * {@link #numberPercent}, {@link #numberBasisPoints}, {@link #numberSuffixes},
+     * {@link #numberFractions}, and {@link #numberRadix}.
+     */
+    public JsonTools convertNumbers(boolean value) {
+        this.convertNumbers = value;
+        return this;
+    }
+
+    /** Configures currency symbol/code/credit-debit-suffix stripping (default: {@code true}). */
+    public JsonTools numberCurrency(boolean value) {
+        this.numberCurrency = value;
+        return this;
+    }
+
+    /** Configures {@code %}/permille/per-ten-thousand suffix parsing (default: {@code true}). */
+    public JsonTools numberPercent(boolean value) {
+        this.numberPercent = value;
+        return this;
+    }
+
+    /** Configures text basis-point suffix parsing, e.g. {@code "25bps"} (default: {@code true}). */
+    public JsonTools numberBasisPoints(boolean value) {
+        this.numberBasisPoints = value;
+        return this;
+    }
+
+    /** Configures K/M/B/T magnitude suffix parsing (default: {@code true}). */
+    public JsonTools numberSuffixes(boolean value) {
+        this.numberSuffixes = value;
+        return this;
+    }
+
+    /** Configures fraction parsing, e.g. {@code "1/2"} (default: {@code true}). */
+    public JsonTools numberFractions(boolean value) {
+        this.numberFractions = value;
+        return this;
+    }
+
+    /** Configures hex/binary/octal literal parsing (default: {@code true}). */
+    public JsonTools numberRadix(boolean value) {
+        this.numberRadix = value;
         return this;
     }
 
@@ -161,12 +316,76 @@ public final class JsonTools {
         writeBooleanField(json, first, "remove_empty_arrays", removeEmptyArrays);
         writeBooleanField(json, first, "handle_key_collision", handleKeyCollision);
         writeBooleanField(json, first, "auto_convert_types", autoConvertTypes);
+        writeBooleanField(json, first, "convert_dates", convertDates);
+        writeObjectField(json, first, "date_conversion_config", dateConversionConfigJson());
+        writeBooleanField(json, first, "convert_nulls", convertNulls);
+        writeObjectField(json, first, "null_conversion_config", nullConversionConfigJson());
+        writeBooleanField(json, first, "convert_booleans", convertBooleans);
+        writeObjectField(json, first, "boolean_conversion_config", booleanConversionConfigJson());
+        writeBooleanField(json, first, "convert_numbers", convertNumbers);
+        writeObjectField(json, first, "number_conversion_config", numberConversionConfigJson());
         writeIntField(json, first, "parallel_threshold", parallelThreshold);
         writeIntField(json, first, "num_threads", numThreads);
         writeIntField(json, first, "nested_parallel_threshold", nestedParallelThreshold);
         writeIntField(json, first, "max_array_index", maxArrayIndex);
         json.append('}');
         return json.toString();
+    }
+
+    /** Builds the {@code date_conversion_config} nested object, or {@code null} if unset. */
+    private String dateConversionConfigJson() {
+        if (dateNormalizeToUtc == null && dateAssumeUtcForNaive == null) {
+            return null;
+        }
+        StringBuilder sub = new StringBuilder("{");
+        boolean[] subFirst = {true};
+        writeBooleanField(sub, subFirst, "normalize_to_utc", dateNormalizeToUtc);
+        writeBooleanField(sub, subFirst, "assume_utc_for_naive", dateAssumeUtcForNaive);
+        return sub.append('}').toString();
+    }
+
+    /** Builds the {@code null_conversion_config} nested object, or {@code null} if unset. */
+    private String nullConversionConfigJson() {
+        if (nullExtraTokens.isEmpty()) {
+            return null;
+        }
+        StringBuilder sub = new StringBuilder("{");
+        boolean[] subFirst = {true};
+        writeStringListField(sub, subFirst, "extra_tokens", nullExtraTokens);
+        return sub.append('}').toString();
+    }
+
+    /** Builds the {@code boolean_conversion_config} nested object, or {@code null} if unset. */
+    private String booleanConversionConfigJson() {
+        if (booleanExtraTrueTokens.isEmpty() && booleanExtraFalseTokens.isEmpty()) {
+            return null;
+        }
+        StringBuilder sub = new StringBuilder("{");
+        boolean[] subFirst = {true};
+        writeStringListField(sub, subFirst, "extra_true_tokens", booleanExtraTrueTokens);
+        writeStringListField(sub, subFirst, "extra_false_tokens", booleanExtraFalseTokens);
+        return sub.append('}').toString();
+    }
+
+    /** Builds the {@code number_conversion_config} nested object, or {@code null} if unset. */
+    private String numberConversionConfigJson() {
+        if (numberCurrency == null
+                && numberPercent == null
+                && numberBasisPoints == null
+                && numberSuffixes == null
+                && numberFractions == null
+                && numberRadix == null) {
+            return null;
+        }
+        StringBuilder sub = new StringBuilder("{");
+        boolean[] subFirst = {true};
+        writeBooleanField(sub, subFirst, "currency", numberCurrency);
+        writeBooleanField(sub, subFirst, "percent", numberPercent);
+        writeBooleanField(sub, subFirst, "basis_points", numberBasisPoints);
+        writeBooleanField(sub, subFirst, "suffixes", numberSuffixes);
+        writeBooleanField(sub, subFirst, "fractions", numberFractions);
+        writeBooleanField(sub, subFirst, "radix", numberRadix);
+        return sub.append('}').toString();
     }
 
     /**
@@ -232,6 +451,36 @@ public final class JsonTools {
             json.append(',');
             writeJsonString(json, pair[1]);
             json.append(']');
+        }
+        json.append(']');
+    }
+
+    /** Writes a pre-built raw JSON object (or array) value verbatim, e.g. from one of
+     * the {@code *ConfigJson()} nested-object builders. No-op if {@code rawJson} is
+     * {@code null} (the sub-config had nothing set). */
+    private static void writeObjectField(
+            StringBuilder json, boolean[] first, String key, String rawJson) {
+        if (rawJson == null) {
+            return;
+        }
+        writeComma(json, first);
+        writeJsonString(json, key);
+        json.append(':').append(rawJson);
+    }
+
+    private static void writeStringListField(
+            StringBuilder json, boolean[] first, String key, List<String> values) {
+        if (values.isEmpty()) {
+            return;
+        }
+        writeComma(json, first);
+        writeJsonString(json, key);
+        json.append(":[");
+        for (int i = 0; i < values.size(); i++) {
+            if (i > 0) {
+                json.append(',');
+            }
+            writeJsonString(json, values.get(i));
         }
         json.append(']');
     }

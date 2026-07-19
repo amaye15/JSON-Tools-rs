@@ -8,9 +8,10 @@ use rayon::prelude::*;
 use smallvec::SmallVec;
 
 use crate::config::{
-    CollisionConfig, FilteringConfig, OperationMode, ProcessingConfig, ReplacementConfig,
-    DEFAULT_MAX_ARRAY_INDEX, DEFAULT_NESTED_PARALLEL_THRESHOLD, DEFAULT_NUM_THREADS,
-    DEFAULT_PARALLEL_THRESHOLD,
+    BooleanConversionConfig, CollisionConfig, DateConversionConfig, FilteringConfig,
+    NullConversionConfig, NumberConversionConfig, OperationMode, ProcessingConfig,
+    ReplacementConfig, TypeConversionConfig, DEFAULT_MAX_ARRAY_INDEX,
+    DEFAULT_NESTED_PARALLEL_THRESHOLD, DEFAULT_NUM_THREADS, DEFAULT_PARALLEL_THRESHOLD,
 };
 use crate::error::JsonToolsError;
 use crate::flatten::process_single_json;
@@ -25,6 +26,13 @@ use crate::unflatten::process_single_json_for_unflatten;
 impl ProcessingConfig {
     /// Create a ProcessingConfig from a JSONTools builder instance
     pub fn from_json_tools(tools: &JSONTools) -> Self {
+        let type_conversion = TypeConversionConfig {
+            dates: tools.date_conversion.clone(),
+            nulls: tools.null_conversion.clone(),
+            booleans: tools.boolean_conversion.clone(),
+            numbers: tools.number_conversion.clone(),
+        };
+        let type_conversion_mode = type_conversion.classify();
         Self {
             separator: tools.separator.clone(),
             lowercase_keys: tools.lowercase_keys,
@@ -41,7 +49,8 @@ impl ProcessingConfig {
                 key_replacements: tools.key_replacements.clone(),
                 value_replacements: tools.value_replacements.clone(),
             },
-            auto_convert_types: tools.auto_convert_types,
+            type_conversion,
+            type_conversion_mode,
             parallel_threshold: tools.parallel_threshold,
             num_threads: tools.num_threads,
             nested_parallel_threshold: tools.nested_parallel_threshold,
@@ -80,6 +89,16 @@ pub struct JSONTools {
     /// Maximum array index allowed during unflattening (DoS protection)
     max_array_index: usize,
 
+    // Type-conversion sub-configs (dates, nulls, booleans, numbers)
+    /// Date/datetime conversion settings
+    date_conversion: DateConversionConfig,
+    /// Null-string conversion settings
+    null_conversion: NullConversionConfig,
+    /// Boolean-string conversion settings
+    boolean_conversion: BooleanConversionConfig,
+    /// Numeric-string conversion settings
+    number_conversion: NumberConversionConfig,
+
     // Medium fields (2 bytes)
     /// Current operation mode (flatten or unflatten)
     mode: Option<OperationMode>,
@@ -97,8 +116,6 @@ pub struct JSONTools {
     lowercase_keys: bool,
     /// Handle key collisions by collecting values into arrays
     handle_key_collision: bool,
-    /// Automatically convert string values to numbers and booleans
-    auto_convert_types: bool,
 }
 
 impl Default for JSONTools {
@@ -113,6 +130,10 @@ impl Default for JSONTools {
             num_threads: *DEFAULT_NUM_THREADS,
             nested_parallel_threshold: *DEFAULT_NESTED_PARALLEL_THRESHOLD,
             max_array_index: *DEFAULT_MAX_ARRAY_INDEX,
+            date_conversion: DateConversionConfig::default(),
+            null_conversion: NullConversionConfig::default(),
+            boolean_conversion: BooleanConversionConfig::default(),
+            number_conversion: NumberConversionConfig::default(),
             mode: None,
             // Small fields
             remove_empty_string_values: false,
@@ -121,7 +142,6 @@ impl Default for JSONTools {
             remove_empty_arrays: false,
             lowercase_keys: false,
             handle_key_collision: false,
-            auto_convert_types: false,
         }
     }
 }
@@ -313,15 +333,28 @@ impl JSONTools {
         self
     }
 
-    /// Enable automatic type conversion from strings to numbers and booleans
+    /// Enable automatic type conversion from strings to dates, nulls, booleans, and numbers
     ///
-    /// When enabled, the library will attempt to convert string values to numbers or booleans:
+    /// When enabled, the library will attempt to convert string values to their native
+    /// JSON types:
+    /// - **Dates**: ISO-8601 date/datetime strings are normalized to UTC
+    /// - **Nulls**: "null"/"NULL"/"nil"/"none"/"N/A"/"NA" -> null
+    /// - **Booleans**: "true"/"TRUE"/"True"/"yes"/"on" -> true, "false"/"no"/"off" -> false
     /// - **Numbers**: "123" -> 123, "1,234.56" -> 1234.56, "$99.99" -> 99.99, "1e5" -> 100000
-    /// - **Booleans**: "true"/"TRUE"/"True" -> true, "false"/"FALSE"/"False" -> false
     ///
     /// If conversion fails, the original string value is kept. No errors are thrown.
     ///
     /// Works for all operations (flatten, unflatten, normal).
+    ///
+    /// This is equivalent to calling [`Self::convert_dates`], [`Self::convert_nulls`],
+    /// [`Self::convert_booleans`], and [`Self::convert_numbers`] all with the same
+    /// `enable` value -- it only ever flips each category's on/off switch, preserving
+    /// any per-category customization already configured via the `convert_*_config`
+    /// methods. For independent control over each category, or to customize a
+    /// category's behavior (e.g. recognizing extra null tokens, disabling UTC
+    /// normalization for dates, or turning off individual number sub-formats like
+    /// currency/percent/basis-points/suffixes/fractions/radix), use the `convert_*`
+    /// methods directly instead of this one.
     ///
     /// # Example
     /// ```
@@ -346,8 +379,184 @@ impl JSONTools {
     /// ```
     #[must_use]
     pub fn auto_convert_types(mut self, enable: bool) -> Self {
-        self.auto_convert_types = enable;
+        self.date_conversion.enabled = enable;
+        self.null_conversion.enabled = enable;
+        self.boolean_conversion.enabled = enable;
+        self.number_conversion.enabled = enable;
         self
+    }
+
+    /// Enable or disable date/datetime string conversion independently of the other
+    /// type-conversion categories. See [`Self::auto_convert_types`] for the general
+    /// behavior; use [`Self::convert_dates_config`] to customize UTC-normalization
+    /// behavior.
+    ///
+    /// # Example
+    /// ```
+    /// use json_tools_rs::JSONTools;
+    ///
+    /// let tools = JSONTools::new().flatten().convert_dates(true);
+    /// ```
+    #[must_use]
+    pub fn convert_dates(mut self, enable: bool) -> Self {
+        self.date_conversion.enabled = enable;
+        self
+    }
+
+    /// Configure date/datetime conversion with custom settings (e.g. disabling UTC
+    /// normalization, or disabling the UTC assumption for timezone-less datetimes).
+    /// Sets `enabled` from the passed [`crate::DateConversionConfig`]'s own `enabled`
+    /// field.
+    ///
+    /// # Example
+    /// ```
+    /// use json_tools_rs::{JSONTools, DateConversionConfig};
+    ///
+    /// let tools = JSONTools::new().flatten().convert_dates_config(
+    ///     DateConversionConfig::new().enabled(true).assume_utc_for_naive(false),
+    /// );
+    /// ```
+    #[must_use]
+    pub fn convert_dates_config(mut self, config: DateConversionConfig) -> Self {
+        self.date_conversion = config;
+        self
+    }
+
+    /// Enable or disable null-string conversion independently of the other
+    /// type-conversion categories. See [`Self::auto_convert_types`] for the general
+    /// behavior; use [`Self::convert_nulls_config`] to recognize additional tokens.
+    ///
+    /// # Example
+    /// ```
+    /// use json_tools_rs::JSONTools;
+    ///
+    /// let tools = JSONTools::new().flatten().convert_nulls(true);
+    /// ```
+    #[must_use]
+    pub fn convert_nulls(mut self, enable: bool) -> Self {
+        self.null_conversion.enabled = enable;
+        self
+    }
+
+    /// Configure null-string conversion with additional recognized tokens, beyond the
+    /// built-in list. Sets `enabled` from the passed [`crate::NullConversionConfig`]'s
+    /// own `enabled` field.
+    ///
+    /// # Example
+    /// ```
+    /// use json_tools_rs::{JSONTools, NullConversionConfig};
+    ///
+    /// let tools = JSONTools::new().flatten().convert_nulls_config(
+    ///     NullConversionConfig::new().enabled(true).add_extra_token("missing"),
+    /// );
+    /// ```
+    #[must_use]
+    pub fn convert_nulls_config(mut self, config: NullConversionConfig) -> Self {
+        self.null_conversion = config;
+        self
+    }
+
+    /// Enable or disable boolean-string conversion independently of the other
+    /// type-conversion categories. See [`Self::auto_convert_types`] for the general
+    /// behavior; use [`Self::convert_booleans_config`] to recognize additional tokens.
+    ///
+    /// # Example
+    /// ```
+    /// use json_tools_rs::JSONTools;
+    ///
+    /// let tools = JSONTools::new().flatten().convert_booleans(true);
+    /// ```
+    #[must_use]
+    pub fn convert_booleans(mut self, enable: bool) -> Self {
+        self.boolean_conversion.enabled = enable;
+        self
+    }
+
+    /// Configure boolean-string conversion with additional recognized true/false
+    /// tokens, beyond the built-in lists. Sets `enabled` from the passed
+    /// [`crate::BooleanConversionConfig`]'s own `enabled` field.
+    ///
+    /// # Example
+    /// ```
+    /// use json_tools_rs::{JSONTools, BooleanConversionConfig};
+    ///
+    /// let tools = JSONTools::new().flatten().convert_booleans_config(
+    ///     BooleanConversionConfig::new()
+    ///         .enabled(true)
+    ///         .add_extra_true_token("si")
+    ///         .add_extra_false_token("nope"),
+    /// );
+    /// ```
+    #[must_use]
+    pub fn convert_booleans_config(mut self, config: BooleanConversionConfig) -> Self {
+        self.boolean_conversion = config;
+        self
+    }
+
+    /// Enable or disable numeric-string conversion independently of the other
+    /// type-conversion categories. See [`Self::auto_convert_types`] for the general
+    /// behavior; use [`Self::convert_numbers_config`] to disable individual
+    /// sub-formats (currency, percent, basis points, suffixes, fractions, radix).
+    ///
+    /// # Example
+    /// ```
+    /// use json_tools_rs::JSONTools;
+    ///
+    /// let tools = JSONTools::new().flatten().convert_numbers(true);
+    /// ```
+    #[must_use]
+    pub fn convert_numbers(mut self, enable: bool) -> Self {
+        self.number_conversion.enabled = enable;
+        self
+    }
+
+    /// Configure numeric-string conversion, individually toggling sub-formats.
+    /// Plain integers/decimals, scientific notation, and thousands-separator cleanup
+    /// are always applied when `enabled` is true; currency, percent, basis-points,
+    /// suffixes, fractions, and radix parsing can each be disabled independently.
+    /// Sets `enabled` from the passed [`crate::NumberConversionConfig`]'s own
+    /// `enabled` field.
+    ///
+    /// # Example
+    /// ```
+    /// use json_tools_rs::{JSONTools, NumberConversionConfig};
+    ///
+    /// let tools = JSONTools::new().flatten().convert_numbers_config(
+    ///     NumberConversionConfig::new().enabled(true).currency(false),
+    /// );
+    /// ```
+    #[must_use]
+    pub fn convert_numbers_config(mut self, config: NumberConversionConfig) -> Self {
+        self.number_conversion = config;
+        self
+    }
+
+    /// Read the currently configured date-conversion settings. `pub(crate)` --
+    /// used by the Python bindings' read-modify-write kwargs bridging.
+    #[cfg(feature = "python")]
+    pub(crate) fn date_conversion(&self) -> &DateConversionConfig {
+        &self.date_conversion
+    }
+
+    /// Read the currently configured null-conversion settings. `pub(crate)` --
+    /// used by the Python bindings' read-modify-write kwargs bridging.
+    #[cfg(feature = "python")]
+    pub(crate) fn null_conversion(&self) -> &NullConversionConfig {
+        &self.null_conversion
+    }
+
+    /// Read the currently configured boolean-conversion settings. `pub(crate)` --
+    /// used by the Python bindings' read-modify-write kwargs bridging.
+    #[cfg(feature = "python")]
+    pub(crate) fn boolean_conversion(&self) -> &BooleanConversionConfig {
+        &self.boolean_conversion
+    }
+
+    /// Read the currently configured number-conversion settings. `pub(crate)` --
+    /// used by the Python bindings' read-modify-write kwargs bridging.
+    #[cfg(feature = "python")]
+    pub(crate) fn number_conversion(&self) -> &NumberConversionConfig {
+        &self.number_conversion
     }
 
     /// Set the minimum batch size for parallel processing (only available with 'parallel' feature)

@@ -761,6 +761,212 @@ impl PyJSONTools {
         py_builder_method!(slf, tools, tools.auto_convert_types(enable))
     }
 
+    /// Enable or disable date/datetime string conversion independently of the other
+    /// type-conversion categories (nulls, booleans, numbers).
+    ///
+    /// # Arguments
+    /// * `enable` - Whether to enable date/datetime conversion
+    /// * `normalize_to_utc` - If set, configure whether recognized dates/datetimes
+    ///   are normalized to UTC (default: True). When False, a recognized date is
+    ///   left unchanged but is still protected from being misread as a number.
+    /// * `assume_utc_for_naive` - If set, configure whether timezone-less datetimes
+    ///   (e.g. "2024-01-15T10:30:00") are assumed to be UTC and get a `Z` appended
+    ///   (default: True). When False, naive datetimes are left unchanged.
+    ///
+    /// A second call without `normalize_to_utc`/`assume_utc_for_naive` preserves
+    /// whatever those were set to by a previous call -- only `enable` is always
+    /// applied.
+    ///
+    /// # Returns
+    /// Self for method chaining
+    ///
+    /// # Example
+    /// ```python
+    /// import json_tools_rs as jt
+    /// tools = jt.JSONTools().flatten().convert_dates(True, assume_utc_for_naive=False)
+    /// ```
+    #[pyo3(signature = (enable, normalize_to_utc=None, assume_utc_for_naive=None))]
+    #[pyo3(text_signature = "($self, enable, normalize_to_utc=None, assume_utc_for_naive=None)")]
+    pub fn convert_dates(
+        slf: PyRef<'_, Self>,
+        enable: bool,
+        normalize_to_utc: Option<bool>,
+        assume_utc_for_naive: Option<bool>,
+    ) -> PyResult<PyRef<'_, Self>> {
+        let mut guard = lock_config(&slf.inner)?;
+        let tools = mem::take(&mut *guard);
+        let mut cfg = tools.date_conversion().clone();
+        cfg.enabled = enable;
+        if let Some(v) = normalize_to_utc {
+            cfg.normalize_to_utc = v;
+        }
+        if let Some(v) = assume_utc_for_naive {
+            cfg.assume_utc_for_naive = v;
+        }
+        *guard = tools.convert_dates_config(cfg);
+        drop(guard);
+        Ok(slf)
+    }
+
+    /// Enable or disable null-string conversion independently of the other
+    /// type-conversion categories (dates, booleans, numbers).
+    ///
+    /// # Arguments
+    /// * `enable` - Whether to enable null-string conversion
+    /// * `extra_tokens` - If set, a list of additional strings to recognize as null,
+    ///   beyond the built-in list ("null", "NULL", "nil", "none", "N/A", "NA", etc.).
+    ///   Additive only -- replaces any previously-set extra token list, but never
+    ///   narrows the built-in list. Matched exactly (case-sensitive).
+    ///
+    /// # Returns
+    /// Self for method chaining
+    ///
+    /// # Example
+    /// ```python
+    /// import json_tools_rs as jt
+    /// tools = jt.JSONTools().flatten().convert_nulls(True, extra_tokens=["missing"])
+    /// ```
+    #[pyo3(signature = (enable, extra_tokens=None))]
+    #[pyo3(text_signature = "($self, enable, extra_tokens=None)")]
+    pub fn convert_nulls(
+        slf: PyRef<'_, Self>,
+        enable: bool,
+        extra_tokens: Option<Vec<String>>,
+    ) -> PyResult<PyRef<'_, Self>> {
+        let mut guard = lock_config(&slf.inner)?;
+        let tools = mem::take(&mut *guard);
+        let mut cfg = tools.null_conversion().clone();
+        cfg.enabled = enable;
+        if let Some(tokens) = extra_tokens {
+            cfg.extra_tokens = tokens.into();
+        }
+        *guard = tools.convert_nulls_config(cfg);
+        drop(guard);
+        Ok(slf)
+    }
+
+    /// Enable or disable boolean-string conversion independently of the other
+    /// type-conversion categories (dates, nulls, numbers).
+    ///
+    /// # Arguments
+    /// * `enable` - Whether to enable boolean-string conversion
+    /// * `extra_true_tokens` - If set, additional strings recognized as `true`,
+    ///   beyond the built-in list ("true", "yes", "on", "y", etc.). Replaces any
+    ///   previously-set list.
+    /// * `extra_false_tokens` - If set, additional strings recognized as `false`,
+    ///   beyond the built-in list ("false", "no", "off", "n", etc.). Replaces any
+    ///   previously-set list.
+    ///
+    /// # Returns
+    /// Self for method chaining
+    ///
+    /// # Example
+    /// ```python
+    /// import json_tools_rs as jt
+    /// tools = jt.JSONTools().flatten().convert_booleans(
+    ///     True, extra_true_tokens=["si"], extra_false_tokens=["nope"]
+    /// )
+    /// ```
+    #[pyo3(signature = (enable, extra_true_tokens=None, extra_false_tokens=None))]
+    #[pyo3(text_signature = "($self, enable, extra_true_tokens=None, extra_false_tokens=None)")]
+    pub fn convert_booleans(
+        slf: PyRef<'_, Self>,
+        enable: bool,
+        extra_true_tokens: Option<Vec<String>>,
+        extra_false_tokens: Option<Vec<String>>,
+    ) -> PyResult<PyRef<'_, Self>> {
+        let mut guard = lock_config(&slf.inner)?;
+        let tools = mem::take(&mut *guard);
+        let mut cfg = tools.boolean_conversion().clone();
+        cfg.enabled = enable;
+        if let Some(tokens) = extra_true_tokens {
+            cfg.extra_true_tokens = tokens.into();
+        }
+        if let Some(tokens) = extra_false_tokens {
+            cfg.extra_false_tokens = tokens.into();
+        }
+        *guard = tools.convert_booleans_config(cfg);
+        drop(guard);
+        Ok(slf)
+    }
+
+    /// Enable or disable numeric-string conversion independently of the other
+    /// type-conversion categories (dates, nulls, booleans).
+    ///
+    /// Plain integers/decimals, scientific notation, and thousands-separator
+    /// cleanup are always applied when `enable` is True; the remaining sub-formats
+    /// can each be disabled independently.
+    ///
+    /// # Arguments
+    /// * `enable` - Whether to enable numeric-string conversion
+    /// * `currency` - If set, configure currency symbol/code/credit-debit-suffix
+    ///   stripping (default: True)
+    /// * `percent` - If set, configure `%`/permille/per-ten-thousand suffix parsing
+    ///   (default: True)
+    /// * `basis_points` - If set, configure text basis-point suffix parsing, e.g.
+    ///   "25bps" (default: True)
+    /// * `suffixes` - If set, configure K/M/B/T magnitude suffix parsing (default: True)
+    /// * `fractions` - If set, configure fraction parsing, e.g. "1/2" (default: True)
+    /// * `radix` - If set, configure hex/binary/octal literal parsing (default: True)
+    ///
+    /// # Returns
+    /// Self for method chaining
+    ///
+    /// # Example
+    /// ```python
+    /// import json_tools_rs as jt
+    /// tools = jt.JSONTools().flatten().convert_numbers(True, currency=False)
+    /// ```
+    #[pyo3(signature = (
+        enable,
+        currency=None,
+        percent=None,
+        basis_points=None,
+        suffixes=None,
+        fractions=None,
+        radix=None
+    ))]
+    #[pyo3(
+        text_signature = "($self, enable, currency=None, percent=None, basis_points=None, suffixes=None, fractions=None, radix=None)"
+    )]
+    #[allow(clippy::too_many_arguments)]
+    pub fn convert_numbers(
+        slf: PyRef<'_, Self>,
+        enable: bool,
+        currency: Option<bool>,
+        percent: Option<bool>,
+        basis_points: Option<bool>,
+        suffixes: Option<bool>,
+        fractions: Option<bool>,
+        radix: Option<bool>,
+    ) -> PyResult<PyRef<'_, Self>> {
+        let mut guard = lock_config(&slf.inner)?;
+        let tools = mem::take(&mut *guard);
+        let mut cfg = tools.number_conversion().clone();
+        cfg.enabled = enable;
+        if let Some(v) = currency {
+            cfg.currency = v;
+        }
+        if let Some(v) = percent {
+            cfg.percent = v;
+        }
+        if let Some(v) = basis_points {
+            cfg.basis_points = v;
+        }
+        if let Some(v) = suffixes {
+            cfg.suffixes = v;
+        }
+        if let Some(v) = fractions {
+            cfg.fractions = v;
+        }
+        if let Some(v) = radix {
+            cfg.radix = v;
+        }
+        *guard = tools.convert_numbers_config(cfg);
+        drop(guard);
+        Ok(slf)
+    }
+
     /// Set the minimum batch size for parallel processing
     ///
     /// When processing multiple JSON documents, this threshold determines when to use
