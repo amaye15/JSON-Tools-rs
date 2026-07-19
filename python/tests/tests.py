@@ -2326,6 +2326,349 @@ class TestTypeConversion:
         assert result["order.customer.balance"] == 1500.0
 
 
+class TestFineGrainedTypeConversion:
+    """Test convert_dates/convert_nulls/convert_booleans/convert_numbers -- the
+    per-category alternative to auto_convert_types(), including their kwargs-based
+    customization."""
+
+    def test_convert_dates_independent(self):
+        tools = json_tools_rs.JSONTools().flatten().convert_dates(True)
+        result = tools.execute(
+            {
+                "d": "2024-01-15T10:30:00+05:00",
+                "n": "null",
+                "b": "true",
+                "num": "123",
+            }
+        )
+        assert result["d"] == "2024-01-15T05:30:00Z"
+        assert result["n"] == "null"
+        assert result["b"] == "true"
+        assert result["num"] == "123"
+
+    def test_convert_nulls_independent(self):
+        tools = json_tools_rs.JSONTools().flatten().convert_nulls(True)
+        result = tools.execute({"n": "null", "b": "true", "num": "123"})
+        assert result["n"] is None
+        assert result["b"] == "true"
+        assert result["num"] == "123"
+
+    def test_convert_booleans_independent(self):
+        tools = json_tools_rs.JSONTools().flatten().convert_booleans(True)
+        result = tools.execute({"n": "null", "b": "true", "num": "123"})
+        assert result["n"] == "null"
+        assert result["b"] is True
+        assert result["num"] == "123"
+
+    def test_convert_numbers_independent(self):
+        tools = json_tools_rs.JSONTools().flatten().convert_numbers(True)
+        result = tools.execute({"n": "null", "b": "true", "num": "123"})
+        assert result["n"] == "null"
+        assert result["b"] == "true"
+        assert result["num"] == 123
+
+    def test_auto_convert_types_then_per_category_disable(self):
+        tools = (
+            json_tools_rs.JSONTools()
+            .flatten()
+            .auto_convert_types(True)
+            .convert_dates(False)
+        )
+        result = tools.execute({"d": "2024-01-15T10:30:00Z", "b": "true", "num": "123"})
+        assert result["d"] == "2024-01-15T10:30:00Z"
+        assert result["b"] is True
+        assert result["num"] == 123
+
+    def test_per_category_disable_then_auto_convert_types_reenables(self):
+        tools = (
+            json_tools_rs.JSONTools()
+            .flatten()
+            .convert_dates(False)
+            .auto_convert_types(True)
+        )
+        result = tools.execute({"d": "2024-01-15T10:30:00+05:00"})
+        assert result["d"] == "2024-01-15T05:30:00Z"
+
+    def test_convert_dates_kwargs_customization_persists_across_second_call(self):
+        """A second convert_dates(True) call without a kwarg must preserve a first
+        call's customization, not silently reset it."""
+        tools = json_tools_rs.JSONTools().flatten()
+        tools = tools.convert_dates(True, assume_utc_for_naive=False)
+        tools = tools.convert_dates(True)  # no kwarg -- must not reset
+        result = tools.execute({"d": "2024-01-15T10:30:00"})
+        assert result["d"] == "2024-01-15T10:30:00"  # still unchanged, naive
+
+    def test_convert_dates_normalize_to_utc_false(self):
+        tools = (
+            json_tools_rs.JSONTools()
+            .flatten()
+            .convert_dates(True, normalize_to_utc=False)
+        )
+        result = tools.execute({"d": "2024-01-15T10:30:00+05:00"})
+        assert result["d"] == "2024-01-15T10:30:00+05:00"
+
+    def test_convert_dates_assume_utc_for_naive_false(self):
+        tools = (
+            json_tools_rs.JSONTools()
+            .flatten()
+            .convert_dates(True, assume_utc_for_naive=False)
+        )
+        result = tools.execute({"d": "2024-01-15T10:30:00"})
+        assert result["d"] == "2024-01-15T10:30:00"
+
+    def test_convert_nulls_extra_tokens(self):
+        tools = (
+            json_tools_rs.JSONTools()
+            .flatten()
+            .convert_nulls(True, extra_tokens=["missing", "MISSING"])
+        )
+        result = tools.execute({"a": "missing", "b": "N/A", "c": "not_a_token"})
+        assert result["a"] is None
+        assert result["b"] is None  # built-in list still active
+        assert result["c"] == "not_a_token"
+
+    def test_convert_booleans_extra_tokens(self):
+        tools = (
+            json_tools_rs.JSONTools()
+            .flatten()
+            .convert_booleans(
+                True, extra_true_tokens=["si"], extra_false_tokens=["nope"]
+            )
+        )
+        result = tools.execute(
+            {"a": "si", "b": "nope", "c": "true", "d": "not_a_token"}
+        )
+        assert result["a"] is True
+        assert result["b"] is False
+        assert result["c"] is True  # built-in list still active
+        assert result["d"] == "not_a_token"
+
+    def test_convert_numbers_currency_disabled(self):
+        tools = (
+            json_tools_rs.JSONTools().flatten().convert_numbers(True, currency=False)
+        )
+        result = tools.execute({"price": "$45.67", "count": "1,234.56"})
+        assert result["price"] == "$45.67"
+        assert result["count"] == 1234.56  # thousands-separator cleanup still core
+
+    def test_convert_numbers_percent_disabled(self):
+        tools = json_tools_rs.JSONTools().flatten().convert_numbers(True, percent=False)
+        result = tools.execute({"pct": "50%", "count": "123"})
+        assert result["pct"] == "50%"
+        assert result["count"] == 123
+
+    def test_convert_numbers_basis_points_disabled(self):
+        tools = (
+            json_tools_rs.JSONTools()
+            .flatten()
+            .convert_numbers(True, basis_points=False)
+        )
+        result = tools.execute({"bp": "25bps", "count": "123"})
+        assert result["bp"] == "25bps"
+        assert result["count"] == 123
+
+    def test_convert_numbers_suffixes_disabled(self):
+        tools = (
+            json_tools_rs.JSONTools().flatten().convert_numbers(True, suffixes=False)
+        )
+        result = tools.execute({"mag": "2.5M", "count": "123"})
+        assert result["mag"] == "2.5M"
+        assert result["count"] == 123
+
+    def test_convert_numbers_fractions_disabled(self):
+        tools = (
+            json_tools_rs.JSONTools().flatten().convert_numbers(True, fractions=False)
+        )
+        result = tools.execute({"frac": "1/2", "count": "123"})
+        assert result["frac"] == "1/2"
+        assert result["count"] == 123
+
+    def test_convert_numbers_radix_disabled(self):
+        tools = json_tools_rs.JSONTools().flatten().convert_numbers(True, radix=False)
+        result = tools.execute({"hex": "0x1A", "count": "123"})
+        assert result["hex"] == "0x1A"
+        assert result["count"] == 123
+
+    def test_normal_mode_fine_grained(self):
+        tools = json_tools_rs.JSONTools().normal().convert_booleans(True)
+        result = tools.execute({"user": {"active": "true", "id": "42"}})
+        assert result["user"]["active"] is True
+        assert result["user"]["id"] == "42"
+
+    def test_unflatten_fine_grained(self):
+        tools = json_tools_rs.JSONTools().unflatten().convert_booleans(True)
+        result = tools.execute({"user.active": "true", "user.id": "42"})
+        assert result["user"]["active"] is True
+        assert result["user"]["id"] == "42"
+
+    # ===== Edge cases =====
+
+    def test_extra_tokens_kwarg_is_bulk_replace_not_additive(self):
+        """Unlike Rust's add_extra_token() (additive, one call per token), Python's
+        extra_tokens kwarg is bulk-replace: a second call with a different list
+        replaces the first list entirely, it doesn't merge with it."""
+        tools = json_tools_rs.JSONTools().flatten()
+        tools = tools.convert_nulls(True, extra_tokens=["first"])
+        tools = tools.convert_nulls(True, extra_tokens=["second"])
+        result = tools.execute({"a": "first", "b": "second"})
+        assert result["a"] == "first"  # no longer recognized -- replaced, not merged
+        assert result["b"] is None
+
+    def test_convert_booleans_token_in_both_lists_true_wins(self):
+        tools = (
+            json_tools_rs.JSONTools()
+            .flatten()
+            .convert_booleans(
+                True, extra_true_tokens=["maybe"], extra_false_tokens=["maybe"]
+            )
+        )
+        result = tools.execute({"a": "maybe"})
+        assert result["a"] is True
+
+    def test_convert_nulls_extra_token_duplicating_builtin_is_harmless(self):
+        tools = (
+            json_tools_rs.JSONTools()
+            .flatten()
+            .convert_nulls(True, extra_tokens=["null"])
+        )
+        result = tools.execute({"a": "null", "b": "not_null"})
+        assert result["a"] is None
+        assert result["b"] == "not_null"
+
+    def test_disabled_category_customization_has_no_effect(self):
+        tools = (
+            json_tools_rs.JSONTools().flatten().convert_numbers(True, currency=False)
+        )
+        tools = tools.convert_numbers(False)  # last call wins: whole category off
+        result = tools.execute({"price": "$45.67"})
+        assert result["price"] == "$45.67"
+
+    def test_unicode_extra_tokens(self):
+        """Extra tokens round-trip correctly across the Python<->Rust FFI boundary
+        for non-ASCII strings. Matching happens against the *trimmed* value (same
+        as every other category/built-in token -- e.g. auto_convert_types already
+        converts " 123 " to 123), so "oui " (trailing space) still matches "oui";
+        it isn't a byte-for-byte match against the raw untrimmed string."""
+        tools = (
+            json_tools_rs.JSONTools()
+            .flatten()
+            .convert_booleans(
+                True, extra_true_tokens=["oui"], extra_false_tokens=["非"]
+            )
+        )
+        result = tools.execute({"a": "oui", "b": "非", "c": "oui ", "d": "ouiX"})
+        assert result["a"] is True
+        assert result["b"] is False
+        assert result["c"] is True  # matches after trimming, like every other category
+        assert (
+            result["d"] == "ouiX"
+        )  # not a match at all -- extra text, not just whitespace
+
+    def test_fine_grained_type_conversion_in_batch(self):
+        batch = [
+            {"id": str(i), "active": "yes", "extra": "missing"} for i in range(150)
+        ]
+        tools = (
+            json_tools_rs.JSONTools()
+            .flatten()
+            .convert_numbers(True)
+            .convert_booleans(True)
+            .convert_nulls(True, extra_tokens=["missing"])
+        )
+        results = tools.execute(batch)
+        assert len(results) == 150
+        for i, r in enumerate(results):
+            assert r["id"] == i
+            assert r["active"] is True
+            assert r["extra"] is None
+
+    def test_numeric_extra_boolean_token_loses_to_numbers_when_both_enabled(self):
+        tools = (
+            json_tools_rs.JSONTools()
+            .flatten()
+            .convert_numbers(True)
+            .convert_booleans(True, extra_true_tokens=["1"])
+        )
+        result = tools.execute({"a": "1"})
+        assert result["a"] == 1
+        assert result["a"] is not True  # number, not boolean
+
+    def test_numeric_extra_boolean_token_wins_when_numbers_disabled(self):
+        tools = (
+            json_tools_rs.JSONTools()
+            .flatten()
+            .convert_booleans(True, extra_true_tokens=["1"])
+        )
+        result = tools.execute({"a": "1"})
+        assert result["a"] is True
+
+    def test_extra_tokens_are_case_sensitive(self):
+        tools = (
+            json_tools_rs.JSONTools()
+            .flatten()
+            .convert_nulls(True, extra_tokens=["missing"])
+        )
+        result = tools.execute({"a": "missing", "b": "MISSING"})
+        assert result["a"] is None
+        assert result["b"] == "MISSING"
+
+    def test_malformed_date_stays_as_string_no_crash(self):
+        tools = json_tools_rs.JSONTools().flatten().convert_dates(True)
+        result = tools.execute({"a": "2024-13-45T99:99:99"})
+        assert result["a"] == "2024-13-45T99:99:99"
+
+    def test_keys_are_never_type_converted(self):
+        tools = (
+            json_tools_rs.JSONTools()
+            .flatten()
+            .convert_booleans(True)
+            .convert_numbers(True)
+        )
+        result = tools.execute({"true": "something", "123": "also something"})
+        assert result["true"] == "something"
+        assert result["123"] == "also something"
+
+    def test_replacement_and_conversion_chaining_differs_by_mode(self):
+        """Pre-existing (not introduced by fine-grained control) cross-mode
+        behavior, confirmed identically through the new API: flatten() returns as
+        soon as value_replacement matches, without trying conversion on the
+        replaced value; normal() chains replacement into conversion."""
+        data = {"a": "ACTIVE"}
+
+        flatten_result = (
+            json_tools_rs.JSONTools()
+            .flatten()
+            .value_replacement("ACTIVE", "true")
+            .convert_booleans(True)
+            .execute(data)
+        )
+        assert flatten_result["a"] == "true"  # still a string
+
+        normal_result = (
+            json_tools_rs.JSONTools()
+            .normal()
+            .value_replacement("ACTIVE", "true")
+            .convert_booleans(True)
+            .execute(data)
+        )
+        assert normal_result["a"] is True  # chained
+
+    def test_extra_tokens_empty_list_clears_vs_none_preserves(self):
+        """Python-specific nuance from the kwargs-based bulk-replace design:
+        extra_tokens=[] (explicit empty list) clears previously-set customization,
+        while omitting the kwarg (None) preserves it -- these are NOT the same."""
+        tools = json_tools_rs.JSONTools().flatten()
+        tools = tools.convert_nulls(True, extra_tokens=["missing"])
+
+        preserved = tools.convert_nulls(True)  # kwarg omitted -> preserves
+        result = preserved.execute({"a": "missing"})
+        assert result["a"] is None
+
+        cleared = tools.convert_nulls(True, extra_tokens=[])  # explicit empty -> clears
+        result = cleared.execute({"a": "missing"})
+        assert result["a"] == "missing"  # no longer recognized
+
+
 class TestParallelProcessing:
     """Test parallel processing configuration and functionality"""
 

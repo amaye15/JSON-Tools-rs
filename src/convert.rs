@@ -9,6 +9,11 @@ use memchr::{memchr, memchr2, memchr3, memchr_iter};
 use smallvec::SmallVec;
 use std::borrow::Cow;
 
+use crate::config::{
+    BooleanConversionConfig, DateConversionConfig, NullConversionConfig, NumberConversionConfig,
+    TypeConversionConfig, TypeConversionMode,
+};
+
 #[inline(always)]
 fn parse_f64(s: &str) -> Result<f64, std::num::ParseFloatError> {
     s.parse()
@@ -121,6 +126,92 @@ pub(crate) fn try_parse_number(trimmed: &str) -> Option<f64> {
 
     // Slow path: clean common number formats and try again
     let cleaned = clean_number_string(trimmed);
+    parse_f64(cleaned.as_ref()).ok().filter(|n| n.is_finite())
+}
+
+/// Configured variant of [`try_parse_number`]: plain numbers/scientific notation and
+/// thousands-separator cleanup (via [`clean_number_string_configured`]) are always
+/// applied; percent/permille/per-ten-thousand, text basis points, K/M/B/T suffixes,
+/// fractions, and hex/binary/octal are each gated on their own
+/// [`NumberConversionConfig`] field.
+#[inline]
+fn try_parse_number_configured(trimmed: &str, cfg: &NumberConversionConfig) -> Option<f64> {
+    if trimmed.is_empty() {
+        return None;
+    }
+    if !trimmed.bytes().any(|b| b.is_ascii_digit()) {
+        return None;
+    }
+
+    if let Ok(num) = parse_f64(trimmed) {
+        if num.is_finite() {
+            return Some(num);
+        }
+    }
+
+    if cfg.percent {
+        if let Some(stripped) = trimmed.strip_suffix('%') {
+            if let Ok(num) = parse_f64(stripped) {
+                if num.is_finite() {
+                    return Some(num);
+                }
+            }
+        }
+        if let Some(stripped) = trimmed.strip_suffix('\u{2030}') {
+            if let Ok(num) = parse_f64(stripped) {
+                return Some(num / 1000.0);
+            }
+        }
+        if let Some(stripped) = trimmed.strip_suffix('\u{2031}') {
+            if let Ok(num) = parse_f64(stripped) {
+                return Some(num / 10000.0);
+            }
+        }
+    }
+
+    let bytes = trimmed.as_bytes();
+    let last = bytes[bytes.len() - 1];
+
+    if cfg.basis_points && matches!(last, b'p' | b's') {
+        if let result @ Some(_) = try_parse_basis_points(trimmed) {
+            return result;
+        }
+    }
+
+    if cfg.suffixes && matches!(last, b'K' | b'k' | b'M' | b'm' | b'B' | b'b' | b'T' | b't') {
+        if let result @ Some(_) = try_parse_suffixed_number(trimmed) {
+            return result;
+        }
+    }
+
+    if cfg.fractions && memchr(b'/', bytes).is_some() {
+        if let result @ Some(_) = try_parse_fraction(trimmed) {
+            return result;
+        }
+    }
+
+    if cfg.radix {
+        let check = if bytes[0] == b'-' && bytes.len() > 1 {
+            &bytes[1..]
+        } else {
+            bytes
+        };
+        let radix_result = if check.len() >= 2
+            && check[0] == b'0'
+            && matches!(check[1], b'x' | b'X' | b'b' | b'B' | b'o' | b'O')
+        {
+            try_parse_radix_number(trimmed)
+        } else {
+            None
+        };
+        if radix_result.is_some() {
+            return radix_result;
+        }
+    }
+
+    // Slow path: clean common number formats and try again. Thousands-separator
+    // cleanup is always applied; currency stripping is gated on `cfg.currency`.
+    let cleaned = clean_number_string_configured(trimmed, cfg.currency);
     parse_f64(cleaned.as_ref()).ok().filter(|n| n.is_finite())
 }
 
@@ -335,6 +426,83 @@ fn try_parse_and_normalize_iso8601(s: &str) -> Option<String> {
     }
 
     None
+}
+
+/// Outcome of [`try_parse_and_normalize_iso8601_configured`].
+enum DateMatch {
+    /// Not recognized as a date/datetime at all -- caller should fall through to
+    /// number parsing.
+    NotADate,
+    /// Recognized as a date/datetime, but the configured knobs mean it should be
+    /// left byte-for-byte unchanged. Still counts as a match: the caller must NOT
+    /// fall through to number parsing (a date string like `"20240115"` would
+    /// otherwise be misread as the number `20240115`).
+    Unchanged,
+    /// Recognized as a date/datetime and normalized per the configured knobs.
+    Normalized(String),
+}
+
+/// Detect whether a datetime string already carries explicit timezone info (a
+/// trailing `Z`/`z`, or a `+`/`-` offset at one of the positions a full ISO-8601
+/// timestamp's offset can appear in the separator-delimited formats, reusing the
+/// exact position table `try_parse_with_offset_variants` itself scans -- or, for the
+/// separator-free compact format, any `-` at an index past the fixed
+/// `YYYYMMDDTHHMMSS` prefix, since compact dates/times never otherwise contain a
+/// `-`). Pure detection, not extraction -- used only to decide which
+/// [`DateConversionConfig`] knob (`normalize_to_utc` vs `assume_utc_for_naive`)
+/// governs a given input, without duplicating the parsers themselves.
+#[inline]
+fn has_explicit_timezone(trimmed: &str) -> bool {
+    let bytes = trimmed.as_bytes();
+    if matches!(bytes.last(), Some(b'Z') | Some(b'z')) {
+        return true;
+    }
+    if memchr(b'+', bytes).is_some() {
+        return true;
+    }
+    let len = bytes.len();
+    for pos in [16, 19, 22, 23, 26] {
+        if pos < len && bytes[pos] == b'-' {
+            return true;
+        }
+    }
+    // Compact format (YYYYMMDDTHHMMSS...) has no separators at all before an
+    // offset, so any '-' past the fixed 15-char prefix is an offset sign.
+    if len > 15 && bytes[8] == b'T' && memchr(b'-', &bytes[15..]).is_some() {
+        return true;
+    }
+    false
+}
+
+/// Configured variant of [`try_parse_and_normalize_iso8601`]: reuses the untouched
+/// original parser entirely (no duplicated date-format logic), then decides what to
+/// do with its result based on `cfg`. A recognized date/datetime whose normalized
+/// form differs from the input is either kept (per [`DateConversionConfig::
+/// normalize_to_utc`] for inputs with explicit timezone info, or
+/// [`DateConversionConfig::assume_utc_for_naive`] for timezone-less inputs) or
+/// reported as [`DateMatch::Unchanged`] -- which still blocks number-parsing
+/// fallthrough, matching the always-on behavior documented on those two fields.
+#[inline]
+fn try_parse_and_normalize_iso8601_configured(s: &str, cfg: &DateConversionConfig) -> DateMatch {
+    let trimmed = s.trim();
+    match try_parse_and_normalize_iso8601(trimmed) {
+        None => DateMatch::NotADate,
+        Some(normalized) => {
+            if normalized == trimmed {
+                return DateMatch::Unchanged;
+            }
+            let allow_rewrite = if has_explicit_timezone(trimmed) {
+                cfg.normalize_to_utc
+            } else {
+                cfg.assume_utc_for_naive
+            };
+            if allow_rewrite {
+                DateMatch::Normalized(normalized)
+            } else {
+                DateMatch::Unchanged
+            }
+        }
+    }
 }
 
 /// Parse `n` ASCII digit bytes into a `u32`. Caller guarantees the slice is all digits.
@@ -677,11 +845,67 @@ fn strip_trailing_ascii_pair(s: &str, pair: [u8; 2]) -> &str {
 /// OPTIMIZATION: Returns Cow to avoid allocation when number is already clean
 #[inline(always)] // Called per-value during type conversion; force inline to avoid call overhead
 pub(crate) fn clean_number_string(s: &str) -> Cow<'_, str> {
+    let (is_negative, working_str) = match strip_sign(s) {
+        None => return Cow::Borrowed(""),
+        Some(SignStrip::AlreadyClean(trimmed)) => return Cow::Borrowed(trimmed),
+        Some(SignStrip::Stripped {
+            is_negative,
+            working_str,
+            ..
+        }) => (is_negative, working_str),
+    };
+
+    let without_currency = strip_currency_indicators(working_str);
+
+    clean_number_core(without_currency, is_negative)
+}
+
+/// Configured variant of [`clean_number_string`]: thousands-separator cleanup and
+/// negative-sign handling always apply; currency symbol/code/credit-debit-suffix
+/// stripping is skipped entirely when `currency` is false.
+#[inline]
+fn clean_number_string_configured(s: &str, currency: bool) -> Cow<'_, str> {
+    let (is_negative, working_str) = match strip_sign(s) {
+        None => return Cow::Borrowed(""),
+        Some(SignStrip::AlreadyClean(trimmed)) => return Cow::Borrowed(trimmed),
+        Some(SignStrip::Stripped {
+            is_negative,
+            working_str,
+            ..
+        }) => (is_negative, working_str),
+    };
+
+    let without_currency = if currency {
+        strip_currency_indicators(working_str)
+    } else {
+        working_str
+    };
+
+    clean_number_core(without_currency, is_negative)
+}
+
+/// Result of [`strip_sign`]'s negative/leading-plus handling.
+enum SignStrip<'a> {
+    /// Already in canonical number form -- return as-is (borrowed, no allocation).
+    AlreadyClean(&'a str),
+    /// Sign indicators stripped; ready for currency/separator cleanup.
+    Stripped {
+        is_negative: bool,
+        working_str: &'a str,
+    },
+}
+
+/// Trim, fast-path-detect already-clean numbers, and strip negative-format/leading-
+/// plus indicators. Shared by [`clean_number_string`] and
+/// [`clean_number_string_configured`] -- identical in both (sign handling isn't
+/// gated by any `NumberConversionConfig` field). Returns `None` for empty input
+/// (caller should return `Cow::Borrowed("")`).
+#[inline(always)]
+fn strip_sign(s: &str) -> Option<SignStrip<'_>> {
     let trimmed = s.trim();
 
-    // Early exit for empty strings
     if trimmed.is_empty() {
-        return Cow::Borrowed("");
+        return None;
     }
 
     // OPTIMIZATION: Fast path for already-clean numbers (10-30% speedup)
@@ -690,7 +914,7 @@ pub(crate) fn clean_number_string(s: &str) -> Cow<'_, str> {
         && !trimmed.ends_with('-')  // Trailing minus needs processing
         && !trimmed.starts_with('+'); // Leading plus needs removal
     if is_clean {
-        return Cow::Borrowed(trimmed);
+        return Some(SignStrip::AlreadyClean(trimmed));
     }
 
     // Detect negative number formats
@@ -721,8 +945,22 @@ pub(crate) fn clean_number_string(s: &str) -> Cow<'_, str> {
     // Remove leading plus sign if present
     let working_str = working_str.strip_prefix('+').unwrap_or(working_str).trim();
 
-    // Remove currency symbols and codes
-    // Extended currency support: $, EUR, GBP, JPY, INR, RUB, KRW, TRY, BRL, AUD, CAD, CHF, SEK, PLN, CZK
+    Some(SignStrip::Stripped {
+        is_negative,
+        working_str,
+    })
+}
+
+/// Remove currency symbols and codes and credit/debit suffixes.
+/// Extended currency support: $, EUR, GBP, JPY, INR, RUB, KRW, TRY, BRL, AUD, CAD, CHF, SEK, PLN, CZK
+///
+/// Extracted from `clean_number_string` so it can be conditionally skipped by
+/// `clean_number_string_configured` (when `NumberConversionConfig::currency` is
+/// false) while `clean_number_string` itself keeps calling it unconditionally --
+/// `#[inline(always)]` so this extraction doesn't add call overhead to the existing
+/// hot path.
+#[inline(always)]
+fn strip_currency_indicators(working_str: &str) -> &str {
     let mut without_currency = working_str;
 
     // Remove multi-character currency prefixes first (R$, A$, C$, AU$, CA$, US$)
@@ -786,8 +1024,17 @@ pub(crate) fn clean_number_string(s: &str) -> Cow<'_, str> {
     without_currency = strip_trailing_ascii_pair(without_currency, *b"DR"); // Debit
     without_currency = strip_trailing_ascii_pair(without_currency, *b"cr");
     without_currency = strip_trailing_ascii_pair(without_currency, *b"dr");
-    without_currency = without_currency.trim();
+    without_currency.trim()
+}
 
+/// Thousands-separator cleanup and negative-sign handling, applied after currency
+/// stripping (or after skipping it, when `NumberConversionConfig::currency` is
+/// false). Extracted from `clean_number_string` so `clean_number_string_configured`
+/// can share it -- this part of the cleanup is always-on "core" behavior, never
+/// gated by any `NumberConversionConfig` field. `#[inline(always)]` so this
+/// extraction doesn't add call overhead to the existing hot path.
+#[inline(always)]
+fn clean_number_core(without_currency: &str, is_negative: bool) -> Cow<'_, str> {
     // Early exit for simple cases (no special characters)
     // SIMD: 2 SIMD passes (memchr3 + memchr2) are faster than std::str::contains with a char slice
     {
@@ -964,6 +1211,29 @@ fn is_null_string(s: &str) -> bool {
     )
 }
 
+/// Configured variant of [`try_parse_bool`]: checks the built-in list first, then any
+/// caller-supplied extra tokens.
+#[inline]
+fn try_parse_bool_configured(s: &str, cfg: &BooleanConversionConfig) -> Option<bool> {
+    if let Some(b) = try_parse_bool(s) {
+        return Some(b);
+    }
+    if cfg.extra_true_tokens.iter().any(|t| t == s) {
+        return Some(true);
+    }
+    if cfg.extra_false_tokens.iter().any(|t| t == s) {
+        return Some(false);
+    }
+    None
+}
+
+/// Configured variant of [`is_null_string`]: checks the built-in list first, then any
+/// caller-supplied extra tokens.
+#[inline]
+fn is_null_string_configured(s: &str, cfg: &NullConversionConfig) -> bool {
+    is_null_string(s) || cfg.extra_tokens.iter().any(|t| t == s)
+}
+
 /// Try to convert a string value to its native JSON representation.
 /// Returns `Some(json_bytes)` if the string can be converted (e.g., "123" → "123", "true" → "true",
 /// "null" → "null"), or `None` if the string should remain as-is.
@@ -1031,6 +1301,124 @@ pub(crate) fn try_convert_string_to_json_bytes(s: &str) -> Option<Cow<'_, str>> 
             None
         }
         _ => None,
+    }
+}
+
+/// Configured variant of [`try_convert_string_to_json_bytes`]: mirrors its exact
+/// byte-dispatch structure and dates -> nulls -> booleans -> numbers priority order,
+/// but each category is short-circuited when disabled, and each category's own
+/// `_configured` helper is used so per-category customization (extra null/boolean
+/// tokens, date UTC-normalization knobs, number sub-format toggles) takes effect.
+///
+/// Extra null/boolean tokens can start with any byte (unlike the built-in lists,
+/// which the byte-dispatch below is shaped around), so they're re-checked in a
+/// fallback pass at the end regardless of which arm above ran -- cheap even when
+/// redundant with an arm's own built-in-list check (a handful of string-literal
+/// comparisons).
+#[inline]
+pub(crate) fn try_convert_string_to_json_bytes_configured<'a>(
+    s: &'a str,
+    cfg: &TypeConversionConfig,
+) -> Option<Cow<'a, str>> {
+    if s.is_empty() {
+        return None;
+    }
+
+    let trimmed = s.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let first_byte = trimmed.as_bytes()[0];
+    let result: Option<Cow<'a, str>> = match first_byte {
+        // Null patterns
+        b'n' | b'N' => {
+            if cfg.nulls.enabled && is_null_string(trimmed) {
+                Some(Cow::Borrowed("null"))
+            } else if cfg.booleans.enabled {
+                try_parse_bool(trimmed).map(|b| Cow::Borrowed(if b { "true" } else { "false" }))
+            } else {
+                None
+            }
+        }
+        // Boolean patterns
+        b't' | b'T' | b'f' | b'F' | b'y' | b'Y' | b'o' | b'O' => {
+            if cfg.booleans.enabled {
+                try_parse_bool(trimmed).map(|b| Cow::Borrowed(if b { "true" } else { "false" }))
+            } else {
+                None
+            }
+        }
+        // Number/date patterns
+        b'0'..=b'9' | b'-' | b'+' | b'.' | b'$' | b'(' | b'[' => {
+            // Boolean for "0", "1"
+            if cfg.booleans.enabled && (first_byte == b'0' || first_byte == b'1') {
+                if let Some(b) = try_parse_bool(trimmed) {
+                    return Some(Cow::Borrowed(if b { "true" } else { "false" }));
+                }
+            }
+            // Date detection before number
+            if cfg.dates.enabled && could_be_date(trimmed) {
+                match try_parse_and_normalize_iso8601_configured(trimmed, &cfg.dates) {
+                    DateMatch::Normalized(normalized) => {
+                        return Some(Cow::Owned(format!("\"{}\"", normalized)));
+                    }
+                    DateMatch::Unchanged => return None,
+                    DateMatch::NotADate => {}
+                }
+            }
+            if cfg.numbers.enabled {
+                if let Some(fast) = canonical_json_integer(trimmed) {
+                    Some(Cow::Borrowed(fast))
+                } else {
+                    try_parse_number_configured(trimmed, &cfg.numbers).and_then(f64_to_json_bytes)
+                }
+            } else {
+                None
+            }
+        }
+        // Currency codes
+        b'A'..=b'Z' | b'\xc2'..=b'\xf4' => {
+            if cfg.numbers.enabled {
+                try_parse_number_configured(trimmed, &cfg.numbers).and_then(f64_to_json_bytes)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    };
+    if result.is_some() {
+        return result;
+    }
+
+    if cfg.nulls.enabled && is_null_string_configured(trimmed, &cfg.nulls) {
+        return Some(Cow::Borrowed("null"));
+    }
+    if cfg.booleans.enabled {
+        if let Some(b) = try_parse_bool_configured(trimmed, &cfg.booleans) {
+            return Some(Cow::Borrowed(if b { "true" } else { "false" }));
+        }
+    }
+    None
+}
+
+/// Central dispatch used by all per-string call sites in `flatten.rs`/
+/// `unflatten.rs`/`transform.rs`: routes to the untouched original fast-path
+/// function for `AllDefault` (zero behavior/perf change from before per-category
+/// config existed), the configured function for `Custom`, and returns `None`
+/// immediately for `Disabled` (defensive -- callers already guard on `mode !=
+/// Disabled` before reaching here on the hot path, but this keeps the function
+/// total). `#[inline]` so this adds no call overhead beyond the match itself.
+#[inline]
+pub(crate) fn convert_string_for_mode<'a>(
+    s: &'a str,
+    mode: TypeConversionMode,
+    cfg: &TypeConversionConfig,
+) -> Option<Cow<'a, str>> {
+    match mode {
+        TypeConversionMode::Disabled => None,
+        TypeConversionMode::AllDefault => try_convert_string_to_json_bytes(s),
+        TypeConversionMode::Custom => try_convert_string_to_json_bytes_configured(s, cfg),
     }
 }
 

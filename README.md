@@ -278,7 +278,8 @@ There are also narrative walkthroughs for a quicker first read:
 | `.key_replacement(find, repl)` | Replace key patterns (literal, or regex via `r'...'`) | `.key_replacement("r'user_'", "")` |
 | `.value_replacement(find, repl)` | Replace value patterns (literal, or regex via `r'...'`) | `.value_replacement("@old.com", "@new.com")` |
 | `.handle_key_collision(bool)` | Collect colliding keys into arrays | `.handle_key_collision(true)` |
-| `.auto_convert_types(bool)` | Convert types (nums, bools, dates) | `.auto_convert_types(true)` |
+| `.auto_convert_types(bool)` | Convert types (nums, bools, dates, nulls) -- all 4 categories, default behavior | `.auto_convert_types(true)` |
+| `.convert_dates/nulls/booleans/numbers(bool)` | Convert types independently per category, with optional `_config(...)` customization | `.convert_numbers(true)` |
 | `.parallel_threshold(n)` | Min batch size for parallelism | `.parallel_threshold(500)` |
 | `.num_threads(n)` | Number of threads (default: CPU count) | `.num_threads(Some(4))` |
 | `.nested_parallel_threshold(n)` | Nested object parallelism size | `.nested_parallel_threshold(50)` |
@@ -286,7 +287,7 @@ There are also narrative walkthroughs for a quicker first read:
 
 ## Automatic Type Conversion
 
-When `.auto_convert_types(true)` is enabled, the library performs smart parsing on string values:
+When `.auto_convert_types(true)` is enabled, the library performs smart parsing on string values. For independent control over each category below (e.g. only converting numbers, or customizing date/null/boolean matching), use `.convert_dates()`/`.convert_nulls()`/`.convert_booleans()`/`.convert_numbers()` instead -- see [Automatic Type Conversion](https://amaye15.github.io/JSON-Tools-rs/guide/type-conversion.html) for the full per-category reference across all three language bindings.
 
 1. **Date & Time (ISO-8601)**:
 * Detects date strings to avoid converting them to numbers (e.g., "2024-01-01").
@@ -339,7 +340,7 @@ v0.9.2, ships automatically on tagged releases):
 <dependency>
   <groupId>io.github.amaye15</groupId>
   <artifactId>json-tools-rs-spark</artifactId>
-  <version>0.9.5</version>
+  <version>0.9.6</version>
 </dependency>
 ```
 
@@ -424,7 +425,15 @@ Dual-licensed under either [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), a
 
 ## Changelog
 
-### v0.9.5 (Current)
+### v0.9.6 (Current)
+
+* **New**: fine-grained, per-category control over automatic type conversion -- `.convert_dates()`, `.convert_nulls()`, `.convert_booleans()`, `.convert_numbers()` (Rust/Python/JVM) let each category be enabled/disabled independently, each also accepting real customization (date UTC-normalization toggles, extra null/boolean tokens, per-sub-format number toggles). `.auto_convert_types(bool)` is unchanged and still means "all four, default behavior." See [Automatic Type Conversion](#automatic-type-conversion).
+* **Breaking (pre-1.0)**: `ProcessingConfig`/`FilteringConfig`/`CollisionConfig`/`ReplacementConfig` are now `#[non_exhaustive]`; `ProcessingConfig.auto_convert_types: bool` removed in favor of `ProcessingConfig.type_conversion: TypeConversionConfig`. Only affects code constructing these via a bare struct literal or reading that field directly -- the `JSONTools` builder is unaffected.
+* **Performance**: the existing hot-path type-conversion function is untouched by this change; the new per-category dispatch is selected once per `execute()` call, confirmed within ~1% of prior `auto_convert_types` cost (Criterion).
+
+See [CHANGELOG.md](CHANGELOG.md) for full details, including edge-case coverage across all three languages.
+
+### v0.9.5
 
 * **Documentation-wide accuracy sweep**: every root-level doc, the full mdBook site, and the JVM Java source's own doc comments audited against actual source code and live runtime behavior (not just re-read) across four parallel passes. Corrected fabricated/stale internals (references to a `phf` key cache, `rustc-hash`, `Arc<str>` key dedup, and function names that no longer exist -- none of that is in the current codebase), stale benchmark numbers (some off by 3-14x), wrong error-handling semantics (e.g. `.separator("")` documented as panicking; it returns a config error), several broken guide examples, and stale "not yet published" claims for Maven Central/PyPI (both have been live for a while). Also fixed a real internal contradiction in the JVM Java source itself (`FlattenUDF`/`BatchTransform` javadoc claimed Lakeflow Pipeline support that Databricks doesn't actually allow) and added a missing [JVM API reference page](https://amaye15.github.io/JSON-Tools-rs/reference/jvm-api.html).
 * **New**: runnable examples covering every builder feature individually, plus curated multi-feature pipelines, mirrored across all three language bindings with matching inputs/outputs -- see [Runnable Examples](#runnable-examples) below.

@@ -253,6 +253,47 @@ result = (jt.JSONTools()
 # {"id": 123, "price": 1234.56, "active": true}
 ```
 
+#### `.convert_dates(enable, normalize_to_utc=None, assume_utc_for_naive=None)` / `.convert_nulls(enable, extra_tokens=None)` / `.convert_booleans(enable, extra_true_tokens=None, extra_false_tokens=None)` / `.convert_numbers(enable, currency=None, percent=None, basis_points=None, suffixes=None, fractions=None, radix=None)`
+
+```python
+tools.convert_dates(enable: bool, normalize_to_utc: bool | None = None, assume_utc_for_naive: bool | None = None) -> JSONTools
+tools.convert_nulls(enable: bool, extra_tokens: list[str] | None = None) -> JSONTools
+tools.convert_booleans(enable: bool, extra_true_tokens: list[str] | None = None, extra_false_tokens: list[str] | None = None) -> JSONTools
+tools.convert_numbers(enable: bool, currency: bool | None = None, percent: bool | None = None, basis_points: bool | None = None, suffixes: bool | None = None, fractions: bool | None = None, radix: bool | None = None) -> JSONTools
+```
+
+Independent, per-category alternative to `.auto_convert_types()`: enable/customize
+dates, nulls, booleans, and numbers separately instead of all-or-nothing.
+`auto_convert_types(True)` only flips each category's on/off switch and preserves
+customization already set via these methods -- call order doesn't reset it. A kwarg
+left as `None` on a later call also preserves whatever a previous call set (it's not
+reset to the built-in default).
+
+| Method | Kwarg | Default | Description |
+|--------|-------|---------|-------------|
+| `convert_dates` | `normalize_to_utc` | `True` | Normalize recognized dates/datetimes to UTC; `False` leaves them unchanged |
+| `convert_dates` | `assume_utc_for_naive` | `True` | Append `Z` to timezone-less datetimes; `False` leaves them unchanged |
+| `convert_nulls` | `extra_tokens` | `[]` | Additional strings recognized as null, beyond the built-in list (additive) |
+| `convert_booleans` | `extra_true_tokens` / `extra_false_tokens` | `[]` | Additional true/false strings, beyond the built-in lists (additive) |
+| `convert_numbers` | `currency` | `True` | Currency symbol/code/credit-debit-suffix stripping |
+| `convert_numbers` | `percent` | `True` | `%`/permille/per-ten-thousand suffix parsing |
+| `convert_numbers` | `basis_points` | `True` | Text basis-point suffixes (`"25bps"`) |
+| `convert_numbers` | `suffixes` | `True` | K/M/B/T magnitude suffixes |
+| `convert_numbers` | `fractions` | `True` | Fractions (`"1/2"`) |
+| `convert_numbers` | `radix` | `True` | Hex/binary/octal literals (`"0x1A"`) |
+
+Plain integers/decimals, scientific notation, and thousands-separator cleanup are
+always applied when `convert_numbers` is enabled, regardless of the other kwargs.
+
+```python
+result = (jt.JSONTools()
+    .flatten()
+    .convert_dates(True, assume_utc_for_naive=False)
+    .convert_nulls(True, extra_tokens=["missing"])
+    .execute({"d": "2024-01-15T10:30:00", "a": "missing"}))
+# {"d": "2024-01-15T10:30:00", "a": None}
+```
+
 #### `.parallel_threshold(n)`
 
 ```python

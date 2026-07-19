@@ -19,8 +19,8 @@ use smallvec::SmallVec;
 use std::borrow::Cow;
 use std::ops::Deref;
 
-use crate::config::ProcessingConfig;
-use crate::convert::try_convert_string_to_json_bytes;
+use crate::config::{ProcessingConfig, TypeConversionMode};
+use crate::convert::convert_string_for_mode;
 use crate::error::JsonToolsError;
 use crate::json_parser;
 use crate::transform::{apply_replacement_patterns, apply_value_replacement_patterns};
@@ -854,7 +854,8 @@ impl<'a> DirectWalker<'a> {
         let content_str = tape_content_str(self.input, entry);
 
         let has_value_replacements = self.config.replacements.has_value_replacements();
-        let auto_convert_types = self.config.auto_convert_types;
+        let type_conversion_mode = self.config.type_conversion_mode;
+        let auto_convert_types = type_conversion_mode != TypeConversionMode::Disabled;
 
         if has_value_replacements || auto_convert_types {
             // Unescape once — reused below by both replacement and conversion checks
@@ -884,7 +885,11 @@ impl<'a> DirectWalker<'a> {
 
             // Type conversion
             if auto_convert_types {
-                if let Some(converted) = try_convert_string_to_json_bytes(unescaped.as_ref()) {
+                if let Some(converted) = convert_string_for_mode(
+                    unescaped.as_ref(),
+                    type_conversion_mode,
+                    &self.config.type_conversion,
+                ) {
                     if self.config.filtering.remove_nulls && converted == "null" {
                         return;
                     }
@@ -1109,7 +1114,8 @@ impl<'a, KB: KeyBuilder> CollectingWalker<'a, KB> {
         let content_str = tape_content_str(self.input, entry);
 
         let has_value_replacements = self.config.replacements.has_value_replacements();
-        let auto_convert_types = self.config.auto_convert_types;
+        let type_conversion_mode = self.config.type_conversion_mode;
+        let auto_convert_types = type_conversion_mode != TypeConversionMode::Disabled;
 
         if has_value_replacements || auto_convert_types {
             // Unescape once — reused below by both replacement and conversion checks
@@ -1140,7 +1146,11 @@ impl<'a, KB: KeyBuilder> CollectingWalker<'a, KB> {
             }
 
             if auto_convert_types {
-                if let Some(converted) = try_convert_string_to_json_bytes(unescaped.as_ref()) {
+                if let Some(converted) = convert_string_for_mode(
+                    unescaped.as_ref(),
+                    type_conversion_mode,
+                    &self.config.type_conversion,
+                ) {
                     if self.config.filtering.remove_nulls && *converted == *"null" {
                         return;
                     }
