@@ -94,7 +94,7 @@ from a `jvm-ci.yml` CI run (or build it locally per above), then:
    (Compute → your cluster → Libraries → Install new → Volumes). Not applicable to
    Lakeflow Pipeline compute -- see the note above.
 
-**Via Maven Central (tagged releases only):** pushing a git tag (e.g. `v0.9.6`)
+**Via Maven Central (tagged releases only):** pushing a git tag (e.g. `v0.9.7`)
 triggers `jvm-ci.yml`'s `release` job, which builds, GPG-signs, and publishes
 `io.github.amaye15:json-tools-rs-spark` to Maven Central automatically -- live since
 v0.9.2. Add it as a normal Maven/Gradle/sbt dependency:
@@ -103,7 +103,7 @@ v0.9.2. Add it as a normal Maven/Gradle/sbt dependency:
 <dependency>
   <groupId>io.github.amaye15</groupId>
   <artifactId>json-tools-rs-spark</artifactId>
-  <version>0.9.6</version>
+  <version>0.9.7</version>
 </dependency>
 ```
 

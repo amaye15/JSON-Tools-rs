@@ -1884,6 +1884,106 @@ class TestJsonUnflattenerBuilderPattern:
         assert result["user"]["email"] == "john@example.com"
         assert result["user"]["name"] == "John"
 
+    def test_exclude_key_drops_container_subtree(self):
+        """Matching a container key drops its entire subtree, not just a leaf."""
+        data = {
+            "user": {
+                "name": "John",
+                "crypto_wallet": {"coin": "BTC", "balance": 100},
+            }
+        }
+        result = (
+            json_tools_rs.JSONTools()
+            .flatten()
+            .exclude_key("crypto")
+            .execute(data)
+        )
+        assert result["user.name"] == "John"
+        assert not any("crypto" in k for k in result)
+        assert len(result) == 1
+
+    def test_exclude_key_drops_leaf(self):
+        data = {"user": {"name": "John", "crypto_balance": 100, "city": "NYC"}}
+        result = (
+            json_tools_rs.JSONTools()
+            .flatten()
+            .exclude_key("crypto")
+            .execute(data)
+        )
+        assert result["user.name"] == "John"
+        assert result["user.city"] == "NYC"
+        assert "user.crypto_balance" not in result
+
+    def test_exclude_key_normal_mode_drops_subtree(self):
+        data = {
+            "user": {
+                "name": "John",
+                "crypto_wallet": {"coin": "BTC", "balance": 100},
+            }
+        }
+        result = (
+            json_tools_rs.JSONTools()
+            .normal()
+            .exclude_key("crypto")
+            .execute(data)
+        )
+        assert result["user"]["name"] == "John"
+        assert "crypto_wallet" not in result["user"]
+
+    def test_exclude_key_regex_and_multiple(self):
+        data = {"cryptoBalance": 100, "secret_token": "x", "name": "John"}
+        result = (
+            json_tools_rs.JSONTools()
+            .flatten()
+            .exclude_key("r'^crypto'")
+            .exclude_key("secret")
+            .execute(data)
+        )
+        assert result == {"name": "John"}
+
+    def test_exclude_value_string_leaf(self):
+        data = {"user": {"name": "John", "status": "banned"}}
+        result = (
+            json_tools_rs.JSONTools()
+            .flatten()
+            .exclude_value("banned")
+            .execute(data)
+        )
+        assert result == {"user.name": "John"}
+
+    def test_exclude_value_non_string_scalar(self):
+        data = {"a": 42, "b": True, "c": "keep"}
+        result = (
+            json_tools_rs.JSONTools()
+            .flatten()
+            .exclude_value("42")
+            .exclude_value("true")
+            .execute(data)
+        )
+        assert result == {"c": "keep"}
+
+    def test_exclude_value_normal_mode(self):
+        data = {"user": {"name": "John", "status": "banned"}}
+        result = (
+            json_tools_rs.JSONTools()
+            .normal()
+            .exclude_value("banned")
+            .execute(data)
+        )
+        assert result == {"user": {"name": "John"}}
+
+    def test_exclude_value_matches_after_replacement_and_conversion(self):
+        data = {"a": "old_price", "b": "keep"}
+        result = (
+            json_tools_rs.JSONTools()
+            .flatten()
+            .value_replacement("old_price", "999")
+            .auto_convert_types(True)
+            .exclude_value("999")
+            .execute(data)
+        )
+        assert result == {"b": "keep"}
+
     def test_regex_key_replacement(self):
         """Test regex key replacement."""
         flattened = {"user_name": "John", "admin_role": "super"}
@@ -2628,11 +2728,13 @@ class TestFineGrainedTypeConversion:
         assert result["true"] == "something"
         assert result["123"] == "also something"
 
-    def test_replacement_and_conversion_chaining_differs_by_mode(self):
-        """Pre-existing (not introduced by fine-grained control) cross-mode
-        behavior, confirmed identically through the new API: flatten() returns as
-        soon as value_replacement matches, without trying conversion on the
-        replaced value; normal() chains replacement into conversion."""
+    def test_replacement_and_conversion_chain_identically_across_modes(self):
+        """Previously an inconsistency: flatten()/unflatten() returned as soon as
+        value_replacement matched, without trying conversion on the replaced value,
+        while normal() already chained replacement into conversion. Fixed so all
+        three modes compose identically -- this is what makes remove_nulls reliably
+        catch a null that only emerges after a replacement runs, regardless of
+        mode."""
         data = {"a": "ACTIVE"}
 
         flatten_result = (
@@ -2642,7 +2744,7 @@ class TestFineGrainedTypeConversion:
             .convert_booleans(True)
             .execute(data)
         )
-        assert flatten_result["a"] == "true"  # still a string
+        assert flatten_result["a"] is True  # chained: replacement's output was converted
 
         normal_result = (
             json_tools_rs.JSONTools()
@@ -2652,6 +2754,34 @@ class TestFineGrainedTypeConversion:
             .execute(data)
         )
         assert normal_result["a"] is True  # chained
+
+    def test_remove_nulls_catches_null_produced_by_replacement_then_conversion(self):
+        """Direct regression test: a value_replacement turns "MISSING" into "N/A"
+        (a recognized null token), which auto_convert_types then converts to null,
+        which remove_nulls must then catch -- across flatten/unflatten/normal."""
+        data = {"user": {"name": "John", "status": "MISSING", "city": "NYC"}}
+
+        flatten_result = (
+            json_tools_rs.JSONTools()
+            .flatten()
+            .value_replacement("MISSING", "N/A")
+            .auto_convert_types(True)
+            .remove_nulls(True)
+            .execute(data)
+        )
+        assert flatten_result["user.name"] == "John"
+        assert "user.status" not in flatten_result
+
+        normal_result = (
+            json_tools_rs.JSONTools()
+            .normal()
+            .value_replacement("MISSING", "N/A")
+            .auto_convert_types(True)
+            .remove_nulls(True)
+            .execute(data)
+        )
+        assert normal_result["user"]["name"] == "John"
+        assert "status" not in normal_result["user"]
 
     def test_extra_tokens_empty_list_clears_vs_none_preserves(self):
         """Python-specific nuance from the kwargs-based bulk-replace design:

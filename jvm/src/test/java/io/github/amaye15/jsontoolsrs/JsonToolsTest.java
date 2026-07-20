@@ -69,6 +69,80 @@ class JsonToolsTest {
     }
 
     @Test
+    void excludeKeyDropsContainerSubtree() {
+        // Matching a container key drops its entire subtree, not just a leaf.
+        try (JsonToolsHandle tools = JsonTools.builder().flatten().excludeKey("crypto").build()) {
+            String result = tools.execute(
+                    "{\"user\":{\"name\":\"John\",\"crypto_wallet\":{\"coin\":\"BTC\",\"balance\":100}}}");
+            assertEquals("{\"user.name\":\"John\"}", result);
+        }
+    }
+
+    @Test
+    void excludeKeyDropsLeaf() {
+        try (JsonToolsHandle tools = JsonTools.builder().flatten().excludeKey("crypto").build()) {
+            String result =
+                    tools.execute("{\"user\":{\"name\":\"John\",\"crypto_balance\":100,\"city\":\"NYC\"}}");
+            assertEquals("{\"user.name\":\"John\",\"user.city\":\"NYC\"}", result);
+        }
+    }
+
+    @Test
+    void excludeKeyNormalModeDropsSubtree() {
+        try (JsonToolsHandle tools = JsonTools.builder().normal().excludeKey("crypto").build()) {
+            String result = tools.execute(
+                    "{\"user\":{\"name\":\"John\",\"crypto_wallet\":{\"coin\":\"BTC\",\"balance\":100}}}");
+            assertEquals("{\"user\":{\"name\":\"John\"}}", result);
+        }
+    }
+
+    @Test
+    void excludeKeyRegexAndMultiple() {
+        try (JsonToolsHandle tools = JsonTools.builder()
+                .flatten()
+                .excludeKey("r'^crypto'")
+                .excludeKey("secret")
+                .build()) {
+            String result =
+                    tools.execute("{\"cryptoBalance\":100,\"secret_token\":\"x\",\"name\":\"John\"}");
+            assertEquals("{\"name\":\"John\"}", result);
+        }
+    }
+
+    @Test
+    void excludeValueStringLeaf() {
+        try (JsonToolsHandle tools = JsonTools.builder().flatten().excludeValue("banned").build()) {
+            String result = tools.execute("{\"user\":{\"name\":\"John\",\"status\":\"banned\"}}");
+            assertEquals("{\"user.name\":\"John\"}", result);
+        }
+    }
+
+    @Test
+    void excludeValueNonStringScalar() {
+        try (JsonToolsHandle tools = JsonTools.builder()
+                .flatten()
+                .excludeValue("42")
+                .excludeValue("true")
+                .build()) {
+            String result = tools.execute("{\"a\":42,\"b\":true,\"c\":\"keep\"}");
+            assertEquals("{\"c\":\"keep\"}", result);
+        }
+    }
+
+    @Test
+    void excludeValueMatchesAfterReplacementAndConversion() {
+        try (JsonToolsHandle tools = JsonTools.builder()
+                .flatten()
+                .valueReplacement("old_price", "999")
+                .autoConvertTypes(true)
+                .excludeValue("999")
+                .build()) {
+            String result = tools.execute("{\"a\":\"old_price\",\"b\":\"keep\"}");
+            assertEquals("{\"b\":\"keep\"}", result);
+        }
+    }
+
+    @Test
     void removeNullsAndEmptyStrings() {
         try (JsonToolsHandle tools = JsonTools.builder()
                 .flatten()
@@ -387,17 +461,19 @@ class JsonToolsTest {
     }
 
     @Test
-    void replacementAndConversionChainingDiffersByMode() {
-        // Same pre-existing cross-mode behavior confirmed in the Rust and Python
-        // suites: flatten() returns as soon as valueReplacement matches, without
-        // trying conversion on the replaced value; normal() chains the two.
+    void replacementAndConversionChainIdenticallyAcrossModes() {
+        // Previously an inconsistency, matching the Rust and Python suites: flatten()
+        // returned as soon as valueReplacement matched, without trying conversion on
+        // the replaced value, while normal() already chained the two. Fixed so all
+        // modes compose identically -- this is what makes removeNulls reliably catch
+        // a null that only emerges after a replacement runs, regardless of mode.
         try (JsonToolsHandle flattenTools = JsonTools.builder()
                 .flatten()
                 .valueReplacement("ACTIVE", "true")
                 .convertBooleans(true)
                 .build()) {
             String result = flattenTools.execute("{\"a\":\"ACTIVE\"}");
-            assertEquals("{\"a\":\"true\"}", result); // still a string
+            assertEquals("{\"a\":true}", result); // chained
         }
         try (JsonToolsHandle normalTools = JsonTools.builder()
                 .normal()

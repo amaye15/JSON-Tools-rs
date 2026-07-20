@@ -12,7 +12,7 @@ Maven coordinates (published on tagged releases):
 <dependency>
   <groupId>io.github.amaye15</groupId>
   <artifactId>json-tools-rs-spark</artifactId>
-  <version>0.9.6</version>
+  <version>0.9.7</version>
 </dependency>
 ```
 
@@ -62,6 +62,8 @@ All methods return `this` for chaining.
 | `.removeEmptyArrays(value)` | `boolean` | `false` | Filter out `[]` values |
 | `.keyReplacement(find, replace)` | `String, String` | -- | Add a key replacement pattern (literal by default, `r'...'` for regex); repeatable |
 | `.valueReplacement(find, replace)` | `String, String` | -- | Add a value replacement pattern (literal by default, `r'...'` for regex); repeatable |
+| `.excludeKey(pattern)` | `String` | -- | Drop any key (and its entire subtree) whose name contains `pattern` (literal by default, `r'...'` for regex); repeatable, additive |
+| `.excludeValue(pattern)` | `String` | -- | Drop a key-value pair whose (scalar leaf) value contains `pattern`; repeatable, additive |
 | `.handleKeyCollision(value)` | `boolean` | `false` | Collect colliding keys into arrays |
 | `.autoConvertTypes(value)` | `boolean` | `false` | Auto-convert string values to native types (all 4 categories below, default behavior) |
 | `.convertDates(value)` | `boolean` | `false` | Date/datetime conversion, independently toggleable |

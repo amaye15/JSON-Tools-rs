@@ -260,5 +260,21 @@ public final class FeatureByFeature {
             System.out.println("   In:  " + String.join(", ", smallBatch));
             System.out.println("   Out: " + String.join(", ", results) + "\n");
         }
+
+        // 23. .excludeKey() - drop a key and its entire subtree
+        System.out.println("23. .excludeKey() - drop a container key's entire subtree");
+        String cryptoInput = "{\"user\":{\"name\":\"John\",\"crypto_wallet\":{\"coin\":\"BTC\",\"balance\":100}}}";
+        try (JsonToolsHandle tools = JsonTools.builder().flatten().excludeKey("crypto").build()) {
+            System.out.println("   In:  " + cryptoInput);
+            System.out.println("   Out: " + tools.execute(cryptoInput) + "\n");
+        }
+
+        // 24. .excludeValue() - drop a key-value pair by value content
+        System.out.println("24. .excludeValue() - drop a key-value pair whose value matches");
+        String bannedInput = "{\"user\":{\"name\":\"John\",\"status\":\"banned\"}}";
+        try (JsonToolsHandle tools = JsonTools.builder().flatten().excludeValue("banned").build()) {
+            System.out.println("   In:  " + bannedInput);
+            System.out.println("   Out: " + tools.execute(bannedInput) + "\n");
+        }
     }
 }

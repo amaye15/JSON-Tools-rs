@@ -61,6 +61,8 @@ All methods consume `self` and return `Self` for chaining. Marked `#[must_use]`.
 | `.remove_empty_arrays(flag)` | `bool` | `false` | Filter out `[]` values |
 | `.key_replacement(find, replace)` | `impl Into<String>, impl Into<String>` | -- | Add a key replacement pattern (literal by default, `r'...'` for regex) |
 | `.value_replacement(find, replace)` | `impl Into<String>, impl Into<String>` | -- | Add a value replacement pattern (literal by default, `r'...'` for regex) |
+| `.exclude_key(pattern)` | `impl Into<String>` | -- | Drop any key (and its entire subtree) whose name contains `pattern` (literal by default, `r'...'` for regex); additive |
+| `.exclude_value(pattern)` | `impl Into<String>` | -- | Drop a key-value pair whose (scalar leaf) value contains `pattern`; additive |
 | `.handle_key_collision(flag)` | `bool` | `false` | Collect colliding keys into arrays |
 | `.auto_convert_types(flag)` | `bool` | `false` | Auto-convert string values to native types (all 4 categories below, default behavior) |
 | `.convert_dates(flag)` / `.convert_dates_config(cfg)` | `bool` / `DateConversionConfig` | `false` | Date/datetime conversion, independently toggleable/customizable |
@@ -405,12 +407,14 @@ assert!(collision.has_collision_handling());
 
 ## ReplacementConfig
 
-Configuration for key and value replacement patterns. Uses `SmallVec<[(String, String); 2]>` internally to avoid heap allocation for the common case of 0-2 replacements.
+Configuration for key/value replacement and exclusion patterns. Uses `SmallVec<[(String, String); 2]>`/`SmallVec<[String; 2]>` internally to avoid heap allocation for the common case of 0-2 patterns.
 
 ```rust
 pub struct ReplacementConfig {
     pub key_replacements: SmallVec<[(String, String); 2]>,
     pub value_replacements: SmallVec<[(String, String); 2]>,
+    pub key_exclusions: SmallVec<[String; 2]>,
+    pub value_exclusions: SmallVec<[String; 2]>,
 }
 ```
 
@@ -420,6 +424,8 @@ pub struct ReplacementConfig {
 |--------|-------------|
 | `.add_key_replacement(find, replace)` | Add a key replacement pattern (literal by default, `r'...'` for regex) |
 | `.add_value_replacement(find, replace)` | Add a value replacement pattern (literal by default, `r'...'` for regex) |
+| `.add_key_exclusion(pattern)` | Add a key exclusion pattern -- drops the matched key and its entire subtree |
+| `.add_value_exclusion(pattern)` | Add a value exclusion pattern -- drops a key-value pair whose (scalar leaf) value matches |
 
 ### Query Methods
 
@@ -427,14 +433,20 @@ pub struct ReplacementConfig {
 |--------|---------|-------------|
 | `.has_key_replacements()` | `bool` | Are any key replacements configured? |
 | `.has_value_replacements()` | `bool` | Are any value replacements configured? |
+| `.has_key_exclusions()` | `bool` | Are any key exclusions configured? |
+| `.has_value_exclusions()` | `bool` | Are any value exclusions configured? |
 
 ```rust
 use json_tools_rs::ReplacementConfig;
 
 let replacements = ReplacementConfig::new()
     .add_key_replacement("r'^user_'", "")
-    .add_value_replacement("@old.com", "@new.com");
+    .add_value_replacement("@old.com", "@new.com")
+    .add_key_exclusion("crypto")
+    .add_value_exclusion("banned");
 
 assert!(replacements.has_key_replacements());
 assert!(replacements.has_value_replacements());
+assert!(replacements.has_key_exclusions());
+assert!(replacements.has_value_exclusions());
 ```

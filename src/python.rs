@@ -721,6 +721,34 @@ impl PyJSONTools {
         py_builder_method!(slf, tools, tools.value_replacement(find, replace))
     }
 
+    /// Exclude any key (and its entire value/subtree) whose name contains `pattern`.
+    ///
+    /// Literal substring match by default; wrap in `r'...'` for regex, matching
+    /// key_replacement's convention. Additive -- call once per keyword to exclude
+    /// multiple. Matching a container key drops its entire subtree.
+    ///
+    /// Args:
+    ///     pattern: Substring (or r'...'-wrapped regex) to match against key names.
+    #[pyo3(text_signature = "($self, pattern)")]
+    #[inline]
+    pub fn exclude_key(slf: PyRef<'_, Self>, pattern: String) -> PyResult<PyRef<'_, Self>> {
+        py_builder_method!(slf, tools, tools.exclude_key(pattern))
+    }
+
+    /// Drop a key-value pair whose value contains `pattern`.
+    ///
+    /// Literal substring match by default; wrap in `r'...'` for regex, matching
+    /// exclude_key's convention. Additive -- call once per pattern to exclude
+    /// multiple. Only applies to scalar leaf values (strings/numbers/booleans/null).
+    ///
+    /// Args:
+    ///     pattern: Substring (or r'...'-wrapped regex) to match against values.
+    #[pyo3(text_signature = "($self, pattern)")]
+    #[inline]
+    pub fn exclude_value(slf: PyRef<'_, Self>, pattern: String) -> PyResult<PyRef<'_, Self>> {
+        py_builder_method!(slf, tools, tools.exclude_value(pattern))
+    }
+
     /// Enable collision handling by collecting duplicate keys into arrays.
     ///
     /// When key transformations produce duplicate keys, values are collected

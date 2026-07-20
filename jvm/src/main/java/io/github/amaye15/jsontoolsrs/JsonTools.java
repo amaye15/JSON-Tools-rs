@@ -32,6 +32,8 @@ public final class JsonTools {
     private Boolean lowercaseKeys;
     private final List<String[]> keyReplacements = new ArrayList<>();
     private final List<String[]> valueReplacements = new ArrayList<>();
+    private final List<String> keyExclusions = new ArrayList<>();
+    private final List<String> valueExclusions = new ArrayList<>();
     private Boolean removeEmptyStrings;
     private Boolean removeNulls;
     private Boolean removeEmptyObjects;
@@ -102,6 +104,29 @@ public final class JsonTools {
     /** Adds a value replacement pattern; same literal/{@code r'...'} convention as {@link #keyReplacement}. */
     public JsonTools valueReplacement(String find, String replace) {
         this.valueReplacements.add(new String[] {find, replace});
+        return this;
+    }
+
+    /**
+     * Excludes any key (and its entire value/subtree) whose name contains
+     * {@code pattern}. Literal substring match by default; wrap in {@code r'...'}
+     * for regex, matching {@link #keyReplacement}'s convention. Additive -- call
+     * once per keyword to exclude multiple. Matching a container key drops its
+     * entire subtree.
+     */
+    public JsonTools excludeKey(String pattern) {
+        this.keyExclusions.add(pattern);
+        return this;
+    }
+
+    /**
+     * Drops a key-value pair whose value contains {@code pattern}. Literal substring
+     * match by default; wrap in {@code r'...'} for regex, matching {@link
+     * #excludeKey}'s convention. Additive -- call once per pattern to exclude
+     * multiple. Only applies to scalar leaf values (strings/numbers/booleans/null).
+     */
+    public JsonTools excludeValue(String pattern) {
+        this.valueExclusions.add(pattern);
         return this;
     }
 
@@ -310,6 +335,8 @@ public final class JsonTools {
         writeBooleanField(json, first, "lowercase_keys", lowercaseKeys);
         writePairListField(json, first, "key_replacements", keyReplacements);
         writePairListField(json, first, "value_replacements", valueReplacements);
+        writeStringListField(json, first, "key_exclusions", keyExclusions);
+        writeStringListField(json, first, "value_exclusions", valueExclusions);
         writeBooleanField(json, first, "remove_empty_strings", removeEmptyStrings);
         writeBooleanField(json, first, "remove_nulls", removeNulls);
         writeBooleanField(json, first, "remove_empty_objects", removeEmptyObjects);

@@ -29,6 +29,7 @@ Unlike simple JSON parsers, JSON Tools RS provides a complete toolkit for JSON t
 - 🎯 **Complete Roundtrip**: Flatten JSON and unflatten back to original structure with perfect fidelity
 - 🧹 **Comprehensive Filtering**: Remove empty strings, nulls, empty objects, and empty arrays (works for both flatten and unflatten)
 - 🔄 **Advanced Replacements**: Key/value replacements, literal (exact substring match) by default, or regex by wrapping the pattern in `r'...'`
+- 🚫 **Key/Value Exclusion**: Drop entire keys (and their subtree) or key-value pairs by pattern match with `.exclude_key()`/`.exclude_value()`
 - 🛡️ **Collision Handling**: Intelligent `.handle_key_collision(true)` to collect colliding values into arrays
 - 📅 **Date Normalization**: Automatic detection and normalization of ISO-8601 dates to UTC
 - 🔀 **Automatic Type Conversion**: Convert strings to numbers, booleans, and nulls with `.auto_convert_types(true)`
@@ -277,6 +278,8 @@ There are also narrative walkthroughs for a quicker first read:
 | `.remove_empty_arrays(bool)` | Remove empty arrays `[]` | `.remove_empty_arrays(true)` |
 | `.key_replacement(find, repl)` | Replace key patterns (literal, or regex via `r'...'`) | `.key_replacement("r'user_'", "")` |
 | `.value_replacement(find, repl)` | Replace value patterns (literal, or regex via `r'...'`) | `.value_replacement("@old.com", "@new.com")` |
+| `.exclude_key(pattern)` | Drop a key (and its entire subtree) matching a pattern | `.exclude_key("crypto")` |
+| `.exclude_value(pattern)` | Drop a key-value pair whose value matches a pattern | `.exclude_value("banned")` |
 | `.handle_key_collision(bool)` | Collect colliding keys into arrays | `.handle_key_collision(true)` |
 | `.auto_convert_types(bool)` | Convert types (nums, bools, dates, nulls) -- all 4 categories, default behavior | `.auto_convert_types(true)` |
 | `.convert_dates/nulls/booleans/numbers(bool)` | Convert types independently per category, with optional `_config(...)` customization | `.convert_numbers(true)` |
@@ -340,7 +343,7 @@ v0.9.2, ships automatically on tagged releases):
 <dependency>
   <groupId>io.github.amaye15</groupId>
   <artifactId>json-tools-rs-spark</artifactId>
-  <version>0.9.6</version>
+  <version>0.9.7</version>
 </dependency>
 ```
 
@@ -425,13 +428,19 @@ Dual-licensed under either [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), a
 
 ## Changelog
 
-### v0.9.6 (Current)
+### v0.9.7 (Current)
+
+* **New**: `.exclude_key(pattern)` (Rust/Python/JVM) -- drop any key, and its entire value/subtree, whose name contains `pattern` (literal by default, `r'...'` for regex). Matching a container key drops its entire subtree in O(1), without walking it. See [Key Exclusion](https://amaye15.github.io/JSON-Tools-rs/guide/replacements.html#key-exclusion).
+* **New**: `.exclude_value(pattern)` (Rust/Python/JVM) -- drop a key-value pair whose value contains `pattern`. Applies only to scalar leaf values; checked after `.value_replacement()`/`.auto_convert_types()` have run. See [Value Exclusion](https://amaye15.github.io/JSON-Tools-rs/guide/replacements.html#value-exclusion).
+* **Fix**: `.remove_nulls()` now runs consistently last across `.flatten()`/`.unflatten()`/`.normal()` mode -- previously `.value_replacement()` and `.auto_convert_types()` composed in different orders across the three engines, so a value that only became null after a replacement could slip past `.remove_nulls()` depending on mode.
+
+See [CHANGELOG.md](CHANGELOG.md) for full details, including edge-case coverage across all three languages.
+
+### v0.9.6
 
 * **New**: fine-grained, per-category control over automatic type conversion -- `.convert_dates()`, `.convert_nulls()`, `.convert_booleans()`, `.convert_numbers()` (Rust/Python/JVM) let each category be enabled/disabled independently, each also accepting real customization (date UTC-normalization toggles, extra null/boolean tokens, per-sub-format number toggles). `.auto_convert_types(bool)` is unchanged and still means "all four, default behavior." See [Automatic Type Conversion](#automatic-type-conversion).
 * **Breaking (pre-1.0)**: `ProcessingConfig`/`FilteringConfig`/`CollisionConfig`/`ReplacementConfig` are now `#[non_exhaustive]`; `ProcessingConfig.auto_convert_types: bool` removed in favor of `ProcessingConfig.type_conversion: TypeConversionConfig`. Only affects code constructing these via a bare struct literal or reading that field directly -- the `JSONTools` builder is unaffected.
 * **Performance**: the existing hot-path type-conversion function is untouched by this change; the new per-category dispatch is selected once per `execute()` call, confirmed within ~1% of prior `auto_convert_types` cost (Criterion).
-
-See [CHANGELOG.md](CHANGELOG.md) for full details, including edge-case coverage across all three languages.
 
 ### v0.9.5
 

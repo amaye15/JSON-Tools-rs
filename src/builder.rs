@@ -48,6 +48,8 @@ impl ProcessingConfig {
             replacements: ReplacementConfig {
                 key_replacements: tools.key_replacements.clone(),
                 value_replacements: tools.value_replacements.clone(),
+                key_exclusions: tools.key_exclusions.clone(),
+                value_exclusions: tools.value_exclusions.clone(),
             },
             type_conversion,
             type_conversion_mode,
@@ -76,6 +78,14 @@ pub struct JSONTools {
     /// Value replacement patterns (find, replace)
     /// Uses SmallVec to avoid heap allocation for 0-2 replacements (90% of use cases)
     value_replacements: SmallVec<[(String, String); 2]>,
+    /// Key exclusion patterns -- keys matching any of these are dropped entirely
+    /// (along with their subtree). Uses SmallVec to avoid heap allocation for 0-2
+    /// patterns (common case)
+    key_exclusions: SmallVec<[String; 2]>,
+    /// Value exclusion patterns -- a key-value pair is dropped if its (scalar leaf)
+    /// value matches any of these. Uses SmallVec to avoid heap allocation for 0-2
+    /// patterns (common case)
+    value_exclusions: SmallVec<[String; 2]>,
     /// Separator for nested keys (default: ".")
     separator: String,
 
@@ -124,6 +134,8 @@ impl Default for JSONTools {
             // SmallVec fields - no heap allocation for 0-2 replacements!
             key_replacements: SmallVec::new(),
             value_replacements: SmallVec::new(),
+            key_exclusions: SmallVec::new(),
+            value_exclusions: SmallVec::new(),
             separator: ".".to_string(),
             // Medium fields — use shared LazyLock statics from config module
             parallel_threshold: *DEFAULT_PARALLEL_THRESHOLD,
@@ -279,6 +291,77 @@ impl JSONTools {
         self
     }
 
+    /// Exclude any key (and its entire value/subtree) whose name contains `pattern`
+    ///
+    /// Patterns are literal (exact substring match) by default. Wrap a pattern in
+    /// `r'...'` (e.g. `r'^crypto_'`) to use standard Rust regex syntax instead,
+    /// matching `key_replacement`'s convention. Additive -- call once per keyword to
+    /// exclude multiple.
+    ///
+    /// Checked against the full dot-path in flatten/unflatten mode, and per key at
+    /// each nesting level in normal mode. Matching a container key drops its entire
+    /// subtree without walking it -- a leaf key is caught by the same check at its
+    /// own level. Array elements are never matched (no key name to check).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use json_tools_rs::{JSONTools, JsonOutput};
+    ///
+    /// // Matching a container key ("crypto_wallet") drops its entire subtree --
+    /// // "coin" and "balance" never appear in the output, without being individually
+    /// // matched themselves.
+    /// let json = r#"{"user": {"name": "John", "crypto_wallet": {"coin": "BTC", "balance": 100}}}"#;
+    /// let result = JSONTools::new()
+    ///     .flatten()
+    ///     .exclude_key("crypto")
+    ///     .execute(json).unwrap();
+    /// // Output: {"user.name": "John"}
+    /// ```
+    #[must_use]
+    pub fn exclude_key(mut self, pattern: impl Into<String>) -> Self {
+        self.key_exclusions.push(pattern.into());
+        self
+    }
+
+    /// Drop a key-value pair whose value contains `pattern`
+    ///
+    /// Patterns are literal (exact substring match) by default. Wrap a pattern in
+    /// `r'...'` to use regex, matching `exclude_key`'s convention. Additive -- call
+    /// once per pattern to exclude multiple.
+    ///
+    /// Only ever applies to scalar leaf values (strings/numbers/booleans/null) --
+    /// containers have no single value to check, so a value inside a nested object is
+    /// still individually checked, but the object itself never is. Checked against the
+    /// final value *after* any configured `value_replacement`/`auto_convert_types`
+    /// have run, so a value that only matches after being replaced or converted is
+    /// still caught -- matching `remove_nulls`'s ordering guarantee. A no-op at the
+    /// document root (there's no parent key to drop the value from).
+    ///
+    /// **Unflatten-specific note**: string values are matched against their JSON-
+    /// serialized form (including surrounding quotes), not the unescaped logical
+    /// text. Literal patterns are unaffected by this, but a regex with anchors needs
+    /// to account for the quotes, e.g. `r'^"admin"$'` rather than `r'^admin$'`, to
+    /// match a value that's exactly `"admin"`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use json_tools_rs::{JSONTools, JsonOutput};
+    ///
+    /// let json = r#"{"user": {"name": "John", "status": "banned"}}"#;
+    /// let result = JSONTools::new()
+    ///     .flatten()
+    ///     .exclude_value("banned")
+    ///     .execute(json).unwrap();
+    /// // Output: {"user.name": "John"}
+    /// ```
+    #[must_use]
+    pub fn exclude_value(mut self, pattern: impl Into<String>) -> Self {
+        self.value_exclusions.push(pattern.into());
+        self
+    }
+
     /// Remove keys with empty string values
     ///
     /// Works for both flatten and unflatten operations:
@@ -292,9 +375,18 @@ impl JSONTools {
 
     /// Remove keys with null values
     ///
-    /// Works for both flatten and unflatten operations:
+    /// Works identically in `.flatten()`, `.unflatten()`, and `.normal()` mode, and
+    /// for both single-document and batch input:
     /// - In flatten mode: removes flattened keys that have null values
     /// - In unflatten mode: removes keys from the unflattened JSON structure that have null values
+    /// - In normal mode: removes keys (at any nesting depth) that have null values
+    ///
+    /// This check runs *last* in a value's processing pipeline -- after any
+    /// configured `value_replacement` and `auto_convert_types` have both been
+    /// applied -- so it reliably catches a null produced by either of those, not
+    /// just a null present in the original input. A root-level `null` (the entire
+    /// document, not a nested key) is never removed, since there's no parent key to
+    /// omit it under.
     #[must_use]
     pub fn remove_nulls(mut self, value: bool) -> Self {
         self.remove_null_values = value;

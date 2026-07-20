@@ -206,6 +206,60 @@ result = (jt.JSONTools()
 # {"email": "user@company.org"}
 ```
 
+#### `.exclude_key(pattern)`
+
+```python
+tools.exclude_key(pattern: str) -> JSONTools
+```
+
+Drop any key -- and its entire value/subtree -- whose name contains `pattern`.
+Literal (exact substring match) by default; wrap in `r'...'` for regex, matching
+`key_replacement`'s convention. Additive -- call once per keyword to exclude
+multiple. Checked against the full dot-path in flatten/unflatten mode, and per key
+at each nesting level in normal mode; matching a container key drops its entire
+subtree without walking it. Array elements are never matched (no key name to check).
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `pattern` | `str` | Literal string, or `r'...'`-wrapped regex pattern, to match against key names |
+
+```python
+result = (jt.JSONTools()
+    .flatten()
+    .exclude_key("crypto")
+    .execute({"user": {"name": "John", "crypto_wallet": {"coin": "BTC"}}}))
+# {"user.name": "John"}
+```
+
+#### `.exclude_value(pattern)`
+
+```python
+tools.exclude_value(pattern: str) -> JSONTools
+```
+
+Drop a key-value pair whose value contains `pattern`. Same literal/`r'...'`
+convention as `exclude_key`. Additive. Only ever applies to scalar leaf values
+(strings/numbers/booleans/null) -- containers have no single value to check.
+Checked against the final value *after* any configured `value_replacement`/
+`auto_convert_types` have run. A no-op at the document root.
+
+**Unflatten-specific note**: string values are matched against their JSON-serialized
+form (including surrounding quotes), not the unescaped logical text. Literal
+patterns are unaffected; a regex with anchors needs `r'^"admin"$'` rather than
+`r'^admin$'` to match a value that's exactly `"admin"`.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `pattern` | `str` | Literal string, or `r'...'`-wrapped regex pattern, to match against values |
+
+```python
+result = (jt.JSONTools()
+    .flatten()
+    .exclude_value("banned")
+    .execute({"user": {"name": "John", "status": "banned"}}))
+# {"user.name": "John"}
+```
+
 #### `.handle_key_collision(flag)`
 
 ```python

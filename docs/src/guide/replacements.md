@@ -31,6 +31,71 @@ let result = JSONTools::new()
     .execute(json)?;
 ```
 
+## Key Exclusion
+
+Unlike `key_replacement` (which renames matched text within a key), `exclude_key` drops
+the entire key -- and its whole value/subtree -- from the output. Matching a container
+key removes everything under it, without those nested keys needing to match themselves:
+
+```rust
+let json = r#"{"user": {"name": "John", "crypto_wallet": {"coin": "BTC", "balance": 100}}}"#;
+let result = JSONTools::new()
+    .flatten()
+    .exclude_key("crypto")  // Literal
+    .exclude_key("r'^secret_'")  // Regex
+    .execute(json)?;
+// Output: {"user.name": "John"}
+```
+
+```python
+result = (jt.JSONTools()
+    .flatten()
+    .exclude_key("crypto")
+    .execute(data)
+)
+```
+
+Works identically in `.flatten()`, `.unflatten()`, and `.normal()` mode: checked against
+the full dot-path in flatten/unflatten mode, and per key at each nesting level in normal
+mode. Additive -- call it once per keyword to exclude multiple. Array elements are never
+matched, since they have no key name to check.
+
+## Value Exclusion
+
+`exclude_value` is `exclude_key`'s counterpart: it drops a key-value pair based on the
+**value**'s content instead of the key's name.
+
+```rust
+let json = r#"{"user": {"name": "John", "status": "banned"}}"#;
+let result = JSONTools::new()
+    .flatten()
+    .exclude_value("banned")  // Literal
+    .exclude_value("r'^flag_'")  // Regex
+    .execute(json)?;
+// Output: {"user.name": "John"}
+```
+
+```python
+result = (jt.JSONTools()
+    .flatten()
+    .exclude_value("banned")
+    .execute(data)
+)
+```
+
+Unlike `exclude_key`, this only ever applies to **scalar leaf values** (strings, numbers,
+booleans, `null`) -- containers have no single value to check, so an object or array is
+never itself excluded; only its individual scalar leaves can be. The check runs *after*
+any configured `value_replacement`/`auto_convert_types` have run, so a value that only
+matches after being replaced or converted is still caught. It's a no-op at the document
+root, since there's no parent key to drop the value from.
+
+**Unflatten-specific note**: string values are matched against their JSON-serialized
+form, including the surrounding quotes -- not the unescaped logical text. A literal
+pattern is unaffected by this (quotes don't change substring matching), but a regex with
+anchors needs to account for them: use `r'^"admin"$'`, not `r'^admin$'`, to match a value
+that's exactly `"admin"` in `.unflatten()` mode.
+
 ## Regex Syntax
 
 Wrap a pattern in `r'...'` (e.g. `r'^prefix_'`) to use it as a regular expression. Any

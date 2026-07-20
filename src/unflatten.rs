@@ -22,7 +22,7 @@ use crate::flatten::{
     TapeEntry, ValueRef,
 };
 use crate::json_parser;
-use crate::transform::{apply_replacement_patterns, apply_value_replacement_patterns};
+use crate::transform::{apply_replacement_patterns, matches_any_pattern};
 
 // ================================================================================================
 // UnflatNode — Lightweight Tree with Zero-Copy Leaves
@@ -85,9 +85,47 @@ pub(crate) fn process_single_json_for_unflatten(
 
     // Handle root-level primitives (not objects or arrays)
     if first != b'{' && first != b'[' {
-        let mut value = json_parser::parse_json(json)?;
-        if !config.replacements.value_replacements.is_empty() {
-            apply_value_replacement_patterns(&mut value, &config.replacements.value_replacements);
+        let value = json_parser::parse_json(json)?;
+        if let serde_json::Value::String(s) = value {
+            let has_value_replacements = !config.replacements.value_replacements.is_empty();
+            let type_conversion_mode = config.type_conversion_mode;
+            let auto_convert = type_conversion_mode != TypeConversionMode::Disabled;
+
+            // Value replacement
+            if has_value_replacements {
+                if let Some(replaced) =
+                    apply_replacement_patterns(&s, &config.replacements.value_replacements)
+                {
+                    // Also try type-converting the replaced value, so a replacement
+                    // producing a recognized token (null/number/date/etc.) is still
+                    // converted -- matches extract_value's composable order.
+                    // remove_nulls stays a no-op here: there's no parent key to omit
+                    // a root-level value under.
+                    if auto_convert {
+                        if let Some(converted) = convert_string_for_mode(
+                            &replaced,
+                            type_conversion_mode,
+                            &config.type_conversion,
+                        ) {
+                            return Ok(converted.into_owned());
+                        }
+                    }
+                    return json_parser::to_string(&serde_json::Value::String(replaced))
+                        .map_err(JsonToolsError::serialization_error);
+                }
+            }
+
+            // Type conversion (no replacement occurred)
+            if auto_convert {
+                if let Some(converted) =
+                    convert_string_for_mode(&s, type_conversion_mode, &config.type_conversion)
+                {
+                    return Ok(converted.into_owned());
+                }
+            }
+
+            return json_parser::to_string(&serde_json::Value::String(s))
+                .map_err(JsonToolsError::serialization_error);
         }
         return json_parser::to_string(&value).map_err(JsonToolsError::serialization_error);
     }
@@ -128,6 +166,7 @@ pub(crate) fn process_single_json_for_unflatten(
     Ok(serialize_unflatten_tree(
         &tree,
         &config.filtering,
+        &config.replacements.value_exclusions,
         input.len(),
     ))
 }
@@ -199,6 +238,16 @@ fn extract_flat_entries<'a>(
             break;
         }
 
+        // Key exclusion: drop this entry (and its value/subtree) entirely, without
+        // extracting the value at all -- advance_past_value is O(1) via the tape's
+        // precomputed container end-index.
+        if config.replacements.has_key_exclusions()
+            && matches_any_pattern(&key, &config.replacements.key_exclusions)
+        {
+            cursor = advance_past_value(tape, cursor);
+            continue;
+        }
+
         let val_entry = tape_entry(tape, cursor);
         let value = extract_value(input, tape, val_entry, config);
         cursor = advance_past_value(tape, cursor);
@@ -220,38 +269,53 @@ fn extract_value<'a>(
     match entry.kind() {
         EntryKind::StringStart => {
             let content_str = tape_content_str(input, entry);
+            let has_value_replacements = config.replacements.has_value_replacements();
+            let type_conversion_mode = config.type_conversion_mode;
+            let auto_convert = type_conversion_mode != TypeConversionMode::Disabled;
 
-            // Type conversion: "123" → 123, "true" → true
-            if config.type_conversion_mode != TypeConversionMode::Disabled {
+            if has_value_replacements || auto_convert {
                 let unescaped = if entry.string_has_escapes() {
                     unescape_json_string(content_str)
                 } else {
                     Cow::Borrowed(content_str)
                 };
 
-                if let Some(converted) = convert_string_for_mode(
-                    unescaped.as_ref(),
-                    config.type_conversion_mode,
-                    &config.type_conversion,
-                ) {
-                    return ValueRef::Owned(converted.into_owned());
+                // Value replacement -- tried first, matching flatten.rs's and
+                // normal mode's canonical order (unflatten previously tried type
+                // conversion first, which was inconsistent with the other two
+                // engines and could let a replacement's output bypass conversion,
+                // and therefore remove_nulls, entirely).
+                if has_value_replacements {
+                    if let Some(replaced) = apply_replacement_patterns(
+                        unescaped.as_ref(),
+                        &config.replacements.value_replacements,
+                    ) {
+                        // Also try type-converting the replaced value, so a
+                        // replacement producing a recognized token (null/number/
+                        // date/etc.) is still converted.
+                        if auto_convert {
+                            if let Some(converted) = convert_string_for_mode(
+                                &replaced,
+                                type_conversion_mode,
+                                &config.type_conversion,
+                            ) {
+                                return ValueRef::Owned(converted.into_owned());
+                            }
+                        }
+                        let escaped = escape_json_string(&replaced);
+                        return ValueRef::Owned(format!("\"{}\"", escaped));
+                    }
                 }
-            }
 
-            // Value replacements
-            if config.replacements.has_value_replacements() {
-                let unescaped = if entry.string_has_escapes() {
-                    unescape_json_string(content_str)
-                } else {
-                    Cow::Borrowed(content_str)
-                };
-
-                if let Some(replaced) = apply_replacement_patterns(
-                    unescaped.as_ref(),
-                    &config.replacements.value_replacements,
-                ) {
-                    let escaped = escape_json_string(&replaced);
-                    return ValueRef::Owned(format!("\"{}\"", escaped));
+                // Type conversion (no replacement occurred)
+                if auto_convert {
+                    if let Some(converted) = convert_string_for_mode(
+                        unescaped.as_ref(),
+                        type_conversion_mode,
+                        &config.type_conversion,
+                    ) {
+                        return ValueRef::Owned(converted.into_owned());
+                    }
                 }
             }
 
@@ -880,28 +944,42 @@ fn set_nested_array_value<'a>(
 fn serialize_unflatten_tree(
     root: &UnflatNode<'_>,
     filtering: &FilteringConfig,
+    value_exclusions: &[String],
     capacity_hint: usize,
 ) -> String {
     let mut output = String::with_capacity(capacity_hint);
-    serialize_node(root, &mut output, filtering);
+    serialize_node(root, &mut output, filtering, value_exclusions);
     output
 }
 
 /// Check if a leaf value should be filtered out based on filtering config.
+///
+/// `s` is the leaf's already-JSON-serialized text (quotes included for strings, e.g.
+/// `"\"hello\""`, not the unescaped logical content) -- `value_exclusions` patterns are
+/// matched against this same serialized form for consistency with the other checks
+/// here (`remove_empty_strings` already compares against the literal 2-quote `"\"\""`).
+/// A literal pattern is unaffected by this; a regex with anchors needs to account for
+/// the surrounding quotes on string values (e.g. `r'^"admin"$'`, not `r'^admin$'`).
 #[inline]
-fn should_filter_leaf(s: &str, filtering: &FilteringConfig) -> bool {
+fn should_filter_leaf(s: &str, filtering: &FilteringConfig, value_exclusions: &[String]) -> bool {
     (filtering.remove_nulls && s == "null")
         || (filtering.remove_empty_strings && s == "\"\"")
         || (filtering.remove_empty_objects && s == "{}")
         || (filtering.remove_empty_arrays && s == "[]")
+        || (!value_exclusions.is_empty() && matches_any_pattern(s, value_exclusions))
 }
 
 /// Recursive serialization. Returns true if the node produced output (not filtered).
-fn serialize_node(node: &UnflatNode<'_>, output: &mut String, filtering: &FilteringConfig) -> bool {
+fn serialize_node(
+    node: &UnflatNode<'_>,
+    output: &mut String,
+    filtering: &FilteringConfig,
+    value_exclusions: &[String],
+) -> bool {
     match node {
         UnflatNode::Leaf(vr) => {
             let s = vr.as_str();
-            if should_filter_leaf(s, filtering) {
+            if should_filter_leaf(s, filtering, value_exclusions) {
                 return false;
             }
             output.push_str(s);
@@ -909,6 +987,9 @@ fn serialize_node(node: &UnflatNode<'_>, output: &mut String, filtering: &Filter
         }
         UnflatNode::Null => {
             if filtering.remove_nulls {
+                return false;
+            }
+            if !value_exclusions.is_empty() && matches_any_pattern("null", value_exclusions) {
                 return false;
             }
             output.push_str("null");
@@ -937,7 +1018,7 @@ fn serialize_node(node: &UnflatNode<'_>, output: &mut String, filtering: &Filter
                 write_json_escaped_key(output, key);
                 output.push_str("\":");
 
-                if !serialize_node(child, output, filtering) {
+                if !serialize_node(child, output, filtering, value_exclusions) {
                     output.truncate(child_saved);
                 } else {
                     first = false;
@@ -978,7 +1059,7 @@ fn serialize_node(node: &UnflatNode<'_>, output: &mut String, filtering: &Filter
                     output.push(',');
                 }
 
-                if !serialize_node(child, output, filtering) {
+                if !serialize_node(child, output, filtering, value_exclusions) {
                     output.truncate(child_saved);
                 } else {
                     first = false;

@@ -23,7 +23,7 @@ use crate::config::{ProcessingConfig, TypeConversionMode};
 use crate::convert::convert_string_for_mode;
 use crate::error::JsonToolsError;
 use crate::json_parser;
-use crate::transform::{apply_replacement_patterns, apply_value_replacement_patterns};
+use crate::transform::{apply_replacement_patterns, matches_any_pattern};
 
 // ================================================================================================
 // SeparatorCache - Cached separator information for operations
@@ -804,7 +804,16 @@ impl<'a> DirectWalker<'a> {
                         cursor += 1;
                     }
                 }
-                cursor = self.walk_value(cursor);
+                if self.config.replacements.has_key_exclusions()
+                    && matches_any_pattern(
+                        self.path.as_str(),
+                        &self.config.replacements.key_exclusions,
+                    )
+                {
+                    cursor = skip_tape_value(self.tape, cursor);
+                } else {
+                    cursor = self.walk_value(cursor);
+                }
                 self.path.pop_level();
             } else {
                 cursor += 1;
@@ -856,8 +865,9 @@ impl<'a> DirectWalker<'a> {
         let has_value_replacements = self.config.replacements.has_value_replacements();
         let type_conversion_mode = self.config.type_conversion_mode;
         let auto_convert_types = type_conversion_mode != TypeConversionMode::Disabled;
+        let has_value_exclusions = self.config.replacements.has_value_exclusions();
 
-        if has_value_replacements || auto_convert_types {
+        if has_value_replacements || auto_convert_types || has_value_exclusions {
             // Unescape once — reused below by both replacement and conversion checks
             // (previously each ran its own unescape, doubling the cost whenever both
             // features were enabled and the replacement didn't match).
@@ -876,6 +886,39 @@ impl<'a> DirectWalker<'a> {
                     if self.config.filtering.remove_empty_strings && replaced.is_empty() {
                         return;
                     }
+                    // Also try type-converting the replaced value, so a replacement
+                    // that produces e.g. a recognized null/number/date token is still
+                    // converted and subject to remove_nulls -- matches
+                    // transform.rs::emit_string_value_shared's composable order.
+                    if auto_convert_types {
+                        if let Some(converted) = convert_string_for_mode(
+                            &replaced,
+                            type_conversion_mode,
+                            &self.config.type_conversion,
+                        ) {
+                            if self.config.filtering.remove_nulls && converted == "null" {
+                                return;
+                            }
+                            if has_value_exclusions
+                                && matches_any_pattern(
+                                    &converted,
+                                    &self.config.replacements.value_exclusions,
+                                )
+                            {
+                                return;
+                            }
+                            self.write_leaf_json_fragment(&converted);
+                            return;
+                        }
+                    }
+                    if has_value_exclusions
+                        && matches_any_pattern(
+                            &replaced,
+                            &self.config.replacements.value_exclusions,
+                        )
+                    {
+                        return;
+                    }
                     // Write as owned string value
                     let escaped = escape_json_string(&replaced);
                     self.write_leaf_owned_string(escaped.as_ref());
@@ -883,7 +926,7 @@ impl<'a> DirectWalker<'a> {
                 }
             }
 
-            // Type conversion
+            // Type conversion (no replacement occurred)
             if auto_convert_types {
                 if let Some(converted) = convert_string_for_mode(
                     unescaped.as_ref(),
@@ -893,9 +936,28 @@ impl<'a> DirectWalker<'a> {
                     if self.config.filtering.remove_nulls && converted == "null" {
                         return;
                     }
+                    if has_value_exclusions
+                        && matches_any_pattern(
+                            &converted,
+                            &self.config.replacements.value_exclusions,
+                        )
+                    {
+                        return;
+                    }
                     self.write_leaf_json_fragment(&converted);
                     return;
                 }
+            }
+
+            // Neither replacement nor conversion applied -- check the raw (unescaped)
+            // value before falling through to zero-copy.
+            if has_value_exclusions
+                && matches_any_pattern(
+                    unescaped.as_ref(),
+                    &self.config.replacements.value_exclusions,
+                )
+            {
+                return;
             }
         }
 
@@ -913,6 +975,13 @@ impl<'a> DirectWalker<'a> {
 
         if self.config.filtering.remove_nulls && trimmed == b"null" {
             return;
+        }
+        if self.config.replacements.has_value_exclusions() {
+            // SAFETY: JSON scalars (numbers/true/false/null) are always ASCII/UTF-8.
+            let s = unsafe { std::str::from_utf8_unchecked(trimmed) };
+            if matches_any_pattern(s, &self.config.replacements.value_exclusions) {
+                return;
+            }
         }
         self.write_value_raw(trimmed);
     }
@@ -1065,7 +1134,16 @@ impl<'a, KB: KeyBuilder> CollectingWalker<'a, KB> {
                         cursor += 1;
                     }
                 }
-                cursor = self.walk_value(cursor);
+                if self.config.replacements.has_key_exclusions()
+                    && matches_any_pattern(
+                        self.path.as_str(),
+                        &self.config.replacements.key_exclusions,
+                    )
+                {
+                    cursor = skip_tape_value(self.tape, cursor);
+                } else {
+                    cursor = self.walk_value(cursor);
+                }
                 self.path.pop_level();
             } else {
                 cursor += 1;
@@ -1116,8 +1194,9 @@ impl<'a, KB: KeyBuilder> CollectingWalker<'a, KB> {
         let has_value_replacements = self.config.replacements.has_value_replacements();
         let type_conversion_mode = self.config.type_conversion_mode;
         let auto_convert_types = type_conversion_mode != TypeConversionMode::Disabled;
+        let has_value_exclusions = self.config.replacements.has_value_exclusions();
 
-        if has_value_replacements || auto_convert_types {
+        if has_value_replacements || auto_convert_types || has_value_exclusions {
             // Unescape once — reused below by both replacement and conversion checks
             // (previously each ran its own unescape, doubling the cost whenever both
             // features were enabled and the replacement didn't match).
@@ -1133,6 +1212,37 @@ impl<'a, KB: KeyBuilder> CollectingWalker<'a, KB> {
                     &self.config.replacements.value_replacements,
                 ) {
                     if self.config.filtering.remove_empty_strings && replaced.is_empty() {
+                        return;
+                    }
+                    // Also try type-converting the replaced value -- see
+                    // DirectWalker::emit_string_value for the rationale.
+                    if auto_convert_types {
+                        if let Some(converted) = convert_string_for_mode(
+                            &replaced,
+                            type_conversion_mode,
+                            &self.config.type_conversion,
+                        ) {
+                            if self.config.filtering.remove_nulls && *converted == *"null" {
+                                return;
+                            }
+                            if has_value_exclusions
+                                && matches_any_pattern(
+                                    &converted,
+                                    &self.config.replacements.value_exclusions,
+                                )
+                            {
+                                return;
+                            }
+                            self.collect_value(ValueRef::Owned(converted.into_owned()));
+                            return;
+                        }
+                    }
+                    if has_value_exclusions
+                        && matches_any_pattern(
+                            &replaced,
+                            &self.config.replacements.value_exclusions,
+                        )
+                    {
                         return;
                     }
                     let escaped = escape_json_string(&replaced);
@@ -1154,9 +1264,28 @@ impl<'a, KB: KeyBuilder> CollectingWalker<'a, KB> {
                     if self.config.filtering.remove_nulls && *converted == *"null" {
                         return;
                     }
+                    if has_value_exclusions
+                        && matches_any_pattern(
+                            &converted,
+                            &self.config.replacements.value_exclusions,
+                        )
+                    {
+                        return;
+                    }
                     self.collect_value(ValueRef::Owned(converted.into_owned()));
                     return;
                 }
+            }
+
+            // Neither replacement nor conversion applied -- check the raw (unescaped)
+            // value before falling through to zero-copy.
+            if has_value_exclusions
+                && matches_any_pattern(
+                    unescaped.as_ref(),
+                    &self.config.replacements.value_exclusions,
+                )
+            {
+                return;
             }
         }
 
@@ -1170,6 +1299,13 @@ impl<'a, KB: KeyBuilder> CollectingWalker<'a, KB> {
 
         if self.config.filtering.remove_nulls && trimmed == b"null" {
             return;
+        }
+        if self.config.replacements.has_value_exclusions() {
+            // SAFETY: JSON scalars (numbers/true/false/null) are always ASCII/UTF-8.
+            let s = unsafe { std::str::from_utf8_unchecked(trimmed) };
+            if matches_any_pattern(s, &self.config.replacements.value_exclusions) {
+                return;
+            }
         }
         self.collect_value(ValueRef::Raw(trimmed));
     }
@@ -1824,9 +1960,47 @@ pub(crate) fn process_single_json(
 
     // Handle root-level primitives (not objects or arrays)
     if first != b'{' && first != b'[' {
-        let mut value = json_parser::parse_json(json)?;
-        if !config.replacements.value_replacements.is_empty() {
-            apply_value_replacement_patterns(&mut value, &config.replacements.value_replacements);
+        let value = json_parser::parse_json(json)?;
+        if let serde_json::Value::String(s) = value {
+            let has_value_replacements = !config.replacements.value_replacements.is_empty();
+            let type_conversion_mode = config.type_conversion_mode;
+            let auto_convert = type_conversion_mode != TypeConversionMode::Disabled;
+
+            // Value replacement
+            if has_value_replacements {
+                if let Some(replaced) =
+                    apply_replacement_patterns(&s, &config.replacements.value_replacements)
+                {
+                    // Also try type-converting the replaced value, so a replacement
+                    // producing a recognized token (null/number/date/etc.) is still
+                    // converted -- matches emit_string_value's composable order.
+                    // remove_nulls stays a no-op here: there's no parent key to omit
+                    // a root-level value under.
+                    if auto_convert {
+                        if let Some(converted) = convert_string_for_mode(
+                            &replaced,
+                            type_conversion_mode,
+                            &config.type_conversion,
+                        ) {
+                            return Ok(converted.into_owned());
+                        }
+                    }
+                    return json_parser::to_string(&serde_json::Value::String(replaced))
+                        .map_err(JsonToolsError::serialization_error);
+                }
+            }
+
+            // Type conversion (no replacement occurred)
+            if auto_convert {
+                if let Some(converted) =
+                    convert_string_for_mode(&s, type_conversion_mode, &config.type_conversion)
+                {
+                    return Ok(converted.into_owned());
+                }
+            }
+
+            return json_parser::to_string(&serde_json::Value::String(s))
+                .map_err(JsonToolsError::serialization_error);
         }
         return json_parser::to_string(&value).map_err(JsonToolsError::serialization_error);
     }

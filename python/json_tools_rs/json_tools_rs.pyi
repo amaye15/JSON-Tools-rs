@@ -90,6 +90,14 @@ class JSONTools:
         """Add a value replacement pattern. Literal (exact substring) by default; wrap in r'...' for regex."""
         ...
 
+    def exclude_key(self, pattern: str) -> "JSONTools":
+        """Exclude any key (and its entire subtree) whose name contains pattern. Literal by default; wrap in r'...' for regex. Additive."""
+        ...
+
+    def exclude_value(self, pattern: str) -> "JSONTools":
+        """Drop a key-value pair whose value contains pattern. Literal by default; wrap in r'...' for regex. Additive. Scalar leaf values only."""
+        ...
+
     def handle_key_collision(self, value: bool) -> "JSONTools":
         """Enable collision handling by collecting duplicate keys into arrays."""
         ...

@@ -7,6 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.7] - 2026-07-20
+
+### Added
+- **`.exclude_key(pattern)`** (Rust/Python/JVM): drop any key -- and its entire
+  value/subtree -- whose name contains `pattern` (literal substring match by
+  default, `r'...'` for regex, matching `.key_replacement()`'s convention).
+  Additive -- call once per keyword to exclude multiple. Works identically in
+  `.flatten()`, `.unflatten()`, and `.normal()` mode: checked against the full
+  dot-path in flatten/unflatten, and per key at each nesting level in normal mode.
+  Matching a container key drops its entire subtree in O(1), without walking it --
+  the tape format's precomputed container end-index is reused to skip straight past
+  an excluded subtree instead of visiting and discarding every nested leaf. Array
+  elements are never matched, since they have no key name to check.
+- **`.exclude_value(pattern)`** (Rust/Python/JVM): drop a key-value pair whose
+  value contains `pattern`. Same literal/`r'...'` convention as `.exclude_key()`.
+  Additive. Unlike `.exclude_key()`, this only ever applies to scalar leaf values
+  (strings/numbers/booleans/null) -- containers have no single value to check, so
+  a per-leaf check runs after any configured `.value_replacement()`/
+  `.auto_convert_types()` have already transformed the value, matching
+  `.remove_nulls()`'s existing "runs last" ordering guarantee (a value that only
+  matches after being replaced or converted is still caught). A no-op at the
+  document root, since there's no parent key to drop the value from. In
+  `.unflatten()` mode specifically, string values are matched against their
+  JSON-serialized form (quotes included), not the unescaped logical text --
+  literal patterns are unaffected, but a regex with anchors needs to account for
+  the quotes (e.g. `r'^"admin"$'`, not `r'^admin$'`).
+
+### Fixed
+- **`.remove_nulls()` now reliably runs last, consistently across
+  `.flatten()`/`.unflatten()`/`.normal()` mode and both single-document and batch
+  input.** Previously, `.value_replacement()` and `.auto_convert_types()` composed
+  in three different orders across the three engines: flatten mode returned
+  immediately on a replacement match without ever trying conversion on the
+  replaced value; unflatten mode tried conversion *before* replacement (the
+  opposite order); only normal mode already composed them correctly (replacement,
+  then conversion applied to the replacement's result). This meant the same
+  document and config could produce different results depending on which mode
+  processed it, and a value that only became null after a replacement ran could
+  slip past `.remove_nulls()` in flatten/unflatten mode. All three engines now
+  compose replacement-then-conversion identically, including each engine's
+  root-primitive path (a whole document that's a bare scalar, not an object/array)
+  -- flatten's root-primitive handler previously skipped type conversion entirely
+  for this case.
+
 ## [0.9.6] - 2026-07-19
 
 ### Added

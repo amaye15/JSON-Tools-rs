@@ -18,7 +18,6 @@ use crate::flatten::{
 };
 use crate::fxhash::FxHashMap;
 use memchr::memmem;
-use serde_json::Value;
 use smallvec::SmallVec;
 use std::borrow::Cow;
 
@@ -137,16 +136,21 @@ pub(crate) fn apply_replacement_patterns(s: &str, patterns: &[(String, String)])
     }
 }
 
-/// Core value replacement logic that works with any Value type.
-/// Delegates to `apply_replacement_patterns` for the shared regex/literal
-/// replacement logic, then writes the result back into the Value.
+/// Check whether `s` matches any exclusion pattern -- literal substring by default,
+/// regex via `r'...'` wrapping, same convention as `apply_replacement_patterns`. Used
+/// by `exclude_key` to decide whether a key (and its entire subtree) should be
+/// dropped. A regex that fails to compile is treated as non-matching, mirroring
+/// `apply_replacement_patterns`'s existing silent-failure behavior for bad patterns.
 #[inline]
-pub(crate) fn apply_value_replacement_patterns(value: &mut Value, patterns: &[(String, String)]) {
-    if let Value::String(s) = value {
-        if let Some(replaced) = apply_replacement_patterns(s, patterns) {
-            *s = replaced;
+pub(crate) fn matches_any_pattern(s: &str, patterns: &[String]) -> bool {
+    patterns.iter().any(|pattern| match parse_pattern(pattern) {
+        ParsedPattern::Regex(inner) => get_cached_regex(inner)
+            .map(|re| re.is_match(s))
+            .unwrap_or(false),
+        ParsedPattern::Literal(lit) => {
+            lit.is_empty() || memmem::find(s.as_bytes(), lit.as_bytes()).is_some()
         }
-    }
+    })
 }
 
 // ================================================================================================
@@ -206,47 +210,57 @@ fn handle_root_primitive(
     // Check if it's a quoted string
     if trimmed.len() >= 2 && trimmed[0] == b'"' && trimmed[trimmed.len() - 1] == b'"' {
         let content = &s[1..s.len() - 1];
+        let has_value_replacements = config.replacements.has_value_replacements();
+        let auto_convert = config.type_conversion_mode != TypeConversionMode::Disabled;
 
-        // Value replacement
-        if config.replacements.has_value_replacements() {
+        if has_value_replacements || auto_convert {
             let unescaped = if memchr::memchr(b'\\', content.as_bytes()).is_some() {
                 unescape_json_string(content)
             } else {
                 Cow::Borrowed(content)
             };
-            if let Some(replaced) = apply_replacement_patterns(
-                unescaped.as_ref(),
-                &config.replacements.value_replacements,
-            ) {
-                // Re-escape and return
-                let escaped = escape_json_string(&replaced);
-                return Ok(format!("\"{}\"", escaped));
-            }
-        }
 
-        // Type conversion
-        if config.type_conversion_mode != TypeConversionMode::Disabled {
-            let unescaped = if memchr::memchr(b'\\', content.as_bytes()).is_some() {
-                unescape_json_string(content)
-            } else {
-                Cow::Borrowed(content)
-            };
-            if let Some(converted) = convert_string_for_mode(
-                unescaped.as_ref(),
-                config.type_conversion_mode,
-                &config.type_conversion,
-            ) {
-                return Ok(converted.into_owned());
+            // Value replacement
+            if has_value_replacements {
+                if let Some(replaced) = apply_replacement_patterns(
+                    unescaped.as_ref(),
+                    &config.replacements.value_replacements,
+                ) {
+                    // Also try type-converting the replaced value, so a replacement
+                    // that produces a recognized token (e.g. a null/number/date
+                    // sentinel) is still converted -- matches
+                    // emit_string_value_shared's composable order.
+                    if auto_convert {
+                        if let Some(converted) = convert_string_for_mode(
+                            &replaced,
+                            config.type_conversion_mode,
+                            &config.type_conversion,
+                        ) {
+                            return Ok(converted.into_owned());
+                        }
+                    }
+                    // Re-escape and return
+                    let escaped = escape_json_string(&replaced);
+                    return Ok(format!("\"{}\"", escaped));
+                }
+            }
+
+            // Type conversion (no replacement occurred)
+            if auto_convert {
+                if let Some(converted) = convert_string_for_mode(
+                    unescaped.as_ref(),
+                    config.type_conversion_mode,
+                    &config.type_conversion,
+                ) {
+                    return Ok(converted.into_owned());
+                }
             }
         }
     }
 
-    // Filtering for null
-    if config.filtering.remove_nulls && trimmed == b"null" {
-        // Root null with remove_nulls — return "null" since we can't remove the root
-        return Ok(s.to_string());
-    }
-
+    // Root-level remove_nulls can't remove the whole document (there's no parent key
+    // to omit the value under), so a root `null` is always returned unchanged --
+    // documented no-op, matches flatten's root-primitive handling.
     Ok(s.to_string())
 }
 
@@ -270,9 +284,10 @@ fn emit_string_value_shared(
     let has_replacements = config.replacements.has_value_replacements();
     let type_conversion_mode = config.type_conversion_mode;
     let auto_convert = type_conversion_mode != TypeConversionMode::Disabled;
+    let has_value_exclusions = config.replacements.has_value_exclusions();
 
-    // Early exit: nothing to transform
-    if !has_replacements && !auto_convert {
+    // Early exit: nothing to transform or check
+    if !has_replacements && !auto_convert && !has_value_exclusions {
         return (false, false);
     }
 
@@ -301,9 +316,19 @@ fn emit_string_value_shared(
                     if config.filtering.remove_nulls && converted == "null" {
                         return (true, true);
                     }
+                    if has_value_exclusions
+                        && matches_any_pattern(&converted, &config.replacements.value_exclusions)
+                    {
+                        return (true, true);
+                    }
                     output.push_str(&converted);
                     return (false, true);
                 }
+            }
+            if has_value_exclusions
+                && matches_any_pattern(&replaced, &config.replacements.value_exclusions)
+            {
+                return (true, true);
             }
             let escaped = escape_json_string(&replaced);
             output.push('"');
@@ -323,9 +348,21 @@ fn emit_string_value_shared(
             if config.filtering.remove_nulls && converted == "null" {
                 return (true, true);
             }
+            if has_value_exclusions
+                && matches_any_pattern(&converted, &config.replacements.value_exclusions)
+            {
+                return (true, true);
+            }
             output.push_str(&converted);
             return (false, true);
         }
+    }
+
+    // Neither replacement nor conversion applied -- check the raw (unescaped) value.
+    if has_value_exclusions
+        && matches_any_pattern(unescaped.as_ref(), &config.replacements.value_exclusions)
+    {
+        return (true, true);
     }
 
     (false, false)
@@ -396,6 +433,31 @@ impl<'a> NormalFastWalker<'a> {
             let entry = self.tape[cursor];
             if entry.kind() == EntryKind::StringStart {
                 // This is a key
+                let is_excluded = self.config.replacements.has_key_exclusions() && {
+                    let key_content = tape_content_str(self.input, entry);
+                    let key_for_match = if entry.string_has_escapes() {
+                        unescape_json_string(key_content)
+                    } else {
+                        Cow::Borrowed(key_content)
+                    };
+                    matches_any_pattern(
+                        key_for_match.as_ref(),
+                        &self.config.replacements.key_exclusions,
+                    )
+                };
+
+                if is_excluded {
+                    // True O(1) early skip -- nothing written to output at all, so
+                    // no write-then-rollback truncate needed (unlike value
+                    // filtering below).
+                    cursor += 1; // skip key StringStart
+                    if cursor < end_idx && self.tape[cursor].kind() == EntryKind::Colon {
+                        cursor += 1;
+                    }
+                    cursor = skip_tape_value(self.tape, cursor);
+                    continue;
+                }
+
                 let checkpoint = self.output.len();
 
                 // Emit comma separator
@@ -523,7 +585,13 @@ impl<'a> NormalFastWalker<'a> {
             return (idx + 1, true);
         }
 
+        // SAFETY: JSON scalars (numbers/true/false/null) are always ASCII/UTF-8.
         let s = unsafe { std::str::from_utf8_unchecked(trimmed) };
+        if self.config.replacements.has_value_exclusions()
+            && matches_any_pattern(s, &self.config.replacements.value_exclusions)
+        {
+            return (idx + 1, true);
+        }
         self.output.push_str(s);
         (idx + 1, false)
     }
@@ -655,6 +723,19 @@ impl<'a> NormalSlowWalker<'a> {
                 // Determine value tape position and advance cursor past it
                 let val_start = cursor;
                 cursor = skip_tape_value(self.tape, cursor);
+
+                // Key exclusion: cursor is already advanced past the value above
+                // (skip_tape_value is O(1) via the tape's precomputed container
+                // end-index), so dropping this entry is just a matter of not
+                // pushing it -- no extra bookkeeping needed.
+                if self.config.replacements.has_key_exclusions()
+                    && matches_any_pattern(
+                        &transformed_key,
+                        &self.config.replacements.key_exclusions,
+                    )
+                {
+                    continue;
+                }
 
                 entries.push(SlowObjectEntry {
                     key: transformed_key,
@@ -888,7 +969,13 @@ impl<'a> NormalSlowWalker<'a> {
             return (idx + 1, true);
         }
 
+        // SAFETY: JSON scalars (numbers/true/false/null) are always ASCII/UTF-8.
         let s = unsafe { std::str::from_utf8_unchecked(trimmed) };
+        if self.config.replacements.has_value_exclusions()
+            && matches_any_pattern(s, &self.config.replacements.value_exclusions)
+        {
+            return (idx + 1, true);
+        }
         self.output.push_str(s);
         (idx + 1, false)
     }

@@ -276,4 +276,26 @@ fn main() {
         }
         _ => println!("   Unexpected result\n"),
     }
+
+    // 23. exclude_key() - drop a key and its entire subtree
+    println!("23. exclude_key() - drop a container key's entire subtree");
+    let input = r#"{"user":{"name":"John","crypto_wallet":{"coin":"BTC","balance":100}}}"#;
+    let out = single(
+        JSONTools::new()
+            .flatten()
+            .exclude_key("crypto")
+            .execute(input),
+    );
+    println!("   In:  {input}\n   Out: {out}\n");
+
+    // 24. exclude_value() - drop a key-value pair by value content
+    println!("24. exclude_value() - drop a key-value pair whose value matches");
+    let input = r#"{"user":{"name":"John","status":"banned"}}"#;
+    let out = single(
+        JSONTools::new()
+            .flatten()
+            .exclude_value("banned")
+            .execute(input),
+    );
+    println!("   In:  {input}\n   Out: {out}\n");
 }

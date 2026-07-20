@@ -43,6 +43,10 @@ struct JvmConfig {
     key_replacements: Vec<(String, String)>,
     #[serde(default)]
     value_replacements: Vec<(String, String)>,
+    #[serde(default)]
+    key_exclusions: Vec<String>,
+    #[serde(default)]
+    value_exclusions: Vec<String>,
     remove_empty_strings: Option<bool>,
     remove_nulls: Option<bool>,
     remove_empty_objects: Option<bool>,
@@ -130,6 +134,12 @@ fn build_tools(config_json: &str) -> Result<JSONTools, JsonToolsError> {
     }
     for (find, replace) in config.value_replacements {
         tools = tools.value_replacement(find, replace);
+    }
+    for pattern in config.key_exclusions {
+        tools = tools.exclude_key(pattern);
+    }
+    for pattern in config.value_exclusions {
+        tools = tools.exclude_value(pattern);
     }
     if let Some(v) = config.remove_empty_strings {
         tools = tools.remove_empty_strings(v);

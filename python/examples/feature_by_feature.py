@@ -210,6 +210,18 @@ def main() -> None:
     results = json_tools_rs.JSONTools().flatten().execute(batch)
     print(f"   In:  {batch}\n   Out: {results}\n")
 
+    # 23. .exclude_key() - drop a key and its entire subtree
+    print("23. .exclude_key() - drop a container key's entire subtree")
+    data = {"user": {"name": "John", "crypto_wallet": {"coin": "BTC", "balance": 100}}}
+    out = json_tools_rs.JSONTools().flatten().exclude_key("crypto").execute(data)
+    print(f"   In:  {data}\n   Out: {out}\n")
+
+    # 24. .exclude_value() - drop a key-value pair by value content
+    print("24. .exclude_value() - drop a key-value pair whose value matches")
+    data = {"user": {"name": "John", "status": "banned"}}
+    out = json_tools_rs.JSONTools().flatten().exclude_value("banned").execute(data)
+    print(f"   In:  {data}\n   Out: {out}\n")
+
 
 if __name__ == "__main__":
     main()

@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.9.7 (2026-07-20)
+
+### Added
+- **`.exclude_key(pattern)`** (Rust/Python/JVM): drop any key -- and its entire value/subtree -- whose name contains `pattern` (literal by default, `r'...'` for regex). Additive. Works identically in `.flatten()`, `.unflatten()`, and `.normal()` mode; matching a container key drops its entire subtree in O(1) without walking it. Array elements are never matched. See [Key Exclusion](../guide/replacements.md#key-exclusion).
+- **`.exclude_value(pattern)`** (Rust/Python/JVM): drop a key-value pair whose value contains `pattern`. Same convention as `.exclude_key()`. Only applies to scalar leaf values; checked after `.value_replacement()`/`.auto_convert_types()` have run, matching `.remove_nulls()`'s ordering guarantee. A no-op at the document root. In `.unflatten()` mode, string values are matched against their JSON-serialized (quoted) form -- see [Value Exclusion](../guide/replacements.md#value-exclusion) for the regex-anchor caveat this implies.
+
+### Fixed
+- **`.remove_nulls()` now runs consistently last across `.flatten()`/`.unflatten()`/`.normal()` mode.** Previously `.value_replacement()` and `.auto_convert_types()` composed in three different orders across the three engines (flatten and unflatten each had a real ordering bug; only normal mode was already correct), so the same document/config could produce different results depending on mode, and a value that only became null after a replacement could slip past `.remove_nulls()`. All three engines -- including each one's root-primitive (bare-scalar-document) path -- now compose replacement-then-conversion identically.
+
 ## v0.9.6 (2026-07-19)
 
 ### Added

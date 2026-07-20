@@ -47,7 +47,15 @@ pub(crate) enum OperationMode {
 pub struct FilteringConfig {
     /// Remove keys with empty string values
     pub remove_empty_strings: bool,
-    /// Remove keys with null values
+    /// Remove keys with null values. Checked as the last step of a value's
+    /// processing pipeline, after any configured `value_replacement` and
+    /// `auto_convert_types` have both run -- so a value that only becomes `null`
+    /// through a replacement (e.g. replacing a sentinel with a recognized null
+    /// token) or through type conversion is still caught. This ordering is applied
+    /// consistently across `.flatten()`, `.unflatten()`, and `.normal()` mode, and
+    /// applies identically to single-document and batch input. A root-level `null`
+    /// (the entire document, not a nested key) is never removed, since there's no
+    /// parent key to omit it under.
     pub remove_nulls: bool,
     /// Remove keys with empty object values
     pub remove_empty_objects: bool,
@@ -68,7 +76,9 @@ impl FilteringConfig {
         self
     }
 
-    /// Enable removal of null values
+    /// Enable removal of null values. See the field doc comment on
+    /// [`FilteringConfig::remove_nulls`] for the ordering guarantee relative to
+    /// `value_replacement`/`auto_convert_types`.
     #[must_use]
     pub fn remove_nulls(mut self, enabled: bool) -> Self {
         self.remove_nulls = enabled;
@@ -135,6 +145,23 @@ pub struct ReplacementConfig {
     /// Value replacement patterns (find, replace)
     /// Uses SmallVec to avoid heap allocation for 0-2 replacements (common case)
     pub value_replacements: SmallVec<[(String, String); 2]>,
+    /// Patterns for excluding entire keys (and their values/subtrees) by name.
+    /// Literal substring match by default; wrap in `r'...'` for regex, matching
+    /// `key_replacements`'s convention. A key matches if any pattern is found in its
+    /// full dot-path (flatten/unflatten) or in its own name at that nesting level
+    /// (normal mode) -- matching a container key drops its entire subtree without
+    /// walking it. See `crate::builder::JSONTools::exclude_key` for full docs.
+    pub key_exclusions: SmallVec<[String; 2]>,
+    /// Patterns for dropping a key-value pair by *value* content. Literal substring
+    /// match by default; wrap in `r'...'` for regex. Only ever applies to scalar leaf
+    /// values (strings/numbers/booleans/null) -- containers have no single value to
+    /// check. Checked against the final value after any configured
+    /// `value_replacement`/`auto_convert_types` have run, matching `remove_nulls`'s
+    /// ordering guarantee. A no-op at the document root (no parent key to drop the
+    /// value from), same precedent as `remove_nulls`. See
+    /// `crate::builder::JSONTools::exclude_value` for full docs including the
+    /// unflatten quoted-form caveat.
+    pub value_exclusions: SmallVec<[String; 2]>,
 }
 
 impl ReplacementConfig {
@@ -143,6 +170,8 @@ impl ReplacementConfig {
         Self {
             key_replacements: SmallVec::new(),
             value_replacements: SmallVec::new(),
+            key_exclusions: SmallVec::new(),
+            value_exclusions: SmallVec::new(),
         }
     }
 
@@ -176,6 +205,30 @@ impl ReplacementConfig {
     /// Check if any value replacements are configured
     pub fn has_value_replacements(&self) -> bool {
         !self.value_replacements.is_empty()
+    }
+
+    /// Add a key exclusion pattern
+    #[must_use]
+    pub fn add_key_exclusion(mut self, pattern: impl Into<String>) -> Self {
+        self.key_exclusions.push(pattern.into());
+        self
+    }
+
+    /// Check if any key exclusions are configured
+    pub fn has_key_exclusions(&self) -> bool {
+        !self.key_exclusions.is_empty()
+    }
+
+    /// Add a value exclusion pattern
+    #[must_use]
+    pub fn add_value_exclusion(mut self, pattern: impl Into<String>) -> Self {
+        self.value_exclusions.push(pattern.into());
+        self
+    }
+
+    /// Check if any value exclusions are configured
+    pub fn has_value_exclusions(&self) -> bool {
+        !self.value_exclusions.is_empty()
     }
 }
 

@@ -118,6 +118,342 @@ mod unit_tests {
         assert_eq!(parsed["role"], "super");
     }
 
+    #[test]
+    fn test_exclude_key_drops_container_subtree_flatten() {
+        // Matching a container key ("crypto_wallet") must drop its entire subtree
+        // without the leaf keys ("coin", "balance") ever needing to individually match.
+        let json =
+            r#"{"user": {"name": "John", "crypto_wallet": {"coin": "BTC", "balance": 100}}}"#;
+        let result = JSONTools::new()
+            .flatten()
+            .exclude_key("crypto")
+            .execute(json)
+            .unwrap();
+        let parsed: Value = serde_json::from_str(&extract_single(result)).unwrap();
+        assert_eq!(parsed["user.name"], "John");
+        let keys: Vec<&str> = parsed
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(|s| s.as_str())
+            .collect();
+        assert!(!keys.iter().any(|k| k.contains("crypto")));
+        assert_eq!(keys.len(), 1);
+    }
+
+    #[test]
+    fn test_exclude_key_drops_leaf_flatten() {
+        let json = r#"{"user": {"name": "John", "crypto_balance": 100, "city": "NYC"}}"#;
+        let result = JSONTools::new()
+            .flatten()
+            .exclude_key("crypto")
+            .execute(json)
+            .unwrap();
+        let parsed: Value = serde_json::from_str(&extract_single(result)).unwrap();
+        assert_eq!(parsed["user.name"], "John");
+        assert_eq!(parsed["user.city"], "NYC");
+        assert!(!parsed
+            .as_object()
+            .unwrap()
+            .contains_key("user.crypto_balance"));
+    }
+
+    #[test]
+    fn test_exclude_key_drops_container_subtree_unflatten() {
+        let flat_json = r#"{"user.name": "John", "user.crypto_wallet.coin": "BTC", "user.crypto_wallet.balance": 100}"#;
+        let result = JSONTools::new()
+            .unflatten()
+            .exclude_key("crypto")
+            .execute(flat_json)
+            .unwrap();
+        let parsed: Value = serde_json::from_str(&extract_single(result)).unwrap();
+        assert_eq!(parsed["user"]["name"], "John");
+        assert!(!parsed["user"]
+            .as_object()
+            .unwrap()
+            .contains_key("crypto_wallet"));
+    }
+
+    #[test]
+    fn test_exclude_key_drops_container_subtree_normal() {
+        let json =
+            r#"{"user": {"name": "John", "crypto_wallet": {"coin": "BTC", "balance": 100}}}"#;
+        let result = JSONTools::new()
+            .normal()
+            .exclude_key("crypto")
+            .execute(json)
+            .unwrap();
+        let parsed: Value = serde_json::from_str(&extract_single(result)).unwrap();
+        assert_eq!(parsed["user"]["name"], "John");
+        assert!(!parsed["user"]
+            .as_object()
+            .unwrap()
+            .contains_key("crypto_wallet"));
+    }
+
+    #[test]
+    fn test_exclude_key_drops_leaf_normal() {
+        let json = r#"{"user": {"name": "John", "crypto_balance": 100, "city": "NYC"}}"#;
+        let result = JSONTools::new()
+            .normal()
+            .exclude_key("crypto")
+            .execute(json)
+            .unwrap();
+        let parsed: Value = serde_json::from_str(&extract_single(result)).unwrap();
+        assert_eq!(parsed["user"]["name"], "John");
+        assert_eq!(parsed["user"]["city"], "NYC");
+        assert!(!parsed["user"]
+            .as_object()
+            .unwrap()
+            .contains_key("crypto_balance"));
+    }
+
+    #[test]
+    fn test_exclude_key_regex_pattern() {
+        let json = r#"{"cryptoBalance": 100, "cryptoWallet": "abc", "name": "John"}"#;
+        let result = JSONTools::new()
+            .flatten()
+            .exclude_key("r'^crypto'")
+            .execute(json)
+            .unwrap();
+        let parsed: Value = serde_json::from_str(&extract_single(result)).unwrap();
+        assert_eq!(parsed["name"], "John");
+        assert!(!parsed.as_object().unwrap().contains_key("cryptoBalance"));
+        assert!(!parsed.as_object().unwrap().contains_key("cryptoWallet"));
+    }
+
+    #[test]
+    fn test_exclude_key_multiple_additive() {
+        let json = r#"{"crypto_balance": 100, "secret_token": "x", "name": "John"}"#;
+        let result = JSONTools::new()
+            .flatten()
+            .exclude_key("crypto")
+            .exclude_key("secret")
+            .execute(json)
+            .unwrap();
+        let parsed: Value = serde_json::from_str(&extract_single(result)).unwrap();
+        assert_eq!(parsed["name"], "John");
+        assert_eq!(parsed.as_object().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_exclude_key_combined_with_other_filters() {
+        let json =
+            r#"{"crypto_balance": 100, "status": "N/A", "verified": "true", "name": "John"}"#;
+        let result = JSONTools::new()
+            .flatten()
+            .exclude_key("crypto")
+            .auto_convert_types(true)
+            .remove_nulls(true)
+            .execute(json)
+            .unwrap();
+        let parsed: Value = serde_json::from_str(&extract_single(result)).unwrap();
+        assert_eq!(parsed["name"], "John");
+        assert_eq!(parsed["verified"], true);
+        assert!(!parsed.as_object().unwrap().contains_key("crypto_balance"));
+        assert!(!parsed.as_object().unwrap().contains_key("status")); // "N/A" -> null -> removed
+    }
+
+    #[test]
+    fn test_exclude_key_never_matches_array_elements() {
+        // A pattern matching a sibling object key must not affect array elements,
+        // which have no key name to check against.
+        let json = r#"{"crypto_tags": ["a", "b"], "items": [1, 2, 3]}"#;
+        let result = JSONTools::new()
+            .flatten()
+            .exclude_key("crypto")
+            .execute(json)
+            .unwrap();
+        let parsed: Value = serde_json::from_str(&extract_single(result)).unwrap();
+        assert!(!parsed
+            .as_object()
+            .unwrap()
+            .keys()
+            .any(|k| k.contains("crypto")));
+        assert_eq!(parsed["items.0"], 1);
+        assert_eq!(parsed["items.1"], 2);
+        assert_eq!(parsed["items.2"], 3);
+    }
+
+    #[test]
+    fn test_exclude_value_string_leaf_flatten() {
+        let json = r#"{"user": {"name": "John", "status": "banned"}}"#;
+        let result = JSONTools::new()
+            .flatten()
+            .exclude_value("banned")
+            .execute(json)
+            .unwrap();
+        let parsed: Value = serde_json::from_str(&extract_single(result)).unwrap();
+        assert_eq!(parsed["user.name"], "John");
+        assert!(!parsed.as_object().unwrap().contains_key("user.status"));
+    }
+
+    #[test]
+    fn test_exclude_value_non_string_scalar() {
+        // Matches against the textual form of a raw (non-string) JSON scalar.
+        let json = r#"{"a": 42, "b": true, "c": "keep"}"#;
+        let result = JSONTools::new()
+            .flatten()
+            .exclude_value("42")
+            .exclude_value("true")
+            .execute(json)
+            .unwrap();
+        let parsed: Value = serde_json::from_str(&extract_single(result)).unwrap();
+        assert_eq!(parsed["c"], "keep");
+        assert!(!parsed.as_object().unwrap().contains_key("a"));
+        assert!(!parsed.as_object().unwrap().contains_key("b"));
+    }
+
+    #[test]
+    fn test_exclude_value_string_leaf_unflatten() {
+        let flat_json = r#"{"user.name": "John", "user.status": "banned"}"#;
+        let result = JSONTools::new()
+            .unflatten()
+            .exclude_value("banned")
+            .execute(flat_json)
+            .unwrap();
+        let parsed: Value = serde_json::from_str(&extract_single(result)).unwrap();
+        assert_eq!(parsed["user"]["name"], "John");
+        assert!(!parsed["user"].as_object().unwrap().contains_key("status"));
+    }
+
+    #[test]
+    fn test_exclude_value_string_leaf_normal() {
+        let json = r#"{"user": {"name": "John", "status": "banned"}}"#;
+        let result = JSONTools::new()
+            .normal()
+            .exclude_value("banned")
+            .execute(json)
+            .unwrap();
+        let parsed: Value = serde_json::from_str(&extract_single(result)).unwrap();
+        assert_eq!(parsed["user"]["name"], "John");
+        assert!(!parsed["user"].as_object().unwrap().contains_key("status"));
+    }
+
+    #[test]
+    fn test_exclude_value_regex_and_multiple() {
+        let json = r#"{"a": "foo-bar", "b": "secret-x", "c": "keep"}"#;
+        let result = JSONTools::new()
+            .flatten()
+            .exclude_value("r'^foo-'")
+            .exclude_value("secret")
+            .execute(json)
+            .unwrap();
+        let parsed: Value = serde_json::from_str(&extract_single(result)).unwrap();
+        assert_eq!(parsed, serde_json::json!({"c": "keep"}));
+    }
+
+    #[test]
+    fn test_exclude_value_only_matches_after_replacement() {
+        // Direct analog of the remove_nulls ordering regression test: exclude_value
+        // must see the *replaced* value, not the pre-replacement original text. "a"'s
+        // original text ("temp_flag") doesn't contain "banned" at all -- only the
+        // replacement's output does.
+        let json = r#"{"a": "temp_flag", "b": "keep"}"#;
+        let result = JSONTools::new()
+            .flatten()
+            .value_replacement("temp_flag", "banned_user")
+            .exclude_value("banned")
+            .execute(json)
+            .unwrap();
+        let parsed: Value = serde_json::from_str(&extract_single(result)).unwrap();
+        assert_eq!(parsed["b"], "keep");
+        assert!(!parsed.as_object().unwrap().contains_key("a"));
+    }
+
+    #[test]
+    fn test_exclude_value_matches_after_replacement_and_conversion() {
+        // Full chain: replacement produces "999" (a string), auto_convert_types
+        // converts it to the number 999, and exclude_value checks that *converted*
+        // value's textual form.
+        let json = r#"{"a": "old_price", "b": "keep"}"#;
+        let result = JSONTools::new()
+            .flatten()
+            .value_replacement("old_price", "999")
+            .auto_convert_types(true)
+            .exclude_value("999")
+            .execute(json)
+            .unwrap();
+        let parsed: Value = serde_json::from_str(&extract_single(result)).unwrap();
+        assert_eq!(parsed["b"], "keep");
+        assert!(!parsed.as_object().unwrap().contains_key("a"));
+    }
+
+    #[test]
+    fn test_exclude_value_combined_with_remove_nulls_and_exclude_key() {
+        let json = r#"{"crypto_wallet": {"coin": "BTC"}, "status": null, "flagged": "yes", "name": "John"}"#;
+        let result = JSONTools::new()
+            .flatten()
+            .exclude_key("crypto")
+            .exclude_value("yes")
+            .remove_nulls(true)
+            .execute(json)
+            .unwrap();
+        let parsed: Value = serde_json::from_str(&extract_single(result)).unwrap();
+        assert_eq!(parsed, serde_json::json!({"name": "John"}));
+    }
+
+    #[test]
+    fn test_exclude_value_never_checks_container_values() {
+        // A pattern that would match a nested leaf's serialized form must not cause
+        // the parent container itself to be dropped wholesale -- only the specific
+        // scalar leaf matching is removed.
+        let json = r#"{"wallet": {"coin": "flagged", "amount": 5}}"#;
+        let result = JSONTools::new()
+            .flatten()
+            .exclude_value("flagged")
+            .execute(json)
+            .unwrap();
+        let parsed: Value = serde_json::from_str(&extract_single(result)).unwrap();
+        assert_eq!(parsed["wallet.amount"], 5);
+        assert!(!parsed.as_object().unwrap().contains_key("wallet.coin"));
+    }
+
+    #[test]
+    fn test_exclude_value_noop_at_document_root() {
+        let result = JSONTools::new()
+            .flatten()
+            .exclude_value("banned")
+            .execute(r#""banned""#)
+            .unwrap();
+        assert_eq!(extract_single(result), "\"banned\"");
+    }
+
+    #[test]
+    fn test_exclude_value_unflatten_matches_serialized_quoted_form() {
+        // Documents the unflatten-specific caveat: string values are matched against
+        // their JSON-serialized (quoted) form, not the unescaped logical text. A
+        // literal pattern is unaffected; a regex needs to account for the quotes.
+        let flat_json = r#"{"a": "admin", "b": "keep"}"#;
+
+        let literal_result = JSONTools::new()
+            .unflatten()
+            .exclude_value("admin")
+            .execute(flat_json)
+            .unwrap();
+        let parsed: Value = serde_json::from_str(&extract_single(literal_result)).unwrap();
+        assert_eq!(parsed, serde_json::json!({"b": "keep"}));
+
+        // Bare-anchored regex does NOT match, because the compared text includes
+        // the surrounding quotes: `"admin"`, not `admin`.
+        let bare_anchor_result = JSONTools::new()
+            .unflatten()
+            .exclude_value("r'^admin$'")
+            .execute(flat_json)
+            .unwrap();
+        let parsed: Value = serde_json::from_str(&extract_single(bare_anchor_result)).unwrap();
+        assert_eq!(parsed, serde_json::json!({"a": "admin", "b": "keep"}));
+
+        // Quote-aware anchored regex DOES match.
+        let quoted_anchor_result = JSONTools::new()
+            .unflatten()
+            .exclude_value(r#"r'^"admin"$'"#)
+            .execute(flat_json)
+            .unwrap();
+        let parsed: Value = serde_json::from_str(&extract_single(quoted_anchor_result)).unwrap();
+        assert_eq!(parsed, serde_json::json!({"b": "keep"}));
+    }
+
     /// Regression test for `memmem_replace_all` in transform.rs: multiple
     /// non-overlapping occurrences of the same literal pattern in one key, and a
     /// replacement string that itself contains the search pattern (must not
@@ -4258,13 +4594,15 @@ mod validation_and_edge_case_tests {
     }
 
     #[test]
-    fn test_replacement_and_conversion_chaining_differs_by_mode() {
-        // Pre-existing (not introduced by fine-grained control) architectural
-        // quirk, confirmed to still hold identically through the new `convert_*`
-        // API: `.flatten()`/`.unflatten()` return as soon as a value_replacement
-        // matches, without ever trying type conversion on the replaced value;
-        // `.normal()` chains replacement into conversion. Locking this in so a
-        // future refactor of any of the three walkers doesn't silently change it.
+    fn test_replacement_and_conversion_chain_identically_across_modes() {
+        // Previously an architectural inconsistency: `.flatten()`/`.unflatten()`
+        // returned as soon as a value_replacement matched, without ever trying type
+        // conversion on the replaced value, while `.normal()` already chained
+        // replacement into conversion. Fixed so all three modes compose identically
+        // -- this is what makes `remove_nulls` reliably catch a null that only
+        // emerges after a replacement runs, regardless of mode. Locking in the now-
+        // unified behavior so a future refactor of any of the three walkers doesn't
+        // silently reintroduce the inconsistency.
         let json = r#"{"a": "ACTIVE"}"#;
 
         let flatten_result = JSONTools::new()
@@ -4275,7 +4613,19 @@ mod validation_and_edge_case_tests {
             .unwrap();
         assert_eq!(
             serde_json::from_str::<Value>(&extract_single(flatten_result)).unwrap()["a"],
-            "true" // still a string -- conversion never sees the replaced value
+            true // chained: replacement's output was then converted
+        );
+
+        let unflatten_json = r#"{"a": "ACTIVE"}"#;
+        let unflatten_result = JSONTools::new()
+            .unflatten()
+            .value_replacement("ACTIVE", "true")
+            .convert_booleans(true)
+            .execute(unflatten_json)
+            .unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(&extract_single(unflatten_result)).unwrap()["a"],
+            true
         );
 
         let normal_result = JSONTools::new()
@@ -4286,8 +4636,153 @@ mod validation_and_edge_case_tests {
             .unwrap();
         assert_eq!(
             serde_json::from_str::<Value>(&extract_single(normal_result)).unwrap()["a"],
-            true // chained: replacement's output was then converted
+            true
         );
+    }
+
+    #[test]
+    fn test_remove_nulls_catches_null_produced_by_replacement_then_conversion_flatten() {
+        // Direct regression test for the ordering fix: a value_replacement turns
+        // "MISSING" into "N/A" (a recognized null token), which auto_convert_types
+        // then converts to JSON null, which remove_nulls must then catch -- all
+        // three have to compose in that order for this to work.
+        let json = r#"{"user": {"name": "John", "status": "MISSING", "city": "NYC"}}"#;
+        let result = JSONTools::new()
+            .flatten()
+            .value_replacement("MISSING", "N/A")
+            .auto_convert_types(true)
+            .remove_nulls(true)
+            .execute(json)
+            .unwrap();
+        let parsed: Value = serde_json::from_str(&extract_single(result)).unwrap();
+        assert_eq!(parsed["user.name"], "John");
+        assert_eq!(parsed["user.city"], "NYC");
+        assert!(!parsed.as_object().unwrap().contains_key("user.status"));
+    }
+
+    #[test]
+    fn test_remove_nulls_catches_null_produced_by_replacement_then_conversion_unflatten() {
+        let flat_json = r#"{"user.name": "John", "user.status": "MISSING", "user.city": "NYC"}"#;
+        let result = JSONTools::new()
+            .unflatten()
+            .value_replacement("MISSING", "N/A")
+            .auto_convert_types(true)
+            .remove_nulls(true)
+            .execute(flat_json)
+            .unwrap();
+        let parsed: Value = serde_json::from_str(&extract_single(result)).unwrap();
+        assert_eq!(parsed["user"]["name"], "John");
+        assert_eq!(parsed["user"]["city"], "NYC");
+        assert!(!parsed["user"].as_object().unwrap().contains_key("status"));
+    }
+
+    #[test]
+    fn test_remove_nulls_catches_null_produced_by_replacement_then_conversion_normal() {
+        let json = r#"{"user": {"name": "John", "status": "MISSING", "city": "NYC"}}"#;
+        let result = JSONTools::new()
+            .normal()
+            .value_replacement("MISSING", "N/A")
+            .auto_convert_types(true)
+            .remove_nulls(true)
+            .execute(json)
+            .unwrap();
+        let parsed: Value = serde_json::from_str(&extract_single(result)).unwrap();
+        assert_eq!(parsed["user"]["name"], "John");
+        assert_eq!(parsed["user"]["city"], "NYC");
+        assert!(!parsed["user"].as_object().unwrap().contains_key("status"));
+    }
+
+    #[test]
+    fn test_remove_nulls_ordering_fix_applies_to_batch_input() {
+        // Same compound scenario as the single-document tests above, run as a batch,
+        // confirming per-document behavior is identical (process_batch just calls
+        // the same per-document processor for each item, so this is a fast check --
+        // not expected to fail, but locks in that batching doesn't change anything).
+        let batch = vec![
+            r#"{"user": {"name": "John", "status": "MISSING"}}"#,
+            r#"{"user": {"name": "Jane", "status": "ACTIVE"}}"#,
+        ];
+        let result = JSONTools::new()
+            .flatten()
+            .value_replacement("MISSING", "N/A")
+            .auto_convert_types(true)
+            .remove_nulls(true)
+            .execute(batch)
+            .unwrap();
+        let results = extract_multiple(result);
+        assert_eq!(results.len(), 2);
+
+        let first: Value = serde_json::from_str(&results[0]).unwrap();
+        assert_eq!(first["user.name"], "John");
+        assert!(!first.as_object().unwrap().contains_key("user.status"));
+
+        let second: Value = serde_json::from_str(&results[1]).unwrap();
+        assert_eq!(second["user.name"], "Jane");
+        assert_eq!(second["user.status"], "ACTIVE");
+    }
+
+    #[test]
+    fn test_flatten_root_primitive_now_type_converts() {
+        // Regression test: flatten's root-primitive branch (whole document is a bare
+        // scalar, not an object/array) previously only applied value_replacement and
+        // skipped type_conversion (and therefore remove_nulls) entirely. Now composes
+        // both, matching the nested-value path.
+        let result = JSONTools::new()
+            .flatten()
+            .auto_convert_types(true)
+            .execute(r#""N/A""#)
+            .unwrap();
+        assert_eq!(extract_single(result), "null");
+
+        // Replacement composed with conversion at the root, too.
+        let replaced = JSONTools::new()
+            .flatten()
+            .value_replacement("MISSING", "N/A")
+            .auto_convert_types(true)
+            .execute(r#""MISSING""#)
+            .unwrap();
+        assert_eq!(extract_single(replaced), "null");
+    }
+
+    #[test]
+    fn test_unflatten_root_primitive_now_type_converts() {
+        let result = JSONTools::new()
+            .unflatten()
+            .auto_convert_types(true)
+            .execute(r#""N/A""#)
+            .unwrap();
+        assert_eq!(extract_single(result), "null");
+    }
+
+    #[test]
+    fn test_remove_nulls_cannot_remove_the_document_root() {
+        // A root-level null (the entire document, not a nested key) can't be
+        // "removed" -- there's no parent key to omit it under. Must stay a
+        // documented no-op across every mode that can reach this path.
+        let flatten_result = JSONTools::new()
+            .flatten()
+            .remove_nulls(true)
+            .execute("null")
+            .unwrap();
+        assert_eq!(extract_single(flatten_result), "null");
+
+        let normal_result = JSONTools::new()
+            .normal()
+            .remove_nulls(true)
+            .execute("null")
+            .unwrap();
+        assert_eq!(extract_single(normal_result), "null");
+
+        // Also verify the root-primitive conversion+removal combination stays a
+        // no-op: converting "N/A" to null at the root, with remove_nulls(true), must
+        // still return the converted null rather than erroring or emitting nothing.
+        let converted_root = JSONTools::new()
+            .flatten()
+            .auto_convert_types(true)
+            .remove_nulls(true)
+            .execute(r#""N/A""#)
+            .unwrap();
+        assert_eq!(extract_single(converted_root), "null");
     }
 
     #[test]
