@@ -1892,24 +1892,14 @@ class TestJsonUnflattenerBuilderPattern:
                 "crypto_wallet": {"coin": "BTC", "balance": 100},
             }
         }
-        result = (
-            json_tools_rs.JSONTools()
-            .flatten()
-            .exclude_key("crypto")
-            .execute(data)
-        )
+        result = json_tools_rs.JSONTools().flatten().exclude_key("crypto").execute(data)
         assert result["user.name"] == "John"
         assert not any("crypto" in k for k in result)
         assert len(result) == 1
 
     def test_exclude_key_drops_leaf(self):
         data = {"user": {"name": "John", "crypto_balance": 100, "city": "NYC"}}
-        result = (
-            json_tools_rs.JSONTools()
-            .flatten()
-            .exclude_key("crypto")
-            .execute(data)
-        )
+        result = json_tools_rs.JSONTools().flatten().exclude_key("crypto").execute(data)
         assert result["user.name"] == "John"
         assert result["user.city"] == "NYC"
         assert "user.crypto_balance" not in result
@@ -1921,12 +1911,7 @@ class TestJsonUnflattenerBuilderPattern:
                 "crypto_wallet": {"coin": "BTC", "balance": 100},
             }
         }
-        result = (
-            json_tools_rs.JSONTools()
-            .normal()
-            .exclude_key("crypto")
-            .execute(data)
-        )
+        result = json_tools_rs.JSONTools().normal().exclude_key("crypto").execute(data)
         assert result["user"]["name"] == "John"
         assert "crypto_wallet" not in result["user"]
 
@@ -1944,10 +1929,7 @@ class TestJsonUnflattenerBuilderPattern:
     def test_exclude_value_string_leaf(self):
         data = {"user": {"name": "John", "status": "banned"}}
         result = (
-            json_tools_rs.JSONTools()
-            .flatten()
-            .exclude_value("banned")
-            .execute(data)
+            json_tools_rs.JSONTools().flatten().exclude_value("banned").execute(data)
         )
         assert result == {"user.name": "John"}
 
@@ -1965,10 +1947,7 @@ class TestJsonUnflattenerBuilderPattern:
     def test_exclude_value_normal_mode(self):
         data = {"user": {"name": "John", "status": "banned"}}
         result = (
-            json_tools_rs.JSONTools()
-            .normal()
-            .exclude_value("banned")
-            .execute(data)
+            json_tools_rs.JSONTools().normal().exclude_value("banned").execute(data)
         )
         assert result == {"user": {"name": "John"}}
 
@@ -2744,7 +2723,9 @@ class TestFineGrainedTypeConversion:
             .convert_booleans(True)
             .execute(data)
         )
-        assert flatten_result["a"] is True  # chained: replacement's output was converted
+        assert (
+            flatten_result["a"] is True
+        )  # chained: replacement's output was converted
 
         normal_result = (
             json_tools_rs.JSONTools()
