@@ -106,3 +106,81 @@ tools = (jt.JSONTools()
 
 result = tools.execute(large_dataframe)
 ```
+
+## Examples
+
+### Easy: flatten a Pandas DataFrame
+
+```python
+import json_tools_rs as jt
+import pandas as pd
+
+df = pd.DataFrame([{"user": {"name": "Alice", "age": 30}}, {"user": {"name": "Bob", "age": 25}}])
+result = jt.JSONTools().flatten().execute(df)
+# DataFrame with columns ['user.name', 'user.age']
+```
+
+### Medium: Polars struct column with filtering
+
+```python
+import polars as pl
+
+df = pl.DataFrame([
+    {"user": {"name": "Alice", "age": 30, "bio": ""}},
+    {"user": {"name": "Bob", "age": None, "bio": "hi"}},
+])
+
+result = (jt.JSONTools()
+    .flatten()
+    .remove_empty_strings(True)
+    .remove_nulls(True)
+    .execute(df)
+)
+# shape: (2, 3)
+# ┌───────────┬──────────┬──────────┐
+# │ user.name ┆ user.age ┆ user.bio │
+# ╞═══════════╪══════════╪══════════╡
+# │ Alice     ┆ 30       ┆ null     │
+# │ Bob       ┆ null     ┆ hi       │
+# └───────────┴──────────┴──────────┘
+```
+
+Filtering is per-row, but a DataFrame's columns are shared across all rows. Row 0's
+`bio` (`""`) was filtered out of *that row*, and row 1's `age` (`null`) was filtered
+out of *that row* -- but since each column still exists (some other row still has a
+value there), the filtered-out cell shows up as `null` in the reconstructed
+DataFrame rather than making the column disappear or shifting columns per row.
+
+### Hard: distributed processing with PySpark via `pandas_udf`
+
+`.execute(df)` collects a DataFrame to the driver first -- fine for the two examples
+above, but not for a large distributed Spark dataset. For genuinely distributed,
+per-partition processing, wrap the bindings in a `pandas_udf` instead, so each executor
+processes its own share of the data with one native call per Arrow-vectorized batch
+(not per row):
+
+```python
+import json_tools_rs as jt
+import pandas as pd
+from pyspark.sql.functions import pandas_udf
+from pyspark.sql.types import StringType
+
+_tools = (
+    jt.JSONTools()
+    .flatten()
+    .separator("::")
+    .remove_nulls(True)
+    .key_replacement("r'^admin_'", "")
+)
+
+@pandas_udf(StringType())
+def flatten_json(payload: pd.Series) -> pd.Series:
+    return pd.Series(_tools.execute(payload.tolist()))
+
+spark_df.withColumn("flattened", flatten_json(spark_df["payload"]))
+```
+
+Build the `JSONTools` instance once at module scope (it's reusable across calls), not
+inside the UDF function body. See [Setting Up on Databricks](./databricks-setup.md)
+for the full walkthrough, including why this is the *only* supported approach inside a
+Lakeflow Declarative Pipeline.

@@ -129,19 +129,70 @@ let result = JSONTools::new()
     .execute(json)?;
 ```
 
-## Real-World Example
+## Examples
 
-Normalizing an API response:
+### Easy: a single value replacement
 
-```rust
-let result = JSONTools::new()
+```python
+import json_tools_rs as jt
+
+data = {"user": {"email": "john@old-domain.com"}}
+result = (jt.JSONTools()
+    .flatten()
+    .value_replacement("@old-domain.com", "@new-domain.com")
+    .execute(data)
+)
+# {'user.email': 'john@new-domain.com'}
+```
+
+### Medium: key + value replacement with regex
+
+```python
+data = {"User_Name": "Alice", "User_Status": "super"}
+result = (jt.JSONTools()
+    .flatten()
+    .key_replacement("r'^User_'", "")
+    .value_replacement("r'^super$'", "administrator")
+    .execute(data)
+)
+# {'Name': 'Alice', 'Status': 'administrator'}
+```
+
+### Hard: normalizing an API response
+
+Combines key replacement, value replacement, key exclusion, and value exclusion in one
+pipeline -- dropping an internal-only key, a sensitive subtree, and a banned-status
+record, while cleaning up the surviving keys and values:
+
+```python
+data = {
+    "api_response": {
+        "user_id": "1001",
+        "user_email": "john@old-domain.com",
+        "user_status": "banned",
+        "internal_debug_token": "xyz123",
+        "crypto_wallet": {"coin": "BTC", "balance": 100},
+    }
+}
+
+result = (jt.JSONTools()
     .flatten()
     .separator("::")
-    .lowercase_keys(true)
-    .key_replacement("r'(api_response|user_data)::'", "")
+    .lowercase_keys(True)
+    .key_replacement("r'^api_response::'", "")
     .key_replacement("_", ".")
-    .value_replacement("@example.com", "@company.org")
-    .remove_empty_strings(true)
-    .remove_nulls(true)
-    .execute(api_response)?;
+    .value_replacement("@old-domain.com", "@new-domain.com")
+    .exclude_key("internal")
+    .exclude_key("crypto")
+    .exclude_value("banned")
+    .execute(data)
+)
+# {'user.id': '1001', 'user.email': 'john@new-domain.com'}
 ```
+
+`user_status` is dropped because its value is `"banned"`; `internal_debug_token` and
+`crypto_wallet.*` are dropped by key. Note that `exclude_key`/`exclude_value` patterns
+are checked against keys *after* `key_replacement` has already run -- `exclude_key`
+uses `"internal"` (not `"internal_"`) here because by the time the check runs,
+`key_replacement("_", ".")` has already turned `internal_debug_token` into
+`internal.debug.token`, so a pattern anchored on the underscore would no longer match.

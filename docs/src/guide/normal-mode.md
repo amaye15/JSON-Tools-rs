@@ -67,3 +67,51 @@ result = (jt.JSONTools()
 ```
 
 All features available in `.flatten()` and `.unflatten()` modes also work in `.normal()` mode, except the actual flattening/unflattening operation itself.
+
+## Examples
+
+### Easy: lowercase keys, structure untouched
+
+```python
+import json_tools_rs as jt
+
+data = {"User": {"Name": "Alice"}}
+result = jt.JSONTools().normal().lowercase_keys(True).execute(data)
+# {'user': {'name': 'Alice'}}
+```
+
+### Medium: lowercase + replace + filter (see the example above)
+
+The [example above](#example) combines `lowercase_keys`, `key_replacement`,
+`value_replacement`, and two filters on a flat one-level object.
+
+### Hard: cascading filters on deeply nested data
+
+Filters recurse into every level, and an object that becomes empty *after* its own
+children are filtered is itself removed on the same pass -- see
+[Filtering](./filtering.md#hard-cascading-removal-in-normal-mode) for the full
+mechanics. In `.normal()` mode this applies at arbitrary depth, not just one level:
+
+```python
+data = {
+    "org": {
+        "team": {
+            "lead": {"name": "Priya", "notes": ""},
+            "intern": {"name": "", "notes": None},
+        }
+    }
+}
+
+result = (jt.JSONTools()
+    .normal()
+    .remove_empty_strings(True)
+    .remove_nulls(True)
+    .remove_empty_objects(True)
+    .execute(data)
+)
+# {'org': {'team': {'lead': {'name': 'Priya'}}}}
+```
+
+`intern` has no surviving fields (`name` is `""`, `notes` is `null`), so it collapses
+to `{}` and is removed -- which is exactly the same check that keeps `lead` around,
+just applied one level deeper.

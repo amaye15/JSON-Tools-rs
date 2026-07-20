@@ -207,3 +207,62 @@ let result = JSONTools::new()
 //   "name": "Product"
 // }
 ```
+
+## Examples
+
+### Easy: turn it on
+
+```python
+import json_tools_rs as jt
+
+data = {"count": "42", "active": "true", "rate": "3.14"}
+result = jt.JSONTools().normal().auto_convert_types(True).execute(data)
+# {'count': 42, 'active': True, 'rate': 3.14}
+```
+
+### Medium: one category, customized
+
+Disable currency stripping specifically, while keeping percent/basis-point/suffix/
+fraction/radix parsing and every other category untouched:
+
+```python
+data = {"price": "$1,234.56", "big_id": "999999999999999999", "pct": "12.5%"}
+result = jt.JSONTools().flatten().convert_numbers(True, currency=False).execute(data)
+# {'price': '$1,234.56', 'big_id': 999999999999999999, 'pct': 12.5}
+```
+
+`price` is left as the original string (currency parsing is off), `pct` still
+converts (percent parsing is unaffected), and `big_id` -- a 19-digit ID -- converts
+losslessly to a JSON integer instead of a precision-corrupted `f64`.
+
+### Hard: mixed categories with per-category config
+
+```rust
+use json_tools_rs::{JSONTools, DateConversionConfig, NullConversionConfig};
+
+let json = r#"{
+    "created": "2024-01-15T10:30:00",
+    "status": "missing",
+    "score": "1,234.50",
+    "code": "EUR999"
+}"#;
+
+let result = JSONTools::new()
+    .flatten()
+    .convert_dates_config(DateConversionConfig::new().enabled(true).assume_utc_for_naive(false))
+    .convert_nulls_config(NullConversionConfig::new().enabled(true).add_extra_token("missing"))
+    .convert_numbers(true)
+    .execute(json)?;
+
+// {
+//   "created": "2024-01-15T10:30:00",  // naive datetime left untouched (assume_utc_for_naive: false)
+//   "status": null,                    // "missing" recognized via the extra token
+//   "score": 1234.5,                   // US thousands separator parsed
+//   "code": "EUR999"                   // no space before the 3-letter code -- left as a string
+// }
+```
+
+Booleans are never enabled here (`auto_convert_types` was not called, and
+`convert_booleans` was never turned on), so a value like `"yes"` elsewhere in the same
+document would be left as a plain string -- categories are independent switches, not
+an all-or-nothing package once you're using the per-category methods.
