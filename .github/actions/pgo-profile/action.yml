@@ -1,0 +1,147 @@
+name: 'PGO training profile'
+description: >
+  Builds examples/bench_quick as an instrumented binary for a given target triple,
+  runs it (natively or under emulation) to produce a training profile, merges it, and
+  outputs a composed RUSTFLAGS value the caller should use when building the actual
+  shipped artifact. Never overwrites the caller's own required flags -- see
+  `extra-rustflags`.
+inputs:
+  target-triple:
+    description: 'Rust target triple to train for (e.g. x86_64-unknown-linux-gnu)'
+    required: true
+  extra-rustflags:
+    description: >
+      Flags the final profile-use build already needs for this target (e.g. macOS's
+      link-arg overrides, or a cross target's linker flags). RUSTFLAGS and
+      target.<triple>.rustflags in .cargo/config.toml are mutually exclusive in Cargo
+      (first one found wins, they never merge) -- so this action composes with these
+      flags explicitly rather than letting the caller's config.toml entries get
+      silently dropped the moment RUSTFLAGS is set for -Cprofile-use.
+    required: false
+    default: ''
+  emulation-arch:
+    description: >
+      If set (e.g. "aarch64", "armv7"), run the instrumented binary under
+      uraimo/run-on-arch-action instead of directly on the runner -- for targets that
+      can't execute natively on the host (genuine cross-arch, not just cross-compiled).
+    required: false
+    default: ''
+  emulation-distro:
+    description: 'Distro for uraimo/run-on-arch-action when emulation-arch is set.'
+    required: false
+    default: 'ubuntu22.04'
+  min-rustc-version:
+    description: >
+      Minimum rustc version required. Default is 1.87.0: rust-lang/rust#117220 crashes
+      LTO + PGO + cdylib builds at the profile-use step on older versions, which
+      matches this crate's crate-type = ["rlib", "cdylib"] + lto = "fat" exactly.
+    required: false
+    default: '1.87.0'
+outputs:
+  rustflags:
+    description: 'Composed RUSTFLAGS value for the caller to set before building the real artifact.'
+    value: ${{ steps.compose.outputs.rustflags }}
+runs:
+  using: 'composite'
+  steps:
+    - name: Verify rustc version supports PGO + LTO + cdylib
+      shell: bash
+      run: |
+        set -euo pipefail
+        rustc_version=$(rustc --version | sed -E 's/rustc ([0-9]+\.[0-9]+\.[0-9]+).*/\1/')
+        min_version="${{ inputs.min-rustc-version }}"
+        IFS='.' read -r r_major r_minor _ <<< "$rustc_version"
+        IFS='.' read -r m_major m_minor _ <<< "$min_version"
+        if [ "$r_major" -lt "$m_major" ] || { [ "$r_major" -eq "$m_major" ] && [ "$r_minor" -lt "$m_minor" ]; }; then
+          echo "::error::rustc $rustc_version is older than the minimum $min_version required for PGO (rust-lang/rust#117220: LTO + PGO + cdylib crash at profile-use, fixed in 1.87)"
+          exit 1
+        fi
+        echo "rustc $rustc_version OK (>= $min_version)"
+
+    - name: Ensure llvm-tools and target are installed
+      shell: bash
+      run: |
+        set -euo pipefail
+        rustup component add llvm-tools
+        rustup target add "${{ inputs.target-triple }}"
+
+    - name: Locate llvm-profdata
+      id: locate
+      shell: bash
+      run: |
+        set -euo pipefail
+        sysroot=$(rustc --print sysroot)
+        host_triple=$(rustc -vV | grep '^host:' | awk '{print $2}')
+        candidate="$sysroot/lib/rustlib/$host_triple/bin/llvm-profdata"
+        if [ ! -x "$candidate" ] && [ -x "$candidate.exe" ]; then
+          candidate="$candidate.exe"
+        fi
+        if [ ! -x "$candidate" ]; then
+          echo "::error::llvm-profdata not found at $candidate (expected under the host toolchain's sysroot, not a target-specific location -- llvm-profdata operates on .profraw data, not native code, so only the host's own llvm-tools component matters here)"
+          exit 1
+        fi
+        echo "llvm-profdata=$candidate" >> "$GITHUB_OUTPUT"
+
+    - name: Build instrumented training binary
+      shell: bash
+      env:
+        PGO_DATA_DIR: ${{ github.workspace }}/pgo-data/${{ inputs.target-triple }}
+      run: |
+        set -euo pipefail
+        rm -rf "$PGO_DATA_DIR"
+        mkdir -p "$PGO_DATA_DIR"
+        RUSTFLAGS="-Cprofile-generate=$PGO_DATA_DIR ${{ inputs.extra-rustflags }}" \
+          cargo build --locked --profile pgo-instrument --example bench_quick --target "${{ inputs.target-triple }}"
+
+    - name: Run training binary (native)
+      if: ${{ inputs.emulation-arch == '' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        bin="target/${{ inputs.target-triple }}/pgo-instrument/examples/bench_quick"
+        if [ ! -x "$bin" ] && [ -x "$bin.exe" ]; then
+          bin="$bin.exe"
+        fi
+        "$bin"
+
+    - name: Run training binary (emulated)
+      if: ${{ inputs.emulation-arch != '' }}
+      uses: uraimo/run-on-arch-action@v3
+      with:
+        arch: ${{ inputs.emulation-arch }}
+        distro: ${{ inputs.emulation-distro }}
+        githubToken: ${{ github.token }}
+        dockerRunArgs: --volume "${{ github.workspace }}:/workspace"
+        run: |
+          set -euo pipefail
+          bin="/workspace/target/${{ inputs.target-triple }}/pgo-instrument/examples/bench_quick"
+          chmod +x "$bin"
+          "$bin"
+
+    - name: Verify and merge training profile
+      id: merge
+      shell: bash
+      env:
+        PGO_DATA_DIR: ${{ github.workspace }}/pgo-data/${{ inputs.target-triple }}
+        LLVM_PROFDATA: ${{ steps.locate.outputs.llvm-profdata }}
+      run: |
+        set -euo pipefail
+        raw_count=$(find "$PGO_DATA_DIR" -name '*.profraw' -size +0c | wc -l | tr -d ' ')
+        if [ "$raw_count" -eq 0 ]; then
+          echo "::error::No non-empty .profraw files produced in $PGO_DATA_DIR -- the training run silently failed to instrument, would ship a non-PGO'd build with no visible error otherwise"
+          exit 1
+        fi
+        merged="$PGO_DATA_DIR/merged.profdata"
+        "$LLVM_PROFDATA" merge -o "$merged" "$PGO_DATA_DIR"/*.profraw
+        "$LLVM_PROFDATA" show --detailed-summary "$merged"
+        echo "merged-path=$merged" >> "$GITHUB_OUTPUT"
+
+    - name: Compose final RUSTFLAGS
+      id: compose
+      shell: bash
+      env:
+        MERGED: ${{ steps.merge.outputs.merged-path }}
+      run: |
+        set -euo pipefail
+        flags="${{ inputs.extra-rustflags }} -Cprofile-use=$MERGED -Cllvm-args=-pgo-warn-missing-function"
+        echo "rustflags=$flags" >> "$GITHUB_OUTPUT"

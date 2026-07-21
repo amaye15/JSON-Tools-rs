@@ -29,8 +29,17 @@ jobs:
         include:
           - target: x86_64-unknown-linux-gnu
             can_test: true
+            # PGO phase 1 (see .github/actions/pgo-profile): native, tested, no
+            # container, no cross-linker, no RUSTFLAGS-composition risk -- the
+            # lowest-risk target to prove the composite action's mechanics on.
+            # aarch64 is deliberately still plain (phase 6): its
+            # .cargo/config.toml linker flags are exactly the case
+            # extra-rustflags composition exists to protect, and that's proven
+            # safest *after* the mechanism is validated elsewhere first.
+            pgo: true
           - target: aarch64-unknown-linux-gnu
             can_test: false
+            pgo: false
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -46,11 +55,52 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y gcc-aarch64-linux-gnu
+      - name: Generate PGO training profile
+        if: matrix.pgo
+        id: pgo
+        uses: ./.github/actions/pgo-profile
+        with:
+          target-triple: ${{ matrix.target }}
       - name: Build native library (release)
-        # No RUSTFLAGS override needed here (unlike maturin-ci.yml's macOS wheel job):
-        # .cargo/config.toml only sets target-cpu=native for *-apple-darwin targets,
-        # so these Linux builds are portable by default.
-        run: cargo build --locked --release --features jvm --target ${{ matrix.target }}
+        # No RUSTFLAGS override needed here for the non-PGO case (unlike
+        # maturin-ci.yml's macOS wheel job): .cargo/config.toml only sets
+        # target-cpu=native for *-apple-darwin targets, so these Linux builds
+        # are portable by default. When matrix.pgo is true, RUSTFLAGS comes
+        # from the pgo-profile action's composed output instead. `cargo build`
+        # only emits compiler diagnostics for units it actually (re)compiles,
+        # so the profile-drop check below must read this same invocation's
+        # captured log -- a second, separately-run build would hit cargo's
+        # fingerprint cache and emit no diagnostics at all, making that check
+        # meaningless.
+        shell: bash
+        env:
+          RUSTFLAGS: ${{ matrix.pgo && steps.pgo.outputs.rustflags || '' }}
+        run: |
+          set -euo pipefail
+          cargo build --locked --release --features jvm --target ${{ matrix.target }} 2>&1 | tee /tmp/native-build.log
+      - name: Report PGO profile coverage
+        # Informational only, not a hard gate: LLVM's -pgo-warn-missing-function
+        # fires for *every* generic/stdlib instantiation compiled into this
+        # crate's own compilation units that bench_quick's training run didn't
+        # happen to exercise (e.g. error-conversion impls for errors that only
+        # occur on invalid input, which a clean training run never produces) --
+        # confirmed empirically (~1-2% of ~5000 functions, all cold/error-path
+        # or generic-collection boilerplate, zero hits among flatten/unflatten/
+        # transform's actual hot-path functions). A real rustc/flag mismatch
+        # between the instrument and profile-use builds would look categorically
+        # different (a much larger fraction missing, including hot-path
+        # functions), which is why this reports rather than pattern-matches a
+        # substring that can't actually distinguish "expected cold path" from
+        # "broken profile application" -- see this job's own history for why
+        # that distinction matters (a prior PGO attempt shipped 5 broken CI
+        # legs before being caught).
+        if: matrix.pgo
+        shell: bash
+        run: |
+          set -euo pipefail
+          missing=$(grep -c 'no profile data available' /tmp/native-build.log || true)
+          echo "PGO: $missing function-instantiation(s) with no training coverage (informational -- see step comment for why this isn't a hard gate)"
+          grep -oE 'for function [A-Za-z0-9_.$]+' /tmp/native-build.log | sed 's/for function //' | sort -u | c++filt | sed -n '1,20p' || true
       - name: Upload native library artifact
         uses: actions/upload-artifact@v7
         with:

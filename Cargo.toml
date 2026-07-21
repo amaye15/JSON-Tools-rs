@@ -137,3 +137,15 @@ codegen-units = 1
 inherits = "release"
 strip = false          # Keep debug symbols for samply/flamegraph
 debug = 1              # Line-level debug info without impacting codegen
+
+# Throwaway build used only to gather PGO training data (see
+# .github/actions/pgo-profile). Nobody ships this binary -- it's an instrumented
+# `examples/bench_quick` run once in CI to produce a training profile, then discarded --
+# so it skips fat LTO/codegen-units=1 (pure compile-time cost with no runtime benefit for
+# a binary that's never shipped or benchmarked directly). The actual shipped artifact
+# (wheel/JVM .so) always builds on the unmodified `release` profile above, with
+# `-Cprofile-use=<merged profile>` supplied via RUSTFLAGS at that point instead.
+[profile.pgo-instrument]
+inherits = "release"
+lto = false
+codegen-units = 16
