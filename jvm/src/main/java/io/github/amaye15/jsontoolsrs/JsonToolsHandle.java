@@ -28,11 +28,27 @@ public final class JsonToolsHandle implements AutoCloseable {
     }
 
     public String execute(String json) {
-        return JsonToolsNative.nativeExecute(handle, json);
+        // UTF-8 bytes across the boundary: getBytes/new String are
+        // JIT-intrinsified, so this is measurably faster than letting JNI do
+        // UTF-16 <-> modified-UTF-8 conversions on a String argument. See
+        // JsonToolsNative.nativeExecuteBytes.
+        byte[] out =
+                JsonToolsNative.nativeExecuteBytes(
+                        handle, json.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        return new String(out, java.nio.charset.StandardCharsets.UTF_8);
     }
 
     public String[] executeBatch(String[] jsonArray) {
-        return JsonToolsNative.nativeExecuteBatch(handle, jsonArray);
+        byte[][] in = new byte[jsonArray.length][];
+        for (int i = 0; i < jsonArray.length; i++) {
+            in[i] = jsonArray[i].getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        }
+        byte[][] out = JsonToolsNative.nativeExecuteBatchBytes(handle, in);
+        String[] results = new String[out.length];
+        for (int i = 0; i < out.length; i++) {
+            results[i] = new String(out[i], java.nio.charset.StandardCharsets.UTF_8);
+        }
+        return results;
     }
 
     @Override

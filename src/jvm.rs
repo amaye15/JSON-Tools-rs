@@ -14,9 +14,9 @@
 //! every single entry point must go through it, not just the ones that look risky.
 
 use jni::errors::ErrorPolicy;
-use jni::objects::{JClass, JObject, JObjectArray, JString};
+use jni::objects::{JByteArray, JClass, JObject, JObjectArray, JString};
 use jni::strings::JNIString;
-use jni::sys::{jlong, jobjectArray, jsize, jstring};
+use jni::sys::{jbyteArray, jlong, jobjectArray, jsize};
 use jni::{Env, EnvUnowned};
 use serde::Deserialize;
 
@@ -312,65 +312,82 @@ pub extern "system" fn Java_io_github_amaye15_jsontoolsrs_JsonToolsNative_native
 }
 
 /// Process a single JSON document through the handle built by `nativeCreate`.
+///
+/// The Java caller passes UTF-8 bytes
+/// (`String.getBytes(UTF_8)`) and receives UTF-8 bytes back (`new String(bytes,
+/// UTF_8)`). Those two Java-side conversions are JIT-intrinsified, and the JNI
+/// transfer becomes two plain array copies, replacing `GetStringUTFChars`/
+/// `NewStringUTF`'s UTF-16 <-> modified-UTF-8 conversions (plus the cesu8
+/// re-conversions on the Rust side) that measured ~1.2us of a ~2-3us call on a
+/// medium document -- see `JsonToolsHandle.execute` for the Java half.
 #[allow(non_snake_case)]
 #[no_mangle]
-pub extern "system" fn Java_io_github_amaye15_jsontoolsrs_JsonToolsNative_nativeExecute<'local>(
+pub extern "system" fn Java_io_github_amaye15_jsontoolsrs_JsonToolsNative_nativeExecuteBytes<
+    'local,
+>(
     mut env: EnvUnowned<'local>,
     _class: JClass<'local>,
     handle: jlong,
-    json: JString<'local>,
-) -> jstring {
-    env.with_env(|env| -> Result<jstring, JsonToolsError> {
+    json: JByteArray<'local>,
+) -> jbyteArray {
+    env.with_env(|env| -> Result<jbyteArray, JsonToolsError> {
         // SAFETY: `handle` is a pointer previously returned by `nativeCreate` and not
         // yet passed to `nativeDestroy` -- the Java-side handle owner enforces this.
         let tools = unsafe { &*(handle as *const JSONTools) };
-        let json_str = json.try_to_string(env)?;
+        let bytes = env.convert_byte_array(&json)?;
+        let json_str = String::from_utf8(bytes).map_err(|e| {
+            JsonToolsError::input_validation_error(format!("input is not valid UTF-8: {e}"))
+        })?;
         let result = tools.execute(json_str.as_str())?.try_into_single()?;
-        Ok(env.new_string(result)?.into_raw())
+        Ok(env.byte_array_from_slice(result.as_bytes())?.into_raw())
     })
     .resolve::<ThrowJsonToolsException>()
 }
 
 /// Process a batch of JSON documents in one native call, using the existing
 /// rayon-parallel batch path (`JSONTools::execute` with a `Vec<String>`) with no
-/// additional parallelism logic needed here.
+/// additional parallelism logic needed here. UTF-8 `byte[]` elements in and out
+/// for the same reason as `nativeExecuteBytes`, applied per element.
 #[allow(non_snake_case)]
 #[no_mangle]
-pub extern "system" fn Java_io_github_amaye15_jsontoolsrs_JsonToolsNative_nativeExecuteBatch<
+pub extern "system" fn Java_io_github_amaye15_jsontoolsrs_JsonToolsNative_nativeExecuteBatchBytes<
     'local,
 >(
     mut env: EnvUnowned<'local>,
     _class: JClass<'local>,
     handle: jlong,
-    json_array: JObjectArray<'local, JString<'local>>,
+    json_array: JObjectArray<'local, JByteArray<'local>>,
 ) -> jobjectArray {
     env.with_env(|env| -> Result<jobjectArray, JsonToolsError> {
-        // SAFETY: see nativeExecute.
+        // SAFETY: see nativeExecuteBytes.
         let tools = unsafe { &*(handle as *const JSONTools) };
         let len = json_array.len(env)?;
 
         // JNI's default local-reference-table capacity (~512 on most JVMs) is
-        // trivially exhausted by extracting/constructing thousands of JStrings in
-        // one call otherwise -- request enough up front for both the input reads
-        // and the output writes below.
+        // trivially exhausted by extracting/constructing thousands of local
+        // array refs in one call otherwise -- request enough up front for both
+        // the input reads and the output writes below.
         env.ensure_local_capacity(2 * len + 16)?;
 
         let mut inputs: Vec<String> = Vec::with_capacity(len);
         for i in 0..len {
-            let jstr = json_array.get_element(env, i)?;
-            inputs.push(jstr.try_to_string(env)?);
+            let jarr = json_array.get_element(env, i)?;
+            let bytes = env.convert_byte_array(&jarr)?;
+            inputs.push(String::from_utf8(bytes).map_err(|e| {
+                JsonToolsError::input_validation_error(format!("input is not valid UTF-8: {e}"))
+            })?);
         }
 
         let results = tools.execute(inputs)?.try_into_multiple()?;
 
         let out_array = env.new_object_array(
             results.len() as jsize,
-            JNIString::from("java/lang/String"),
+            JNIString::from("[B"),
             JObject::null(),
         )?;
         for (i, s) in results.into_iter().enumerate() {
-            let js = env.new_string(s)?;
-            out_array.set_element(env, i, &js)?;
+            let jb = env.byte_array_from_slice(s.as_bytes())?;
+            out_array.set_element(env, i, &jb)?;
         }
         Ok(out_array.into_raw())
     })
@@ -390,7 +407,7 @@ pub extern "system" fn Java_io_github_amaye15_jsontoolsrs_JsonToolsNative_native
 ) {
     env.with_env(|_env| -> Result<(), JsonToolsError> {
         if handle != 0 {
-            // SAFETY: see nativeExecute; this is the one call site allowed to
+            // SAFETY: see nativeExecuteBytes; this is the one call site allowed to
             // invalidate the pointer, and callers must not use it afterward.
             unsafe {
                 drop(Box::from_raw(handle as *mut JSONTools));
