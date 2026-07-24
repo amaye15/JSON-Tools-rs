@@ -4232,3 +4232,80 @@ class TestUnicodeEdgeCases:
         tools = json_tools_rs.JSONTools().flatten()
         result = tools.execute({"العربية": {"日本語": "value"}})
         assert "العربية.日本語" in result
+
+
+class TestJsonMarshalingCompat:
+    """Dict <-> JSON conversion edge cases that must behave identically
+    whether the optional orjson accelerator (`json-tools-rs[fast]`) is
+    installed or not. These pin the compatibility contract of the
+    accelerated marshaling path in src/python.rs."""
+
+    def test_big_int_precision_preserved(self):
+        """Integers beyond 64-bit must roundtrip exactly, never as floats.
+
+        orjson silently parses >64-bit integers as lossy floats, so the
+        bindings route documents containing long digit runs to stdlib json.
+        """
+        big = 2**70
+        tools = json_tools_rs.JSONTools().flatten()
+        result = tools.execute({"big": big, "nested": {"also": -big}})
+        assert result["big"] == big
+        assert isinstance(result["big"], int)
+        assert result["nested.also"] == -big
+        assert isinstance(result["nested.also"], int)
+
+    def test_big_int_in_batch(self):
+        """Big-int preservation must hold on the list[dict] batch path too."""
+        big = 2**66
+        tools = json_tools_rs.JSONTools().flatten()
+        results = tools.execute([{"v": big}, {"v": 1}])
+        assert results[0]["v"] == big
+        assert isinstance(results[0]["v"], int)
+
+    def test_non_string_keys_coerced_like_stdlib(self):
+        """int/float/bool/None dict keys must coerce to the same strings
+        stdlib json.dumps produces by default."""
+        tools = json_tools_rs.JSONTools().flatten()
+        result = tools.execute({1: "a", 2.5: "b", True: "c", None: "d"})
+        # NOTE: True == 1 in Python, so {1: ..., True: ...} collapses to one
+        # key before serialization ever sees it -- use distinct keys here.
+        result2 = tools.execute({False: "f", None: "n", 7: "s"})
+        assert result2["false"] == "f"
+        assert result2["null"] == "n"
+        assert result2["7"] == "s"
+        assert result["2.5"] == "b"
+
+    def test_nan_and_infinity_still_rejected(self):
+        """NaN/Infinity values are not valid JSON and must keep erroring."""
+        tools = json_tools_rs.JSONTools().flatten()
+        with pytest.raises(Exception):
+            tools.execute({"x": float("nan")})
+        with pytest.raises(Exception):
+            tools.execute({"x": float("inf")})
+
+    def test_dict_subclass_and_ordereddict(self):
+        """dict subclasses must still route through full input detection."""
+        import collections
+
+        class DictSub(dict):
+            pass
+
+        tools = json_tools_rs.JSONTools().flatten()
+        assert tools.execute(DictSub({"a": {"b": 1}})) == {"a.b": 1}
+        od = collections.OrderedDict([("x", {"y": 2})])
+        assert tools.execute(od) == {"x.y": 2}
+
+    def test_unicode_dict_roundtrip(self):
+        """Unicode and escapes must survive the accelerated dumps path."""
+        data = {"café": {"emoji": "😀", "cjk": "中文", "esc": 'a"b\\c\nd'}}
+        tools = json_tools_rs.JSONTools().flatten()
+        result = tools.execute(data)
+        assert result["café.emoji"] == "😀"
+        assert result["café.esc"] == 'a"b\\c\nd'
+
+    def test_long_digit_string_value_unaffected(self):
+        """A long digit run inside a *string* value must stay a string
+        (it forces the conservative stdlib loads path internally)."""
+        tools = json_tools_rs.JSONTools().flatten()
+        result = tools.execute({"id": "12345678901234567890123"})
+        assert result["id"] == "12345678901234567890123"

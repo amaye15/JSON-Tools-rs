@@ -10,7 +10,9 @@ use pyo3::exceptions::{PyRuntimeError, PyValueError};
 #[cfg(feature = "python")]
 use pyo3::prelude::*;
 #[cfg(feature = "python")]
-use pyo3::types::PyModule;
+use pyo3::sync::PyOnceLock;
+#[cfg(feature = "python")]
+use pyo3::types::{PyBytes, PyDict, PyList, PyModule, PyString};
 
 #[cfg(feature = "python")]
 use std::mem;
@@ -37,8 +39,73 @@ fn lock_config(mutex: &Mutex<JSONTools>) -> PyResult<std::sync::MutexGuard<'_, J
         .map_err(|e| PyRuntimeError::new_err(format!("internal config lock poisoned: {e}")))
 }
 
-/// Serialize a Python object to a JSON string using Python's own (C-accelerated)
-/// `json` module, instead of `pythonize`'s generic serde-based traversal.
+/// JSON (de)serialization callables, resolved once per process and cached:
+/// `orjson` when the user has it installed (the `json-tools-rs[fast]` extra;
+/// 5-10x faster than stdlib for the dict<->str conversion this module performs
+/// on every dict-shaped call), stdlib `json` otherwise.
+///
+/// The stdlib callables are always kept alongside as a per-call fallback:
+/// orjson has narrower input support than stdlib (integers beyond 64-bit,
+/// arbitrary type subclasses, ...), and retrying with stdlib on an orjson
+/// error preserves stdlib's behavior and error surfaces for exactly those
+/// inputs instead of changing them.
+#[cfg(feature = "python")]
+struct JsonCallables {
+    /// Fast path: `orjson.dumps` when available, stdlib `json.dumps` otherwise.
+    dumps: Py<PyAny>,
+    /// Kwargs for the fast dumps call: `{"option": orjson.OPT_NON_STR_KEYS}`,
+    /// so int/float/bool/None dict keys are coerced to strings exactly like
+    /// stdlib `json.dumps` does by default. `None` when dumps is stdlib.
+    dumps_kwargs: Option<Py<PyDict>>,
+    /// Always stdlib `json.dumps` -- fallback when orjson rejects an input.
+    stdlib_dumps: Py<PyAny>,
+    /// Fast path: `orjson.loads` when available, stdlib `json.loads` otherwise.
+    loads: Py<PyAny>,
+    /// Always stdlib `json.loads` -- fallback: orjson rejects some JSON stdlib
+    /// accepts (integers beyond 64-bit range).
+    stdlib_loads: Py<PyAny>,
+    /// True when the fast path is orjson (selects the fallback-retry logic).
+    accelerated: bool,
+}
+
+#[cfg(feature = "python")]
+static JSON_CALLABLES: PyOnceLock<JsonCallables> = PyOnceLock::new();
+
+/// Resolve (once) and return the cached JSON callables. Caching the bound
+/// callables saves the per-call `sys.modules` lookup + `getattr` +
+/// bound-method allocation that `py.import("json")?.call_method1(...)` costs.
+#[cfg(feature = "python")]
+fn json_callables(py: Python<'_>) -> PyResult<&'static JsonCallables> {
+    JSON_CALLABLES.get_or_try_init(py, || {
+        let json_mod = py.import("json")?;
+        let stdlib_dumps = json_mod.getattr("dumps")?.unbind();
+        let stdlib_loads = json_mod.getattr("loads")?.unbind();
+        if let Ok(orjson) = py.import("orjson") {
+            let kwargs = PyDict::new(py);
+            kwargs.set_item("option", orjson.getattr("OPT_NON_STR_KEYS")?)?;
+            return Ok(JsonCallables {
+                dumps: orjson.getattr("dumps")?.unbind(),
+                dumps_kwargs: Some(kwargs.unbind()),
+                stdlib_dumps,
+                loads: orjson.getattr("loads")?.unbind(),
+                stdlib_loads,
+                accelerated: true,
+            });
+        }
+        Ok(JsonCallables {
+            dumps: stdlib_dumps.clone_ref(py),
+            dumps_kwargs: None,
+            stdlib_dumps,
+            loads: stdlib_loads.clone_ref(py),
+            stdlib_loads,
+            accelerated: false,
+        })
+    })
+}
+
+/// Serialize a Python object to a JSON string using `orjson` when installed,
+/// falling back to Python's own (C-accelerated) `json` module -- never a
+/// Rust-side serde traversal.
 ///
 /// Benchmarked against the previous `depythonize` + `sonic-rs` serialize
 /// approach: for flat dicts the old approach was marginally faster (~25%),
@@ -46,24 +113,97 @@ fn lock_config(mutex: &Mutex<JSONTools>) -> PyResult<std::sync::MutexGuard<'_, J
 /// handle -- and for `list[dict]`/DataFrame batches, which are the realistic
 /// call shape -- `depythonize` was 5-30% slower for a single nested dict, and
 /// 2-3x slower for DataFrame rows, than just letting CPython's own hand-tuned
-/// C `json` module do the conversion. `py.import("json")` hits Python's module
-/// cache (`sys.modules`) after the first call, so this isn't re-importing on
-/// every invocation.
+/// C `json` module do the conversion. orjson beats stdlib by a further 5-10x
+/// on the same call shape, so it's preferred when importable.
 #[cfg(feature = "python")]
 #[inline]
 fn py_dumps(py: Python<'_>, obj: &Bound<'_, PyAny>) -> PyResult<String> {
-    py.import("json")?
-        .call_method1("dumps", (obj,))?
-        .extract::<String>()
+    let callables = json_callables(py)?;
+    let result = match &callables.dumps_kwargs {
+        Some(kwargs) => match callables.dumps.bind(py).call((obj,), Some(kwargs.bind(py))) {
+            Ok(out) => out,
+            // orjson rejects inputs stdlib handles (ints beyond 64-bit,
+            // exotic subclasses, ...) -- retry with stdlib so those inputs
+            // keep working exactly as before, including stdlib's error
+            // messages when the input is genuinely unserializable.
+            Err(_) => callables.stdlib_dumps.bind(py).call1((obj,))?,
+        },
+        None => callables.dumps.bind(py).call1((obj,))?,
+    };
+    // orjson returns `bytes`; stdlib returns `str`.
+    if let Ok(bytes) = result.cast::<PyBytes>() {
+        std::str::from_utf8(bytes.as_bytes())
+            .map(str::to_owned)
+            .map_err(|e| {
+                PyValueError::new_err(format!("JSON serializer produced non-UTF-8 output: {e}"))
+            })
+    } else {
+        result.extract::<String>()
+    }
 }
 
-/// Deserialize a JSON string into a Python object using Python's own `json`
-/// module, instead of `sonic-rs::from_str` + `pythonize`. See `py_dumps` for
-/// the rationale -- this is the output-side half of the same fix.
+/// True if `s` contains a run of >= 19 consecutive ASCII digits -- the only
+/// way an integer literal outside 64-bit range can appear (i64::MAX has 19
+/// digits). Used to guard orjson's `loads`, which silently parses such
+/// integers as lossy floats where stdlib preserves them exactly (Python ints
+/// are arbitrary-precision). Deliberately conservative: long digit runs
+/// inside strings or float literals also match and just take the stdlib path.
+///
+/// Samples every 19th byte instead of scanning all of them: any 19-digit run
+/// must contain a sampled position (consecutive samples are <= 19 apart), and
+/// a sampled digit expands to its full run to measure the real length, with
+/// the next sample resuming past the run's known non-digit end.
+#[cfg(feature = "python")]
+#[inline]
+fn may_contain_big_int(s: &[u8]) -> bool {
+    const RUN: usize = 19;
+    let n = s.len();
+    let mut i = 0;
+    while i < n {
+        if s[i].is_ascii_digit() {
+            let mut start = i;
+            while start > 0 && s[start - 1].is_ascii_digit() {
+                start -= 1;
+            }
+            let mut end = i + 1;
+            while end < n && s[end].is_ascii_digit() {
+                end += 1;
+            }
+            if end - start >= RUN {
+                return true;
+            }
+            // `end` is a known non-digit (or out of bounds), so the next run
+            // starts at end+1 at the earliest and sampling end+RUN leaves at
+            // most RUN-1 unsampled positions before it -- too short to hide
+            // a qualifying run.
+            i = end + RUN;
+        } else {
+            i += RUN;
+        }
+    }
+    false
+}
+
+/// Deserialize a JSON string into a Python object using `orjson` when
+/// installed, falling back to Python's own `json` module. See `py_dumps` for
+/// the rationale -- this is the output-side half of the same design.
+///
+/// Documents that may contain integers beyond 64-bit range always take the
+/// stdlib path: orjson parses those as lossy floats with no error to hook a
+/// fallback on, and this library guarantees integer precision end-to-end.
 #[cfg(feature = "python")]
 #[inline]
 fn py_loads<'py>(py: Python<'py>, json_str: &str) -> PyResult<Bound<'py, PyAny>> {
-    py.import("json")?.call_method1("loads", (json_str,))
+    let callables = json_callables(py)?;
+    if callables.accelerated && !may_contain_big_int(json_str.as_bytes()) {
+        // On an unexpected orjson failure over our own valid output, fall
+        // through to stdlib so its behavior/error surface is what the caller
+        // sees, exactly as before the accelerator existed.
+        if let Ok(obj) = callables.loads.bind(py).call1((json_str,)) {
+            return Ok(obj);
+        }
+    }
+    callables.stdlib_loads.bind(py).call1((json_str,))
 }
 
 // =============================================================================
@@ -1120,16 +1260,26 @@ impl PyJSONTools {
     pub fn execute(&self, json_input: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
         let py = json_input.py();
 
-        // NEW: Check for DataFrame or Series first (before other type checks)
-        match detect_data_structure(json_input)? {
-            Some(DataStructureType::DataFrame(df_type)) => {
-                return self.execute_dataframe(json_input, df_type);
-            }
-            Some(DataStructureType::Series(series_type)) => {
-                return self.execute_series(json_input, series_type);
-            }
-            None => {
-                // Fall through to existing type checks
+        // An exactly-typed str/dict/list can never be a DataFrame/Series, so
+        // skip the duck-typing detection (several getattr/hasattr chains) for
+        // the common input shapes -- it's pure per-call overhead there.
+        // Subclasses and everything else still take the full detection path.
+        let is_exact_common_type = json_input.is_exact_instance_of::<PyString>()
+            || json_input.is_exact_instance_of::<PyDict>()
+            || json_input.is_exact_instance_of::<PyList>();
+
+        // Check for DataFrame or Series first (before other type checks)
+        if !is_exact_common_type {
+            match detect_data_structure(json_input)? {
+                Some(DataStructureType::DataFrame(df_type)) => {
+                    return self.execute_dataframe(json_input, df_type);
+                }
+                Some(DataStructureType::Series(series_type)) => {
+                    return self.execute_series(json_input, series_type);
+                }
+                None => {
+                    // Fall through to existing type checks
+                }
             }
         }
 
@@ -1731,4 +1881,76 @@ fn json_tools_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     )?;
 
     Ok(())
+}
+
+#[cfg(all(test, feature = "python"))]
+mod marshal_tests {
+    use super::may_contain_big_int;
+
+    /// Straightforward reference implementation: full scan for a digit run
+    /// of >= 19. The sampled version must agree with this everywhere.
+    fn naive(s: &[u8]) -> bool {
+        let mut run = 0usize;
+        for &b in s {
+            if b.is_ascii_digit() {
+                run += 1;
+                if run >= 19 {
+                    return true;
+                }
+            } else {
+                run = 0;
+            }
+        }
+        false
+    }
+
+    #[test]
+    fn big_int_guard_edges() {
+        assert!(!may_contain_big_int(b""));
+        assert!(!may_contain_big_int(b"{}"));
+        // 18 digits: largest run that must NOT trigger
+        assert!(!may_contain_big_int(b"123456789012345678"));
+        // 19 digits: must trigger, at string start, middle, and end
+        assert!(may_contain_big_int(b"1234567890123456789"));
+        assert!(may_contain_big_int(b"{\"big\": 1234567890123456789}"));
+        assert!(may_contain_big_int(
+            b"xxxxxxxxxxxxxxxxxxxxx1234567890123456789"
+        ));
+        // i64::MAX itself (19 digits) is conservatively flagged -- fine
+        assert!(may_contain_big_int(b"9223372036854775807"));
+        // runs split by separators never combine
+        assert!(!may_contain_big_int(b"123456789.123456789e12"));
+        // long digit runs inside strings count too (conservative by design)
+        assert!(may_contain_big_int(b"{\"id\": \"12345678901234567890\"}"));
+    }
+
+    #[test]
+    fn big_int_guard_matches_naive_scan() {
+        // Deterministic xorshift; digit-heavy alphabet so long runs actually
+        // occur, exercising run expansion straddling sample points.
+        let mut state = 0x9e3779b97f4a7c15u64;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        for len in [0usize, 1, 17, 18, 19, 20, 37, 38, 57, 200, 1000] {
+            for _ in 0..500 {
+                let bytes: Vec<u8> = (0..len)
+                    .map(|_| match next() % 4 {
+                        0 => b'a',
+                        1 => b',',
+                        _ => b'0' + (next() % 10) as u8,
+                    })
+                    .collect();
+                assert_eq!(
+                    may_contain_big_int(&bytes),
+                    naive(&bytes),
+                    "mismatch on {:?}",
+                    String::from_utf8_lossy(&bytes)
+                );
+            }
+        }
+    }
 }

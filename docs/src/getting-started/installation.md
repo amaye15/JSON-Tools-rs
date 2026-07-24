@@ -23,6 +23,20 @@ Install from PyPI:
 pip install json-tools-rs
 ```
 
+For the fastest dict/DataFrame processing, install the `fast` extra, which adds
+[orjson](https://github.com/ijl/orjson):
+
+```bash
+pip install "json-tools-rs[fast]"
+```
+
+When orjson is installed it is used automatically for the Python-side
+dict ↔ JSON-string conversion that dict, `list[dict]`, and DataFrame inputs go
+through (roughly 1.4-1.6x faster end-to-end calls for those input shapes);
+without it the bindings fall back to the standard library's `json` module with
+identical behavior. Documents containing integers beyond 64-bit range are always
+routed through the standard library to preserve exact integer precision.
+
 Pre-built wheels are available for:
 
 | Platform | Architectures |
