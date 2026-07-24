@@ -531,8 +531,9 @@ pub(crate) fn scan_and_fixup(input: &[u8]) -> Result<Vec<TapeEntry>, JsonToolsEr
 }
 
 /// Check if the next non-whitespace byte is a scalar and emit a ScalarStart entry.
-/// Advances `pos` past whitespace only (does NOT consume the scalar bytes — the main
-/// loop will skip over them naturally since they have CLASS_NONE).
+/// Advances `pos` past the skipped whitespace AND the consumed scalar bytes, so the
+/// main loop resumes directly at the next structural byte instead of re-classifying
+/// every scalar/whitespace byte a second time through the LUT.
 /// Returns Err for invalid scalars (anything other than true/false/null/numbers).
 #[inline(always)]
 fn maybe_emit_scalar(
@@ -555,11 +556,17 @@ fn maybe_emit_scalar(
         // Not a string, object, array, or closing bracket → must be a scalar
         if next != b'"' && next != b'{' && next != b'[' && next != b']' && next != b'}' {
             let scalar_start = p;
-            // Inline scalar end detection
+            // Inline scalar end detection. The break set includes every
+            // structural byte — a valid JSON scalar (number/true/false/null,
+            // incl. exponent forms) can never contain any of them, and for
+            // *invalid* input this leaves `p` on the offending structural byte
+            // for the main loop to process, exactly as the pre-consuming
+            // version of this scanner did.
             p += 1;
             while p < len {
                 match unsafe { *input.get_unchecked(p) } {
-                    b',' | b'}' | b']' | b' ' | b'\t' | b'\n' | b'\r' => break,
+                    b',' | b'}' | b']' | b'{' | b'[' | b'"' | b':' | b' ' | b'\t' | b'\n'
+                    | b'\r' => break,
                     _ => p += 1,
                 }
             }
@@ -574,6 +581,10 @@ fn maybe_emit_scalar(
             ));
         }
     }
+    // Resume the main loop at the first unconsumed byte: whitespace and scalar
+    // bytes were fully handled here, so re-scanning them through the LUT one
+    // byte at a time (the previous behavior) is pure duplicated work.
+    *pos = p;
     Ok(())
 }
 
