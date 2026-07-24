@@ -74,7 +74,9 @@ jobs:
           python3 -m venv .venv
           source .venv/bin/activate
           pip install json-tools-rs --no-index --find-links dist --force-reinstall
-          pip install pytest
+          # orjson: exercises the accelerated marshaling path (the [fast] extra);
+          # other legs stay orjson-free and cover the stdlib fallback path.
+          pip install pytest orjson
           pytest
       - name: pytest
         if: ${{ !startsWith(matrix.platform.target, 'x86') && matrix.platform.target != 'ppc64' }}
@@ -234,7 +236,9 @@ jobs:
           python3 -m venv .venv
           source .venv/bin/activate
           pip install json-tools-rs --no-index --find-links dist --force-reinstall
-          pip install pytest
+          # orjson: exercises the accelerated marshaling path (the [fast] extra);
+          # other legs stay orjson-free and cover the stdlib fallback path.
+          pip install pytest orjson
           pytest
 
   sdist:
