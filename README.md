@@ -331,9 +331,6 @@ cargo add json-tools-rs
 
 ```bash
 pip install json-tools-rs
-
-# or, with the optional orjson accelerator (~1.4-1.6x faster dict/DataFrame calls)
-pip install "json-tools-rs[fast]"
 ```
 
 ### JVM / Spark

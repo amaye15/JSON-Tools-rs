@@ -73,10 +73,11 @@ jobs:
           set -e
           python3 -m venv .venv
           source .venv/bin/activate
-          pip install json-tools-rs --no-index --find-links dist --force-reinstall
-          # orjson: exercises the accelerated marshaling path (the [fast] extra);
-          # other legs stay orjson-free and cover the stdlib fallback path.
+          # orjson is a hard runtime dependency (see pyproject.toml), but the
+          # --no-index install below can't reach PyPI to resolve it -- install
+          # it explicitly first.
           pip install pytest orjson
+          pip install json-tools-rs --no-index --find-links dist --force-reinstall
           pytest
       - name: pytest
         if: ${{ !startsWith(matrix.platform.target, 'x86') && matrix.platform.target != 'ppc64' }}
@@ -88,7 +89,7 @@ jobs:
           install: |
             apt-get update
             apt-get install -y --no-install-recommends python3 python3-pip
-            pip3 install -U pip pytest
+            pip3 install -U pip pytest orjson
           run: |
             set -e
             pip3 install json-tools-rs --no-index --find-links dist --force-reinstall
@@ -136,8 +137,8 @@ jobs:
             apk add py3-pip py3-virtualenv
             python3 -m virtualenv .venv
             source .venv/bin/activate
+            pip install pytest orjson
             pip install json-tools-rs --no-index --find-links dist --force-reinstall
-            pip install pytest
             pytest
       - name: pytest
         if: ${{ !startsWith(matrix.platform.target, 'x86') }}
@@ -152,7 +153,7 @@ jobs:
             set -e
             python3 -m virtualenv .venv
             source .venv/bin/activate
-            pip install pytest
+            pip install pytest orjson
             pip install json-tools-rs --no-index --find-links dist --force-reinstall
             pytest
 
@@ -191,8 +192,8 @@ jobs:
           set -e
           python3 -m venv .venv
           source .venv/Scripts/activate
+          pip install pytest orjson
           pip install json-tools-rs --no-index --find-links dist --force-reinstall
-          pip install pytest
           pytest
 
   macos:
@@ -235,10 +236,8 @@ jobs:
           set -e
           python3 -m venv .venv
           source .venv/bin/activate
-          pip install json-tools-rs --no-index --find-links dist --force-reinstall
-          # orjson: exercises the accelerated marshaling path (the [fast] extra);
-          # other legs stay orjson-free and cover the stdlib fallback path.
           pip install pytest orjson
+          pip install json-tools-rs --no-index --find-links dist --force-reinstall
           pytest
 
   sdist:

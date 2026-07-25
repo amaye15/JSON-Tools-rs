@@ -17,7 +17,7 @@ JSON Tools RS achieves ~2,000+ ops/ms through multiple optimization layers.
 | **Zero-Copy (Cow)** | Avoid allocations when strings don't need modification |
 | **Stack-Allocated Integer Formatting** | Custom `IntBuf` formatter for array-index keys (replaced the `itoa` crate) |
 | **mimalloc** | Optional high-performance allocator (`features = ["mimalloc"]`, ~5-10% speedup) |
-| **orjson Accelerator** (Python) | Optional `pip install json-tools-rs[fast]` -- replaces the stdlib `json` module for dict/DataFrame-row (de)serialization, auto-detected with a stdlib fallback |
+| **orjson** (Python) | Bundled dependency -- replaces the stdlib `json` module for dict/DataFrame-row (de)serialization, with a per-call stdlib fallback for inputs it can't handle (e.g. integers beyond 64-bit range) |
 | **UTF-8 byte[] JNI Marshaling** (JVM) | Native calls cross the JNI boundary as `byte[]` instead of `String`, avoiding UTF-16 <-> modified-UTF-8 conversion |
 
 ## Benchmark Results

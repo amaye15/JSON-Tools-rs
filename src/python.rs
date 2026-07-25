@@ -40,32 +40,28 @@ fn lock_config(mutex: &Mutex<JSONTools>) -> PyResult<std::sync::MutexGuard<'_, J
 }
 
 /// JSON (de)serialization callables, resolved once per process and cached:
-/// `orjson` when the user has it installed (the `json-tools-rs[fast]` extra;
-/// 5-10x faster than stdlib for the dict<->str conversion this module performs
-/// on every dict-shaped call), stdlib `json` otherwise.
-///
-/// The stdlib callables are always kept alongside as a per-call fallback:
-/// orjson has narrower input support than stdlib (integers beyond 64-bit,
-/// arbitrary type subclasses, ...), and retrying with stdlib on an orjson
-/// error preserves stdlib's behavior and error surfaces for exactly those
-/// inputs instead of changing them.
+/// `orjson` (a hard dependency -- see `pyproject.toml`; 5-10x faster than
+/// stdlib for the dict<->str conversion this module performs on every
+/// dict-shaped call) with the stdlib `json` module kept alongside as a
+/// per-call fallback for the inputs orjson can't handle (integers beyond
+/// 64-bit range, arbitrary type subclasses, ...) -- retrying with stdlib on
+/// an orjson error preserves stdlib's behavior and error surfaces for exactly
+/// those inputs instead of changing them.
 #[cfg(feature = "python")]
 struct JsonCallables {
-    /// Fast path: `orjson.dumps` when available, stdlib `json.dumps` otherwise.
+    /// `orjson.dumps`.
     dumps: Py<PyAny>,
-    /// Kwargs for the fast dumps call: `{"option": orjson.OPT_NON_STR_KEYS}`,
-    /// so int/float/bool/None dict keys are coerced to strings exactly like
-    /// stdlib `json.dumps` does by default. `None` when dumps is stdlib.
-    dumps_kwargs: Option<Py<PyDict>>,
-    /// Always stdlib `json.dumps` -- fallback when orjson rejects an input.
+    /// Kwargs for the dumps call: `{"option": orjson.OPT_NON_STR_KEYS}`, so
+    /// int/float/bool/None dict keys are coerced to strings exactly like
+    /// stdlib `json.dumps` does by default.
+    dumps_kwargs: Py<PyDict>,
+    /// stdlib `json.dumps` -- fallback when orjson rejects an input.
     stdlib_dumps: Py<PyAny>,
-    /// Fast path: `orjson.loads` when available, stdlib `json.loads` otherwise.
+    /// `orjson.loads`.
     loads: Py<PyAny>,
-    /// Always stdlib `json.loads` -- fallback: orjson rejects some JSON stdlib
+    /// stdlib `json.loads` -- fallback: orjson rejects some JSON stdlib
     /// accepts (integers beyond 64-bit range).
     stdlib_loads: Py<PyAny>,
-    /// True when the fast path is orjson (selects the fallback-retry logic).
-    accelerated: bool,
 }
 
 #[cfg(feature = "python")]
@@ -80,32 +76,22 @@ fn json_callables(py: Python<'_>) -> PyResult<&'static JsonCallables> {
         let json_mod = py.import("json")?;
         let stdlib_dumps = json_mod.getattr("dumps")?.unbind();
         let stdlib_loads = json_mod.getattr("loads")?.unbind();
-        if let Ok(orjson) = py.import("orjson") {
-            let kwargs = PyDict::new(py);
-            kwargs.set_item("option", orjson.getattr("OPT_NON_STR_KEYS")?)?;
-            return Ok(JsonCallables {
-                dumps: orjson.getattr("dumps")?.unbind(),
-                dumps_kwargs: Some(kwargs.unbind()),
-                stdlib_dumps,
-                loads: orjson.getattr("loads")?.unbind(),
-                stdlib_loads,
-                accelerated: true,
-            });
-        }
+        let orjson = py.import("orjson")?;
+        let kwargs = PyDict::new(py);
+        kwargs.set_item("option", orjson.getattr("OPT_NON_STR_KEYS")?)?;
         Ok(JsonCallables {
-            dumps: stdlib_dumps.clone_ref(py),
-            dumps_kwargs: None,
+            dumps: orjson.getattr("dumps")?.unbind(),
+            dumps_kwargs: kwargs.unbind(),
             stdlib_dumps,
-            loads: stdlib_loads.clone_ref(py),
+            loads: orjson.getattr("loads")?.unbind(),
             stdlib_loads,
-            accelerated: false,
         })
     })
 }
 
-/// Serialize a Python object to a JSON string using `orjson` when installed,
-/// falling back to Python's own (C-accelerated) `json` module -- never a
-/// Rust-side serde traversal.
+/// Serialize a Python object to a JSON string using `orjson`, falling back to
+/// Python's own (C-accelerated) `json` module for inputs orjson rejects --
+/// never a Rust-side serde traversal.
 ///
 /// Benchmarked against the previous `depythonize` + `sonic-rs` serialize
 /// approach: for flat dicts the old approach was marginally faster (~25%),
@@ -114,21 +100,22 @@ fn json_callables(py: Python<'_>) -> PyResult<&'static JsonCallables> {
 /// call shape -- `depythonize` was 5-30% slower for a single nested dict, and
 /// 2-3x slower for DataFrame rows, than just letting CPython's own hand-tuned
 /// C `json` module do the conversion. orjson beats stdlib by a further 5-10x
-/// on the same call shape, so it's preferred when importable.
+/// on the same call shape.
 #[cfg(feature = "python")]
 #[inline]
 fn py_dumps(py: Python<'_>, obj: &Bound<'_, PyAny>) -> PyResult<String> {
     let callables = json_callables(py)?;
-    let result = match &callables.dumps_kwargs {
-        Some(kwargs) => match callables.dumps.bind(py).call((obj,), Some(kwargs.bind(py))) {
-            Ok(out) => out,
-            // orjson rejects inputs stdlib handles (ints beyond 64-bit,
-            // exotic subclasses, ...) -- retry with stdlib so those inputs
-            // keep working exactly as before, including stdlib's error
-            // messages when the input is genuinely unserializable.
-            Err(_) => callables.stdlib_dumps.bind(py).call1((obj,))?,
-        },
-        None => callables.dumps.bind(py).call1((obj,))?,
+    let result = match callables
+        .dumps
+        .bind(py)
+        .call((obj,), Some(callables.dumps_kwargs.bind(py)))
+    {
+        Ok(out) => out,
+        // orjson rejects inputs stdlib handles (ints beyond 64-bit, exotic
+        // subclasses, ...) -- retry with stdlib so those inputs keep working
+        // exactly as before, including stdlib's error messages when the
+        // input is genuinely unserializable.
+        Err(_) => callables.stdlib_dumps.bind(py).call1((obj,))?,
     };
     // orjson returns `bytes`; stdlib returns `str`.
     if let Ok(bytes) = result.cast::<PyBytes>() {
@@ -184,9 +171,10 @@ fn may_contain_big_int(s: &[u8]) -> bool {
     false
 }
 
-/// Deserialize a JSON string into a Python object using `orjson` when
-/// installed, falling back to Python's own `json` module. See `py_dumps` for
-/// the rationale -- this is the output-side half of the same design.
+/// Deserialize a JSON string into a Python object using `orjson`, falling
+/// back to Python's own `json` module for inputs orjson rejects. See
+/// `py_dumps` for the rationale -- this is the output-side half of the same
+/// design.
 ///
 /// Documents that may contain integers beyond 64-bit range always take the
 /// stdlib path: orjson parses those as lossy floats with no error to hook a
@@ -195,7 +183,7 @@ fn may_contain_big_int(s: &[u8]) -> bool {
 #[inline]
 fn py_loads<'py>(py: Python<'py>, json_str: &str) -> PyResult<Bound<'py, PyAny>> {
     let callables = json_callables(py)?;
-    if callables.accelerated && !may_contain_big_int(json_str.as_bytes()) {
+    if !may_contain_big_int(json_str.as_bytes()) {
         // On an unexpected orjson failure over our own valid output, fall
         // through to stdlib so its behavior/error surface is what the caller
         // sees, exactly as before the accelerator existed.

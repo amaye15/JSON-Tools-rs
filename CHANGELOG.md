@@ -7,24 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
-- **`fast` extra (Python)**: `pip install "json-tools-rs[fast]"` opts into
-  [orjson](https://github.com/ijl/orjson) for the dict/DataFrame-row JSON
-  (de)serialization step. Detected at runtime with a per-call fallback to the
-  standard library on any error, so behavior is identical either way -- including
-  for inputs orjson can't handle itself (integers beyond 64-bit range, which
-  orjson silently parses as lossy floats; documents that could contain one are
-  routed to the stdlib path automatically to preserve this library's exact-integer
-  guarantee).
+### Changed
+- **Python: [orjson](https://github.com/ijl/orjson) is now a required
+  dependency**, used automatically for the dict/DataFrame-row JSON
+  (de)serialization step (`pip install json-tools-rs` pulls it in -- no separate
+  opt-in needed). Has published wheels for every platform/arch this project
+  ships wheels for and for Python 3.9+ (pip resolves the right release per
+  interpreter automatically), so this doesn't affect installability anywhere.
+  A per-call fallback to the standard library still covers the inputs orjson
+  can't handle (integers beyond 64-bit range, which orjson silently parses as
+  lossy floats -- documents that could contain one are routed to the stdlib
+  path automatically to preserve this library's exact-integer guarantee).
 
 ### Performance Improvements
 - **Python binding marshaling**: `execute()`/`execute_to_output()` skip the
   DataFrame/Series duck-typing detection entirely for exactly-typed
   `str`/`dict`/`list` inputs (subclasses still take the full detection path), and
-  the `json.dumps`/`json.loads` callables are resolved once via a `PyOnceLock`
-  instead of re-importing per call. Combined with the `fast` extra above: dict-input
-  calls ~37% faster with orjson installed (~19% faster without), str-input calls
-  ~39% faster.
+  the `json.dumps`/`json.loads` callables (now always orjson, per the `Changed`
+  entry above) are resolved once via a `PyOnceLock` instead of re-importing per
+  call. dict-input calls ~37% faster, str-input calls ~39% faster.
 - **JVM binding marshaling**: the native `execute`/`executeBatch` methods now pass
   UTF-8 `byte[]` instead of `String` across the JNI boundary -- Java's
   `String.getBytes(UTF_8)`/`new String(bytes, UTF_8)` are JIT-intrinsified, turning

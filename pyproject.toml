@@ -37,13 +37,14 @@ classifiers = [
 ]
 requires-python = ">=3.9"
 dynamic = ["version"]
-
-[project.optional-dependencies]
-# `pip install json-tools-rs[fast]`: orjson accelerates the Python-side
-# dict <-> JSON-string conversion done for dict/list[dict]/DataFrame inputs
-# (~5-10x faster than stdlib `json` for that step). Detected at runtime with a
-# graceful fallback to stdlib, so this is purely optional.
-fast = ["orjson>=3.9"]
+# orjson accelerates the Python-side dict <-> JSON-string conversion done for
+# dict/list[dict]/DataFrame inputs (~5-10x faster than stdlib `json` for that
+# step). Has published wheels for every platform/arch this project ships
+# wheels for (manylinux/musllinux x86_64/x86/aarch64/armv7/ppc64le, Windows
+# amd64, macOS x86_64/arm64) plus Python 3.9 (via an older-but-current
+# release; pip resolves per-interpreter automatically), so this is safe as a
+# hard dependency rather than an opt-in extra.
+dependencies = ["orjson>=3.9"]
 
 [project.urls]
 Homepage = "https://github.com/amaye15/JSON-Tools-rs"

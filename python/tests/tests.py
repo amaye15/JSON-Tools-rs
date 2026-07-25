@@ -4235,10 +4235,11 @@ class TestUnicodeEdgeCases:
 
 
 class TestJsonMarshalingCompat:
-    """Dict <-> JSON conversion edge cases that must behave identically
-    whether the optional orjson accelerator (`json-tools-rs[fast]`) is
-    installed or not. These pin the compatibility contract of the
-    accelerated marshaling path in src/python.rs."""
+    """Dict <-> JSON conversion edge cases for the orjson-backed marshaling
+    path in src/python.rs (orjson is a required dependency -- see
+    pyproject.toml). These pin its compatibility contract against the
+    stdlib json module it replaces, including the inputs it falls back to
+    stdlib for."""
 
     def test_big_int_precision_preserved(self):
         """Integers beyond 64-bit must roundtrip exactly, never as floats.
