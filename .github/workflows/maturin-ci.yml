@@ -75,9 +75,12 @@ jobs:
           source .venv/bin/activate
           # orjson is a hard runtime dependency (see pyproject.toml), but the
           # --no-index install below can't reach PyPI to resolve it -- install
-          # it explicitly first.
+          # it explicitly first. --no-deps on that install is required, not
+          # just tidy: --force-reinstall cascades to already-satisfied deps
+          # too, so without --no-deps pip re-resolves orjson a second time
+          # under --no-index and fails to find it.
           pip install pytest orjson
-          pip install json-tools-rs --no-index --find-links dist --force-reinstall
+          pip install json-tools-rs --no-index --find-links dist --force-reinstall --no-deps
           pytest
       - name: pytest
         if: ${{ !startsWith(matrix.platform.target, 'x86') && matrix.platform.target != 'ppc64' }}
@@ -92,7 +95,7 @@ jobs:
             pip3 install -U pip pytest orjson
           run: |
             set -e
-            pip3 install json-tools-rs --no-index --find-links dist --force-reinstall
+            pip3 install json-tools-rs --no-index --find-links dist --force-reinstall --no-deps
             pytest
 
   musllinux:
@@ -138,7 +141,7 @@ jobs:
             python3 -m virtualenv .venv
             source .venv/bin/activate
             pip install pytest orjson
-            pip install json-tools-rs --no-index --find-links dist --force-reinstall
+            pip install json-tools-rs --no-index --find-links dist --force-reinstall --no-deps
             pytest
       - name: pytest
         if: ${{ !startsWith(matrix.platform.target, 'x86') }}
@@ -154,7 +157,7 @@ jobs:
             python3 -m virtualenv .venv
             source .venv/bin/activate
             pip install pytest orjson
-            pip install json-tools-rs --no-index --find-links dist --force-reinstall
+            pip install json-tools-rs --no-index --find-links dist --force-reinstall --no-deps
             pytest
 
   windows:
@@ -193,7 +196,7 @@ jobs:
           python3 -m venv .venv
           source .venv/Scripts/activate
           pip install pytest orjson
-          pip install json-tools-rs --no-index --find-links dist --force-reinstall
+          pip install json-tools-rs --no-index --find-links dist --force-reinstall --no-deps
           pytest
 
   macos:
@@ -237,7 +240,7 @@ jobs:
           python3 -m venv .venv
           source .venv/bin/activate
           pip install pytest orjson
-          pip install json-tools-rs --no-index --find-links dist --force-reinstall
+          pip install json-tools-rs --no-index --find-links dist --force-reinstall --no-deps
           pytest
 
   sdist:
