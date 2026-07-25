@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- **`fast` extra (Python)**: `pip install "json-tools-rs[fast]"` adds [orjson](https://github.com/ijl/orjson) as the dict/DataFrame-row JSON (de)serialization backend, auto-detected with a per-call fallback to the standard library so behavior never changes -- see [Installation](../getting-started/installation.md).
+
+### Performance
+- Python binding: exact-typed `str`/`dict`/`list` inputs skip DataFrame/Series detection entirely, and the JSON callables are resolved once instead of per call. Dict-input calls ~37% faster with the `fast` extra (~19% without), str-input calls ~39% faster.
+- JVM binding: native `execute`/`executeBatch` now cross the JNI boundary as UTF-8 `byte[]` instead of `String` (JIT-intrinsified on the Java side, avoiding JNI's UTF-16 conversion). ~22-38% faster per call, ~33% faster for batches. Public API unchanged.
+- Unflatten: nested-container capacity hints tuned against this project's own benchmark corpus (was an undersized flat guess), plus a single-lookup `entry()` replacing a double hash probe. ~5-6% faster unflatten, ~4-5% faster roundtrip.
+- Core scanner: removed a double-scan of scalar/whitespace bytes in the tape scanner. ~13-16% faster flatten across payload sizes.
+
+See the repository's [CHANGELOG.md](https://github.com/amaye15/json-tools-rs/blob/master/CHANGELOG.md) for the full, itemized list.
+
 ## v0.9.7 (2026-07-20)
 
 ### Added

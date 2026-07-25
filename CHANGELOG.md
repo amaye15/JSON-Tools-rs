@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`fast` extra (Python)**: `pip install "json-tools-rs[fast]"` opts into
+  [orjson](https://github.com/ijl/orjson) for the dict/DataFrame-row JSON
+  (de)serialization step. Detected at runtime with a per-call fallback to the
+  standard library on any error, so behavior is identical either way -- including
+  for inputs orjson can't handle itself (integers beyond 64-bit range, which
+  orjson silently parses as lossy floats; documents that could contain one are
+  routed to the stdlib path automatically to preserve this library's exact-integer
+  guarantee).
+
+### Performance Improvements
+- **Python binding marshaling**: `execute()`/`execute_to_output()` skip the
+  DataFrame/Series duck-typing detection entirely for exactly-typed
+  `str`/`dict`/`list` inputs (subclasses still take the full detection path), and
+  the `json.dumps`/`json.loads` callables are resolved once via a `PyOnceLock`
+  instead of re-importing per call. Combined with the `fast` extra above: dict-input
+  calls ~37% faster with orjson installed (~19% faster without), str-input calls
+  ~39% faster.
+- **JVM binding marshaling**: the native `execute`/`executeBatch` methods now pass
+  UTF-8 `byte[]` instead of `String` across the JNI boundary -- Java's
+  `String.getBytes(UTF_8)`/`new String(bytes, UTF_8)` are JIT-intrinsified, turning
+  the crossing into two plain array copies instead of JNI's UTF-16 <-> modified-UTF-8
+  conversions. ~22-38% faster per call, ~33% faster for batches. The public
+  `JsonToolsHandle` API is unchanged; only the internal native method signatures moved.
+- **Unflatten tree-building**: nested objects/arrays created during tree assembly
+  now start at a corpus-tuned capacity hint (was a flat, undersized guess of 4;
+  real-world nested objects average 4.1 fields, with a p75 of 5) and use a single
+  `IndexMap::entry()` lookup instead of a `contains_key` + `insert` + `get_mut`
+  sequence. ~5-6% faster unflatten, ~4-5% faster roundtrip.
+- **Core scanner**: fixed a double-scan in the tape scanner's scalar handling --
+  the scalar/whitespace bytes following a colon, comma, or array-start were fully
+  walked once to compute the scalar's length, then re-walked a second time by the
+  main loop one byte at a time. The scan position now advances past what was
+  already consumed. ~13-16% faster flatten across payload sizes.
+
 ## [0.9.7] - 2026-07-20
 
 ### Added
