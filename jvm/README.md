@@ -26,6 +26,13 @@ library).
 > use the **Python bindings** instead (`pip install json-tools-rs`, already published
 > to PyPI) -- Python wheels are supported in a pipeline's Environment settings, unlike
 > JVM jars.
+>
+> There is also a newer, **untested** potential path via Unity Catalog Scala/Java
+> UDFs (GA July 16, 2026), which Databricks' docs explicitly list as supported on
+> Lakeflow pipeline compute -- a different registration mechanism from the
+> cluster-library restriction above. Not validated against this library yet; see
+> [Databricks Setup](../docs/src/guide/databricks-setup.md#a-newer-untested-path-unity-catalog-scalajava-udfs)
+> for what's confirmed vs. still unknown before relying on it.
 
 If your need is just "flatten nested JSON into columns" with no custom key/value
 transforms, check whether Spark's built-in `VARIANT` type + `variant_explode()` /

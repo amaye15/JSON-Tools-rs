@@ -5,7 +5,9 @@
 validated and shown below. The JVM bindings (`jvm/`) are for Databricks Jobs and
 notebooks on classic compute, or any other Spark environment outside a Lakeflow
 pipeline -- they cannot be attached to pipeline compute at all, for reasons explained
-below.
+below. There is a newer, **untested** potential path via Unity Catalog Scala/Java
+UDFs -- see [below](#a-newer-untested-path-unity-catalog-scalajava-udfs) -- but the
+Python `pandas_udf` approach is the one to actually use today.
 
 ## Why the JVM bindings can't run inside a pipeline
 
@@ -22,6 +24,59 @@ JVM bindings work completely normally in a regular Databricks Job or notebook on
 classic cluster, or on any other Spark deployment (self-managed, EMR, etc.) where you
 control cluster libraries -- see [`jvm/README.md`](https://github.com/amaye15/json-tools-rs/blob/master/jvm/README.md)
 for that path.
+
+## A newer, untested path: Unity Catalog Scala/Java UDFs
+
+Databricks GA'd [Scala and Java UDFs in Unity
+Catalog](https://docs.databricks.com/aws/en/udf/scala-java-uc) on July 16, 2026 -- a
+different registration mechanism from the cluster-library restriction described
+above. A jar uploaded to a Unity Catalog Volume is registered directly as a catalog
+function:
+
+```sql
+CREATE OR REPLACE FUNCTION my_catalog.my_schema.flatten_json(config STRING, json STRING)
+RETURNS STRING
+LANGUAGE JAVA
+DETERMINISTIC
+ENVIRONMENT (
+  java_dependencies = '["/Volumes/my_catalog/my_schema/jars/json-tools-rs-spark-0.9.7.jar"]',
+  environment_version = '4')
+HANDLER 'io.github.amaye15.jsontoolsrs.SomeHandler.flatten';
+```
+
+...and executes in an isolated sandbox with no active Spark session. Databricks'
+docs state this is supported on "all compute types, including serverless notebooks
+and jobs, SQL warehouses, and Spark Declarative Pipelines on Lakeflow" -- an explicit
+claim, not an inference. If it holds for this library, it would mean JNI-level
+throughput becomes usable inside a Lakeflow pipeline for the first time, without the
+upstream-Job workaround described [below](#feeding-a-pipeline-from-a-jvm-processed-table).
+
+**This has not been tested against this library, there is no adapter class for it in
+this repo, and it is not a currently supported or documented path** -- treat it as a
+lead worth investigating, not a working recipe. Two concrete things stand between
+"the docs say it's supported" and "this actually works here":
+
+1. **The HANDLER must be Spark-free.** The docs require a plain `public static`
+   method with no Spark API usage or dependency, which rules out
+   `FlattenUDF`/`UnflattenUDF`/`BatchTransform` (they implement Spark's
+   `UDF1`/`MapPartitionsFunction` interfaces) but fits
+   `JsonToolsHandle.execute(String) -> String` well -- that class already has zero
+   Spark imports. A new, thin adapter class exposing it as a static method (the
+   `SomeHandler.flatten` placeholder above) would need to be written; it does not
+   exist yet.
+2. **Native library loading inside the sandbox is undocumented.**
+   `JsonToolsHandle` loads the compiled Rust library via JNI
+   (`NativeLibraryLoader`'s extract-to-temp-file-then-`System.load` pattern).
+   Databricks' UC UDF docs describe the sandbox's isolation in real detail (no
+   Spark session, no workspace/volume access at runtime, Lakeguard-based container
+   isolation) but say nothing -- neither permitting nor forbidding --
+   about `System.load()`/JNI specifically. This is the deciding unknown, and it can
+   only be settled by actually registering a handler and calling it in a real
+   workspace.
+
+If you try this and it works, that's worth reporting back -- it would be a real
+capability unlock worth documenting properly and adding a validated example for, the
+same way the `pandas_udf` pattern below was validated before being written down.
 
 ## Using the Python bindings inside a Lakeflow Declarative Pipeline
 
