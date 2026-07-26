@@ -342,7 +342,7 @@ v0.9.2, ships automatically on tagged releases):
 <dependency>
   <groupId>io.github.amaye15</groupId>
   <artifactId>json-tools-rs-spark</artifactId>
-  <version>0.9.7</version>
+  <version>0.9.8</version>
 </dependency>
 ```
 
@@ -427,7 +427,14 @@ Dual-licensed under either [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), a
 
 ## Changelog
 
-### v0.9.7 (Current)
+### v0.9.8 (Current)
+
+* **Changed**: [orjson](https://github.com/ijl/orjson) is now a required Python dependency, used automatically for dict/DataFrame-row JSON (de)serialization -- `pip install json-tools-rs` is all that's needed. A per-call fallback to the standard library still covers inputs orjson can't handle (e.g. integers beyond 64-bit range).
+* **Performance**: Python binding marshaling ~37% faster (dict calls) / ~39% faster (str calls) via a detection fast-path plus the orjson backend; JVM binding marshaling ~22-38% faster per call (UTF-8 `byte[]` across the JNI boundary instead of `String`); unflatten ~5-6% faster and roundtrip ~4-5% faster (corpus-tuned container capacity hints, single-lookup `entry()`); flatten ~13-16% faster across payload sizes (removed a double-scan in the core tape scanner).
+
+See [CHANGELOG.md](CHANGELOG.md) for full details.
+
+### v0.9.7
 
 * **New**: `.exclude_key(pattern)` (Rust/Python/JVM) -- drop any key, and its entire value/subtree, whose name contains `pattern` (literal by default, `r'...'` for regex). Matching a container key drops its entire subtree in O(1), without walking it. See [Key Exclusion](https://amaye15.github.io/JSON-Tools-rs/guide/replacements.html#key-exclusion).
 * **New**: `.exclude_value(pattern)` (Rust/Python/JVM) -- drop a key-value pair whose value contains `pattern`. Applies only to scalar leaf values; checked after `.value_replacement()`/`.auto_convert_types()` have run. See [Value Exclusion](https://amaye15.github.io/JSON-Tools-rs/guide/replacements.html#value-exclusion).

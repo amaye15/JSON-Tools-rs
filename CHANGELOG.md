@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.8] - 2026-07-26
+
 ### Changed
 - **Python: [orjson](https://github.com/ijl/orjson) is now a required
   dependency**, used automatically for the dict/DataFrame-row JSON

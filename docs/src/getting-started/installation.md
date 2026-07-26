@@ -50,7 +50,7 @@ Available on Maven Central as `io.github.amaye15:json-tools-rs-spark`:
 <dependency>
     <groupId>io.github.amaye15</groupId>
     <artifactId>json-tools-rs-spark</artifactId>
-    <version>0.9.7</version>
+    <version>0.9.8</version>
 </dependency>
 ```
 

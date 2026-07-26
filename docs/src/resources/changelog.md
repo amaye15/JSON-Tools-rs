@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.9.8 (2026-07-26)
 
 ### Changed
 - **Python: [orjson](https://github.com/ijl/orjson) is now a required dependency**, used automatically as the dict/DataFrame-row JSON (de)serialization backend -- `pip install json-tools-rs` is all that's needed, no separate opt-in. A per-call fallback to the standard library still covers inputs orjson can't handle -- see [Installation](../getting-started/installation.md).
