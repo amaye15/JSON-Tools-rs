@@ -4353,7 +4353,12 @@ class TestPickling:
             .convert_booleans(True, extra_true_tokens=["da"])
             .exclude_key("secret")
         )
-        payload = {"flag": "da", "when": "2024-01-15T10:30:00", "secret_x": "hidden", "y": 1}
+        payload = {
+            "flag": "da",
+            "when": "2024-01-15T10:30:00",
+            "secret_x": "hidden",
+            "y": 1,
+        }
         expected = tools.execute(payload)
 
         restored = pickle.loads(pickle.dumps(tools))
