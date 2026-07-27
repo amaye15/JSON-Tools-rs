@@ -4516,9 +4516,17 @@ class TestNormalise:
             tools.execute(series, normalise=True)
 
     def test_non_object_row_errors_with_row_index(self):
+        # Explicit target: row-content validation runs *after* target resolution
+        # in execute_normalise, so without this, an environment with none of
+        # pandas/polars/pyarrow installed fails at target auto-detection first
+        # ("could not auto-detect a target") instead of reaching the row check
+        # this test actually exercises -- caught by a CI job that has none of
+        # those optional libraries installed (maturin-ci.yml's wheel-test step).
+        if not self.has_pandas:
+            pytest.skip("pandas not installed")
         tools = json_tools_rs.JSONTools().flatten()
         with pytest.raises(json_tools_rs.JsonToolsError, match="row 0"):
-            tools.execute(['"just a string"'], normalise=True)
+            tools.execute(['"just a string"'], normalise=True, target="pandas")
 
     # =========================================================================
     # Pandas target
