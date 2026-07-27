@@ -260,10 +260,55 @@ jobs:
           source .venv/bin/activate
           pip install maturin pytest
           maturin develop --features python
+      - name: Install optional DataFrame libraries (best-effort)
+        # pandas/polars/pyarrow give real coverage of TestDataFrameAndSeriesSupport
+        # and TestNormalise's pandas/polars/pyarrow cases (previously these were
+        # never installed in CI, so those classes silently skipped every run).
+        # Best-effort: bleeding-edge Python versions in the matrix (e.g. 3.14) may
+        # not have wheels for these yet -- don't fail the job over that, the
+        # existing has_pandas/has_polars/has_pyarrow guards make the relevant
+        # tests skip cleanly instead.
+        run: |
+          source .venv/bin/activate
+          pip install pandas polars pyarrow || echo "::warning::optional DataFrame libraries failed to install for Python ${{ matrix.python-version }}; related tests will skip"
       - name: Run Python tests
         run: |
           source .venv/bin/activate
           pytest python/tests/tests.py -v
+
+  python-test-pyspark:
+    name: Python Tests (PySpark)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: python-pyspark
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install maturin, pytest, and pyspark
+        # A dedicated job, not folded into the python-test matrix above: pyspark
+        # needs a JDK, is slow to start a session, and historically lags newest
+        # CPython support -- bolting it onto a 6-version matrix risks making the
+        # whole thing flaky for reasons unrelated to this crate's code. One pinned
+        # Python version here is enough to cover the target="pyspark" path.
+        run: |
+          python -m venv .venv
+          source .venv/bin/activate
+          pip install maturin pytest pyspark
+          maturin develop --features python
+      - name: Run PySpark-dependent tests
+        run: |
+          source .venv/bin/activate
+          pytest python/tests/tests.py -v -k "pyspark or PySpark"
 
   benchmark:
     name: Benchmark

@@ -418,13 +418,14 @@ Default can be overridden with the `JSON_TOOLS_MAX_ARRAY_INDEX` environment vari
 
 ### Execution Methods
 
-#### `.execute(input)`
+#### `.execute(input, normalise=False, target=None)`
 
 ```python
 tools.execute(input) -> str | dict | list[str] | list[dict] | DataFrame | Series
+tools.execute(input, normalise=True, target=None) -> DataFrame
 ```
 
-Execute the configured operation. The return type mirrors the input type:
+Execute the configured operation. By default (`normalise=False`) the return type mirrors the input type:
 
 | Input Type | Output Type |
 |------------|-------------|
@@ -459,6 +460,31 @@ assert isinstance(results, list) and isinstance(results[0], str)
 results = jt.JSONTools().flatten().execute([{"a": {"b": 1}}, {"c": {"d": 2}}])
 assert isinstance(results, list) and isinstance(results[0], dict)
 ```
+
+##### `normalise` / `target`: always get back a wide DataFrame
+
+`normalise=True` bypasses the input-mirroring table above entirely: regardless of
+`input`'s shape, the result is always a wide DataFrame (one column per flattened
+key) -- a bare `str`/`dict` becomes a 1-row DataFrame. Requires `.flatten()` mode.
+See [DataFrame & Series Support](../guide/dataframe-support.md#normalise-always-get-a-wide-dataframe)
+for the full behavior (key union/null-fill order, target auto-resolution, the
+PySpark path) and examples.
+
+| Parameter | Type | Description |
+|-----------|------|--------------|
+| `normalise` | `bool` | If `True`, always return a wide DataFrame. Default `False`. |
+| `target` | `str \| None` | `"pandas"`, `"polars"`, `"pyarrow"`, or `"pyspark"`. Only meaningful when `normalise=True`. Omit to auto-resolve (input's own backend, else pandas → polars → pyarrow, first installed wins; pyspark is never auto-selected). |
+
+```python
+tools = jt.JSONTools().flatten()
+
+df = tools.execute({"user": {"name": "Alice"}}, normalise=True)          # auto-resolved target
+df = tools.execute([{"a": 1}, {"a": 2}], normalise=True, target="polars")
+```
+
+**Additional raises (when `normalise=True` or `target` is set):** mode is not
+`.flatten()`; `target` is set while `normalise=False`; `target` names an unknown
+or uninstalled library; or (`target="pyspark"`) no active `SparkSession` is found.
 
 #### `.execute_to_output(input)`
 

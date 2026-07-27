@@ -4425,3 +4425,335 @@ def _pickle_worker(pickled_tools, payload, out_queue):
 
     tools = pickle.loads(pickled_tools)
     out_queue.put(tools.execute(payload))
+
+
+class TestNormalise:
+    """Test execute(..., normalise=True, target=...): always get back a wide
+    DataFrame, natively, across pandas/polars/pyarrow/pyspark -- see
+    github.com/amaye15/JSON-Tools-rs's `normalise` feature."""
+
+    @pytest.fixture(autouse=True)
+    def setup(self):
+        try:
+            import pandas as pd
+
+            self.pd = pd
+            self.has_pandas = True
+        except ImportError:
+            self.has_pandas = False
+
+        try:
+            import polars as pl
+
+            self.pl = pl
+            self.has_polars = True
+        except ImportError:
+            self.has_polars = False
+
+        try:
+            import pyarrow as pa
+
+            self.pa = pa
+            self.has_pyarrow = True
+        except ImportError:
+            self.has_pyarrow = False
+
+        try:
+            import pyspark  # noqa: F401
+            from pyspark.sql import SparkSession
+
+            self.spark = (
+                SparkSession.builder.master("local[2]")
+                .appName("json_tools_rs_normalise_tests")
+                .getOrCreate()
+            )
+            self.has_pyspark = True
+        except ImportError:
+            self.has_pyspark = False
+
+    # =========================================================================
+    # Configuration errors
+    # =========================================================================
+
+    def test_normalise_requires_flatten_mode_unflatten(self):
+        tools = json_tools_rs.JSONTools().unflatten()
+        with pytest.raises(json_tools_rs.JsonToolsError, match="flatten"):
+            tools.execute({"a.b": 1}, normalise=True)
+
+    def test_normalise_requires_flatten_mode_normal(self):
+        tools = json_tools_rs.JSONTools().normal()
+        with pytest.raises(json_tools_rs.JsonToolsError, match="flatten"):
+            tools.execute({"a": 1}, normalise=True)
+
+    def test_normalise_requires_flatten_mode_unset(self):
+        tools = json_tools_rs.JSONTools()
+        with pytest.raises(json_tools_rs.JsonToolsError, match="flatten"):
+            tools.execute({"a": 1}, normalise=True)
+
+    def test_target_without_normalise_errors(self):
+        tools = json_tools_rs.JSONTools().flatten()
+        with pytest.raises(json_tools_rs.JsonToolsError, match="normalise=True"):
+            tools.execute({"a": 1}, target="pandas")
+
+    def test_unknown_target_errors(self):
+        tools = json_tools_rs.JSONTools().flatten()
+        with pytest.raises(json_tools_rs.JsonToolsError, match="Unknown normalise target"):
+            tools.execute({"a": 1}, normalise=True, target="numpy")
+
+    def test_pyspark_target_without_pyspark_installed_errors(self):
+        if self.has_pyspark:
+            pytest.skip("pyspark is installed in this environment")
+        tools = json_tools_rs.JSONTools().flatten()
+        with pytest.raises(json_tools_rs.JsonToolsError, match="pyspark"):
+            tools.execute({"a": 1}, normalise=True, target="pyspark")
+
+    def test_series_of_plain_scalars_errors(self):
+        if not self.has_pandas:
+            pytest.skip("pandas not installed")
+        tools = json_tools_rs.JSONTools().flatten()
+        series = self.pd.Series([1, 2, 3])
+        with pytest.raises(Exception, match="JSON strings or Python dictionaries"):
+            tools.execute(series, normalise=True)
+
+    def test_non_object_row_errors_with_row_index(self):
+        tools = json_tools_rs.JSONTools().flatten()
+        with pytest.raises(json_tools_rs.JsonToolsError, match="row 0"):
+            tools.execute(['"just a string"'], normalise=True)
+
+    # =========================================================================
+    # Pandas target
+    # =========================================================================
+
+    def test_pandas_dict_input_one_row(self):
+        if not self.has_pandas:
+            pytest.skip("pandas not installed")
+        tools = json_tools_rs.JSONTools().flatten()
+        df = tools.execute({"user": {"name": "Alice", "age": 30}}, normalise=True, target="pandas")
+        assert isinstance(df, self.pd.DataFrame)
+        assert df.shape == (1, 2)
+        assert df.iloc[0]["user.name"] == "Alice"
+        assert df.iloc[0]["user.age"] == 30
+
+    def test_pandas_str_input_one_row(self):
+        if not self.has_pandas:
+            pytest.skip("pandas not installed")
+        tools = json_tools_rs.JSONTools().flatten()
+        df = tools.execute('{"a": 1}', normalise=True, target="pandas")
+        assert df.shape == (1, 1)
+
+    def test_pandas_list_str_input_n_rows(self):
+        if not self.has_pandas:
+            pytest.skip("pandas not installed")
+        tools = json_tools_rs.JSONTools().flatten()
+        df = tools.execute(['{"a": 1}', '{"a": 2}'], normalise=True, target="pandas")
+        assert df.shape == (2, 1)
+
+    def test_pandas_heterogeneous_keys_union_and_null_fill(self):
+        if not self.has_pandas:
+            pytest.skip("pandas not installed")
+        tools = json_tools_rs.JSONTools().flatten()
+        data = [{"a": 1, "b": {"x": "hi"}}, {"a": 2, "c": True}]
+        df = tools.execute(data, normalise=True, target="pandas")
+        # First-seen order across all rows, not alphabetical.
+        assert df.columns.tolist() == ["a", "b.x", "c"]
+        assert df.iloc[0]["c"] is None
+        assert df.iloc[1]["b.x"] is None
+
+    def test_pandas_empty_list_zero_rows_no_error(self):
+        if not self.has_pandas:
+            pytest.skip("pandas not installed")
+        tools = json_tools_rs.JSONTools().flatten()
+        df = tools.execute([], normalise=True, target="pandas")
+        assert df.shape == (0, 0)
+
+    def test_pandas_all_none_column_does_not_crash(self):
+        if not self.has_pandas:
+            pytest.skip("pandas not installed")
+        tools = json_tools_rs.JSONTools().flatten()
+        data = [{"a": 1, "b": None}, {"a": 2, "b": None}]
+        df = tools.execute(data, normalise=True, target="pandas")
+        assert df["b"].isna().all()
+
+    def test_pandas_key_collision_mixed_list_scalar_columns(self):
+        if not self.has_pandas:
+            pytest.skip("pandas not installed")
+        tools = (
+            json_tools_rs.JSONTools()
+            .flatten()
+            .key_replacement("r'(User|Admin)_'", "")
+            .handle_key_collision(True)
+        )
+        data = [{"User_name": "John", "Admin_name": "Bob"}, {"User_name": "Carl"}]
+        df = tools.execute(data, normalise=True, target="pandas")
+        assert df.iloc[0]["name"] == ["John", "Bob"]
+        assert df.iloc[1]["name"] == ["Carl"]
+
+    # =========================================================================
+    # Polars target
+    # =========================================================================
+
+    def test_polars_dict_input_one_row(self):
+        if not self.has_polars:
+            pytest.skip("polars not installed")
+        tools = json_tools_rs.JSONTools().flatten()
+        df = tools.execute({"user": {"name": "Alice"}}, normalise=True, target="polars")
+        assert isinstance(df, self.pl.DataFrame)
+        assert df.shape == (1, 1)
+
+    def test_polars_heterogeneous_keys_union_and_null_fill(self):
+        if not self.has_polars:
+            pytest.skip("polars not installed")
+        tools = json_tools_rs.JSONTools().flatten()
+        data = [{"a": 1, "b": {"x": "hi"}}, {"a": 2, "c": True}]
+        df = tools.execute(data, normalise=True, target="polars")
+        assert df.columns == ["a", "b.x", "c"]
+        assert df["c"][0] is None
+        assert df["b.x"][1] is None
+
+    def test_polars_all_none_column_does_not_crash(self):
+        if not self.has_polars:
+            pytest.skip("polars not installed")
+        tools = json_tools_rs.JSONTools().flatten()
+        data = [{"a": 1, "b": None}, {"a": 2, "b": None}]
+        df = tools.execute(data, normalise=True, target="polars")
+        assert df["b"].dtype == self.pl.Utf8
+        assert df["b"].is_null().all()
+
+    def test_polars_key_collision_mixed_list_scalar_columns(self):
+        if not self.has_polars:
+            pytest.skip("polars not installed")
+        tools = (
+            json_tools_rs.JSONTools()
+            .flatten()
+            .key_replacement("r'(User|Admin)_'", "")
+            .handle_key_collision(True)
+        )
+        data = [{"User_name": "John", "Admin_name": "Bob"}, {"User_name": "Carl"}]
+        df = tools.execute(data, normalise=True, target="polars")
+        assert df["name"].to_list() == [["John", "Bob"], ["Carl"]]
+
+    # =========================================================================
+    # PyArrow target
+    # =========================================================================
+
+    def test_pyarrow_dict_input_one_row(self):
+        if not self.has_pyarrow:
+            pytest.skip("pyarrow not installed")
+        tools = json_tools_rs.JSONTools().flatten()
+        table = tools.execute({"user": {"name": "Alice"}}, normalise=True, target="pyarrow")
+        assert isinstance(table, self.pa.Table)
+        assert table.shape == (1, 1)
+
+    def test_pyarrow_heterogeneous_keys_union_and_null_fill(self):
+        if not self.has_pyarrow:
+            pytest.skip("pyarrow not installed")
+        tools = json_tools_rs.JSONTools().flatten()
+        data = [{"a": 1, "b": {"x": "hi"}}, {"a": 2, "c": True}]
+        table = tools.execute(data, normalise=True, target="pyarrow")
+        assert table.column_names == ["a", "b.x", "c"]
+
+    def test_pyarrow_all_none_column_does_not_crash(self):
+        if not self.has_pyarrow:
+            pytest.skip("pyarrow not installed")
+        tools = json_tools_rs.JSONTools().flatten()
+        data = [{"a": 1, "b": None}, {"a": 2, "b": None}]
+        table = tools.execute(data, normalise=True, target="pyarrow")
+        assert table.schema.field("b").type == self.pa.string()
+
+    def test_pyarrow_key_collision_mixed_list_scalar_columns(self):
+        if not self.has_pyarrow:
+            pytest.skip("pyarrow not installed")
+        tools = (
+            json_tools_rs.JSONTools()
+            .flatten()
+            .key_replacement("r'(User|Admin)_'", "")
+            .handle_key_collision(True)
+        )
+        data = [{"User_name": "John", "Admin_name": "Bob"}, {"User_name": "Carl"}]
+        table = tools.execute(data, normalise=True, target="pyarrow")
+        assert table.column("name").to_pylist() == [["John", "Bob"], ["Carl"]]
+
+    # =========================================================================
+    # Target resolution: cross-backend, auto-detect
+    # =========================================================================
+
+    def test_cross_backend_input_pandas_target_polars(self):
+        if not (self.has_pandas and self.has_polars):
+            pytest.skip("pandas and polars both required")
+        tools = json_tools_rs.JSONTools().flatten()
+        pdf = self.pd.DataFrame([{"user": {"name": "Alice"}}, {"user": {"name": "Bob"}}])
+        out = tools.execute(pdf, normalise=True, target="polars")
+        assert isinstance(out, self.pl.DataFrame)
+        assert out.shape == (2, 1)
+
+    def test_auto_detect_target_matches_live_input_backend(self):
+        if not self.has_polars:
+            pytest.skip("polars not installed")
+        tools = json_tools_rs.JSONTools().flatten()
+        pldf = self.pl.DataFrame([{"user": {"name": "Alice"}}])
+        out = tools.execute(pldf, normalise=True)
+        assert isinstance(out, self.pl.DataFrame)
+
+    def test_auto_detect_target_priority_pandas_first_for_bare_json(self):
+        if not self.has_pandas:
+            pytest.skip("pandas not installed")
+        tools = json_tools_rs.JSONTools().flatten()
+        out = tools.execute({"a": 1}, normalise=True)
+        assert isinstance(out, self.pd.DataFrame)
+
+    # =========================================================================
+    # PySpark target
+    # =========================================================================
+
+    def test_pyspark_target_produces_real_dataframe(self):
+        if not self.has_pyspark:
+            pytest.skip("pyspark not installed")
+        tools = json_tools_rs.JSONTools().flatten()
+        data = [{"user": {"name": "Alice", "age": 30}}, {"user": {"name": "Bob", "age": 25}}]
+        df = tools.execute(data, normalise=True, target="pyspark")
+        from pyspark.sql import DataFrame as SparkDataFrame
+
+        assert isinstance(df, SparkDataFrame)
+        rows = df.orderBy("user.name").collect()
+        assert [r["user.name"] for r in rows] == ["Alice", "Bob"]
+        assert [r["user.age"] for r in rows] == [30, 25]
+
+    def test_pyspark_all_none_column_does_not_crash(self):
+        if not self.has_pyspark:
+            pytest.skip("pyspark not installed")
+        tools = json_tools_rs.JSONTools().flatten()
+        data = [{"a": 1, "b": None}, {"a": 2, "b": None}]
+        df = tools.execute(data, normalise=True, target="pyspark")
+        field = next(f for f in df.schema.fields if f.name == "b")
+        from pyspark.sql.types import StringType
+
+        assert isinstance(field.dataType, StringType)
+        assert df.count() == 2
+
+    def test_pyspark_empty_input_produces_empty_dataframe(self):
+        if not self.has_pyspark:
+            pytest.skip("pyspark not installed")
+        tools = json_tools_rs.JSONTools().flatten()
+        df = tools.execute([], normalise=True, target="pyspark")
+        assert df.count() == 0
+        assert len(df.schema.fields) == 0
+
+    def test_pyspark_target_no_active_session_errors(self):
+        """Regression guard for the SparkSession.getActiveSession() auto-discovery
+        path -- stops the local session started in `setup` so none is active,
+        then restarts it afterward for any later test in this class."""
+        if not self.has_pyspark:
+            pytest.skip("pyspark not installed")
+        from pyspark.sql import SparkSession
+
+        self.spark.stop()
+        try:
+            tools = json_tools_rs.JSONTools().flatten()
+            with pytest.raises(json_tools_rs.JsonToolsError, match="active SparkSession"):
+                tools.execute({"a": 1}, normalise=True, target="pyspark")
+        finally:
+            self.spark = (
+                SparkSession.builder.master("local[2]")
+                .appName("json_tools_rs_normalise_tests")
+                .getOrCreate()
+            )

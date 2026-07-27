@@ -122,19 +122,41 @@ class JSONTools:
         """Set the maximum array index allowed during unflattening (DoS protection)."""
         ...
 
-    def execute(self, json_input: Any) -> Any:
+    def execute(
+        self,
+        json_input: Any,
+        normalise: bool = False,
+        target: Optional[str] = None,
+    ) -> Any:
         """Execute the configured JSON operation.
 
         Args:
             json_input: JSON input as str, dict, list[str], list[dict],
                 DataFrame (pandas/polars/pyarrow/pyspark), or
                 Series (pandas/polars/pyarrow).
+            normalise: If True, always return a wide/tabular DataFrame (one
+                column per flattened key) regardless of input shape -- a bare
+                str/dict becomes a 1-row DataFrame. Requires `.flatten()` mode.
+                Default False leaves all existing behavior unchanged.
+            target: DataFrame library to use when normalise=True: "pandas",
+                "polars", "pyarrow", or "pyspark". If omitted: uses the
+                input's own backend when input is itself a live
+                DataFrame/Series, otherwise tries pandas -> polars -> pyarrow
+                (first installed wins; pyspark is never auto-selected for
+                bare JSON input -- pass target="pyspark" explicitly, which
+                requires an active SparkSession). Only meaningful when
+                normalise=True.
 
         Returns:
-            Output type matches input type automatically.
+            Output type matches input type when normalise=False (unchanged).
+            When normalise=True, always a DataFrame of the resolved target type.
 
         Raises:
-            JsonToolsError: If operation mode is not set or processing fails.
+            JsonToolsError: If operation mode is not set or processing fails;
+                if normalise=True but mode is not `.flatten()`; if target is
+                passed without normalise=True; if target names an unknown
+                library or one that isn't installed; or (target="pyspark")
+                if no active SparkSession is found.
         """
         ...
 

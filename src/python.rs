@@ -15,9 +15,14 @@ use pyo3::sync::PyOnceLock;
 use pyo3::types::{PyBytes, PyDict, PyList, PyModule, PyString};
 
 #[cfg(feature = "python")]
+use std::collections::HashSet;
+#[cfg(feature = "python")]
 use std::mem;
 #[cfg(feature = "python")]
 use std::sync::Mutex;
+
+#[cfg(feature = "python")]
+use indexmap::{IndexMap, IndexSet};
 
 #[cfg(feature = "python")]
 use crate::{JSONTools, JsonOutput};
@@ -249,6 +254,71 @@ enum DataStructureType {
     DataFrame(DataFrameType),
     /// A Series-like object (single column/array of values)
     Series(SeriesType),
+}
+
+/// Target DataFrame library for `PyJSONTools::execute`'s `normalise=True` path.
+///
+/// Distinct from `DataFrameType`/`SeriesType` above (which describe *detected*
+/// input): this describes the *requested or resolved output* -- every processed
+/// row becomes one row of the resulting table regardless of what shape the input
+/// was (a bare `dict` produces a 1-row table just like a `DataFrame` produces an
+/// N-row one). `Generic` has no equivalent here -- there's no single library to
+/// reconstruct against for a duck-typed "has to_dict()" object.
+#[cfg(feature = "python")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NormaliseTarget {
+    Pandas,
+    Polars,
+    PyArrow,
+    PySpark,
+}
+
+#[cfg(feature = "python")]
+impl NormaliseTarget {
+    /// Parse a user-supplied `target=` string. Errors list the valid values
+    /// rather than falling back silently -- an explicit target is a promise to
+    /// the caller that exactly this backend will be used.
+    fn parse(s: &str) -> PyResult<Self> {
+        match s {
+            "pandas" => Ok(Self::Pandas),
+            "polars" => Ok(Self::Polars),
+            "pyarrow" => Ok(Self::PyArrow),
+            "pyspark" => Ok(Self::PySpark),
+            other => Err(JsonToolsError::new_err(format!(
+                "Unknown normalise target {other:?}; expected one of \"pandas\", \"polars\", \"pyarrow\", \"pyspark\""
+            ))),
+        }
+    }
+
+    /// Also the pip/import name for all four -- reused for both.
+    fn name(self) -> &'static str {
+        match self {
+            Self::Pandas => "pandas",
+            Self::Polars => "polars",
+            Self::PyArrow => "pyarrow",
+            Self::PySpark => "pyspark",
+        }
+    }
+
+    fn from_dataframe_type(t: DataFrameType) -> Option<Self> {
+        match t {
+            DataFrameType::Pandas => Some(Self::Pandas),
+            DataFrameType::Polars => Some(Self::Polars),
+            DataFrameType::PyArrow => Some(Self::PyArrow),
+            DataFrameType::PySpark => Some(Self::PySpark),
+            DataFrameType::Generic => None,
+        }
+    }
+
+    fn from_series_type(t: SeriesType) -> Option<Self> {
+        match t {
+            SeriesType::Pandas => Some(Self::Pandas),
+            SeriesType::Polars => Some(Self::Polars),
+            SeriesType::PyArrow => Some(Self::PyArrow),
+            SeriesType::PySpark => Some(Self::PySpark),
+            SeriesType::Generic => None,
+        }
+    }
 }
 
 /// Python wrapper for JsonOutput enum
@@ -1241,12 +1311,29 @@ impl PyJSONTools {
     /// * dict input → dict output (processed Python dictionary)
     /// * list[str] input → list[str] output (list of processed JSON strings)
     /// * list[dict] input → list[dict] output (list of processed Python dictionaries)
+    /// * When `normalise=True`: always a wide DataFrame (one column per flattened
+    ///   key), regardless of input shape -- see `execute_normalise` for details.
     ///
     /// # Performance
     /// Uses interior mutability to avoid cloning JSONTools - only clones for execute() call
-    #[pyo3(text_signature = "($self, json_input)")]
-    pub fn execute(&self, json_input: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
+    #[pyo3(signature = (json_input, normalise=false, target=None))]
+    #[pyo3(text_signature = "($self, json_input, normalise=False, target=None)")]
+    pub fn execute(
+        &self,
+        json_input: &Bound<'_, PyAny>,
+        normalise: bool,
+        target: Option<String>,
+    ) -> PyResult<Py<PyAny>> {
         let py = json_input.py();
+
+        if normalise {
+            return self.execute_normalise(json_input, target);
+        }
+        if target.is_some() {
+            return Err(JsonToolsError::new_err(
+                "target is only valid when normalise=True",
+            ));
+        }
 
         // An exactly-typed str/dict/list can never be a DataFrame/Series, so
         // skip the duck-typing detection (several getattr/hasattr chains) for
@@ -1731,6 +1818,385 @@ fn reconstruct_pyarrow_array(py: Python, items: Vec<Py<PyAny>>) -> PyResult<Py<P
 }
 
 // =============================================================================
+// Normalise: Wide DataFrame Reconstruction (execute(..., normalise=True))
+// =============================================================================
+//
+// Unlike the lenient `reconstruct_pandas_df`/`reconstruct_polars_df`/
+// `reconstruct_pyarrow_table` above (used by plain `execute(df)`, which silently
+// falls back to a list of dicts if the target library isn't installed), everything
+// in this section is strict: `normalise=True` is an explicit request for a real
+// DataFrame, so a missing library or an un-normaliseable row is a clear
+// `JsonToolsError`, never a silent fallback.
+
+/// Convert a Python list whose items are each either a JSON string or a Python
+/// dict into per-item JSON strings. The same mixed-item handling `execute()`'s
+/// list branch and `execute_series` already do inline, factored out here since
+/// `extract_normalise_json_strings` needs it for both list input and
+/// Series-derived lists.
+#[cfg(feature = "python")]
+fn mixed_pylist_to_json_strings(py: Python<'_>, list: &Bound<'_, PyList>) -> PyResult<Vec<String>> {
+    let mut json_strings = Vec::with_capacity(list.len());
+    for item in list.iter() {
+        if let Ok(json_str) = item.extract::<String>() {
+            json_strings.push(json_str);
+        } else if item.is_instance_of::<PyDict>() {
+            let json_str = py_dumps(py, &item)
+                .map_err(|e| JsonToolsError::new_err(format!("Failed to convert item: {e}")))?;
+            json_strings.push(json_str);
+        } else {
+            return Err(PyValueError::new_err(
+                "List/Series items must be either JSON strings or Python dictionaries",
+            ));
+        }
+    }
+    Ok(json_strings)
+}
+
+/// Coerce any shape `execute()` accepts into a uniform `Vec<String>` of JSON rows
+/// for `normalise=True` -- a bare `str`/`dict` becomes a single-row `Vec`, matching
+/// how plain `execute()` treats those as one opaque unit. Also returns the
+/// detected input structure (when the input was itself a live DataFrame/Series),
+/// used by `resolve_normalise_target` to default the output to the input's own
+/// backend.
+#[cfg(feature = "python")]
+fn extract_normalise_json_strings(
+    json_input: &Bound<'_, PyAny>,
+) -> PyResult<(Vec<String>, Option<DataStructureType>)> {
+    let py = json_input.py();
+
+    if let Some(structure) = detect_data_structure(json_input)? {
+        let json_strings = match structure {
+            DataStructureType::DataFrame(df_type) => {
+                dataframe_to_json_strings(json_input, df_type)?
+            }
+            DataStructureType::Series(series_type) => {
+                let list = series_to_list(json_input, series_type)?;
+                mixed_pylist_to_json_strings(py, &list)?
+            }
+        };
+        return Ok((json_strings, Some(structure)));
+    }
+
+    if let Ok(json_str) = json_input.extract::<String>() {
+        return Ok((vec![json_str], None));
+    }
+
+    if json_input.is_instance_of::<PyDict>() {
+        let json_str = py_dumps(py, json_input)
+            .map_err(|e| JsonToolsError::new_err(format!("Failed to convert Python dict: {e}")))?;
+        return Ok((vec![json_str], None));
+    }
+
+    if json_input.is_instance_of::<PyList>() {
+        let list = json_input.cast::<PyList>()?;
+        let json_strings = mixed_pylist_to_json_strings(py, list)?;
+        return Ok((json_strings, None));
+    }
+
+    Err(PyValueError::new_err(
+        "json_input must be a JSON string, Python dict, list of JSON strings/dicts, DataFrame, or Series",
+    ))
+}
+
+/// Resolve the effective `NormaliseTarget`: an explicit `target=` wins outright;
+/// otherwise an input that was itself a live DataFrame/Series of a known backend
+/// keeps that backend; otherwise try pandas -> polars -> pyarrow, first installed
+/// wins. `pyspark` is deliberately excluded from this last bare-JSON-input
+/// fallback -- creating a SparkSession-dependent result as a silent default for a
+/// plain string/dict input would be surprising, so pyspark is only reachable via
+/// an explicit `target="pyspark"` or when the input itself was already a
+/// live PySpark object.
+#[cfg(feature = "python")]
+fn resolve_normalise_target(
+    py: Python<'_>,
+    detected: Option<DataStructureType>,
+    requested: Option<NormaliseTarget>,
+) -> PyResult<NormaliseTarget> {
+    if let Some(target) = requested {
+        return Ok(target);
+    }
+
+    let from_input = match detected {
+        Some(DataStructureType::DataFrame(t)) => NormaliseTarget::from_dataframe_type(t),
+        Some(DataStructureType::Series(t)) => NormaliseTarget::from_series_type(t),
+        None => None,
+    };
+    if let Some(target) = from_input {
+        return Ok(target);
+    }
+
+    for candidate in [
+        NormaliseTarget::Pandas,
+        NormaliseTarget::Polars,
+        NormaliseTarget::PyArrow,
+    ] {
+        if py.import(candidate.name()).is_ok() {
+            return Ok(candidate);
+        }
+    }
+
+    Err(JsonToolsError::new_err(
+        "normalise=True could not auto-detect a target DataFrame library: none of pandas, \
+         polars, pyarrow are installed. Pass target=\"pandas\"|\"polars\"|\"pyarrow\"|\"pyspark\" \
+         explicitly, or install one of these libraries.",
+    ))
+}
+
+/// Strict presence check for `normalise=True`'s target library -- see this
+/// section's header comment for why this doesn't fall back silently like the
+/// lenient `reconstruct_*_df` helpers do.
+#[cfg(feature = "python")]
+fn require_importable<'py>(
+    py: Python<'py>,
+    target: NormaliseTarget,
+) -> PyResult<Bound<'py, PyModule>> {
+    py.import(target.name()).map_err(|_| {
+        JsonToolsError::new_err(format!(
+            "normalise(target=\"{}\") requires the '{}' package to be installed",
+            target.name(),
+            target.name()
+        ))
+    })
+}
+
+/// Auto-discover the active PySpark session for `target="pyspark"`. No `spark=`
+/// parameter is offered -- the caller is expected to already be inside a Spark
+/// driver/notebook with a session created (`SparkSession.builder.getOrCreate()`).
+#[cfg(feature = "python")]
+fn require_active_spark_session(py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
+    let pyspark_sql = py.import("pyspark.sql").map_err(|_| {
+        JsonToolsError::new_err(
+            "normalise(target=\"pyspark\") requires the 'pyspark' package to be installed",
+        )
+    })?;
+    let session_cls = pyspark_sql.getattr("SparkSession")?;
+    let active = session_cls.call_method0("getActiveSession")?;
+    if active.is_none() {
+        return Err(JsonToolsError::new_err(
+            "normalise(target=\"pyspark\") requires an active SparkSession \
+             (SparkSession.getActiveSession() returned None); create one first, \
+             e.g. SparkSession.builder.getOrCreate()",
+        ));
+    }
+    Ok(active)
+}
+
+/// Flattened rows reshaped into columns for `normalise=True`, keyed by
+/// first-seen field order, with every column's length equal to the row count
+/// (a row missing a given key contributes `None` for it).
+#[cfg(feature = "python")]
+struct NormaliseColumns<'py> {
+    /// Column name -> per-row values, in first-seen key order.
+    columns: IndexMap<String, Vec<Bound<'py, PyAny>>>,
+    /// Names of columns whose every value is `None`. Left as plain `None`
+    /// lists, these convert to an ambiguous type (pandas `object`, pyarrow/Spark
+    /// `null`) that a `pandas -> pyarrow -> Spark` Arrow conversion can choke on
+    /// (confirmed empirically: an all-`None` `object`-dtype pandas column
+    /// converts to Arrow's `null` type via `pyarrow.Table.from_pandas`, which
+    /// PySpark's schema conversion does not accept) -- reconstructors give these
+    /// an explicit string/utf8 type instead, uniformly across all four targets.
+    all_none_columns: HashSet<String>,
+}
+
+/// Parse each processed (flattened) JSON string into a row, union every row's
+/// keys in first-seen order, and null-fill any row missing a given key -- shared
+/// by all four `normalise` targets so their union/null-fill behavior is
+/// *provably* consistent by construction, rather than relying on three separate
+/// third-party constructors' own implicit (and independently version-dependent)
+/// dict-list union behavior.
+#[cfg(feature = "python")]
+fn union_and_columnarize<'py>(
+    py: Python<'py>,
+    processed: Vec<String>,
+) -> PyResult<NormaliseColumns<'py>> {
+    let n_rows = processed.len();
+    let mut rows: Vec<Bound<'py, PyDict>> = Vec::with_capacity(n_rows);
+    let mut key_order: IndexSet<String> = IndexSet::new();
+
+    for (idx, json_str) in processed.iter().enumerate() {
+        let value = py_loads(py, json_str).map_err(|e| {
+            JsonToolsError::new_err(format!("Failed to parse flattened row {idx}: {e}"))
+        })?;
+        let dict = value
+            .cast::<PyDict>()
+            .map_err(|_| {
+                JsonToolsError::new_err(format!(
+                    "normalise=True requires every flattened row to be a JSON object; \
+                     row {idx} produced a different type instead"
+                ))
+            })?
+            .clone();
+        for key in dict.keys() {
+            key_order.insert(key.extract::<String>()?);
+        }
+        rows.push(dict);
+    }
+
+    let mut columns: IndexMap<String, Vec<Bound<'py, PyAny>>> =
+        IndexMap::with_capacity(key_order.len());
+    let mut all_none_columns = HashSet::new();
+
+    for key in &key_order {
+        let mut col: Vec<Bound<'py, PyAny>> = Vec::with_capacity(n_rows);
+        let mut all_none = true;
+        let mut any_list = false;
+        for row in &rows {
+            let value = match row.get_item(key)? {
+                Some(v) => {
+                    if !v.is_none() {
+                        all_none = false;
+                    }
+                    if v.is_instance_of::<PyList>() {
+                        any_list = true;
+                    }
+                    v
+                }
+                None => py.None().into_bound(py),
+            };
+            col.push(value);
+        }
+        // `handle_key_collision(True)` produces a list-valued cell only for rows
+        // where a collision actually occurred that row; other rows for the same
+        // key stay scalar. A column mixing list and scalar values is rejected by
+        // pyarrow (`ArrowInvalid: cannot mix list and non-list, non-null values`)
+        // and polars (`TypeError: unexpected value while building Series of type
+        // List(...)`) -- confirmed empirically, not hypothetical. Once any row
+        // makes a column list-valued, wrap every other non-null cell in that
+        // column into a single-element list too, so the column is uniformly
+        // list-typed across all four targets instead of failing on two of them.
+        if any_list {
+            for cell in col.iter_mut() {
+                if !cell.is_none() && !cell.is_instance_of::<PyList>() {
+                    *cell = PyList::new(py, [cell.clone()])?.into_any();
+                }
+            }
+        }
+        if all_none {
+            all_none_columns.insert(key.clone());
+        }
+        columns.insert(key.clone(), col);
+    }
+
+    Ok(NormaliseColumns {
+        columns,
+        all_none_columns,
+    })
+}
+
+/// Reconstruct a pandas DataFrame from unioned/null-filled columns. Only called
+/// after `require_importable` has confirmed pandas is present.
+#[cfg(feature = "python")]
+fn reconstruct_pandas_normalise(
+    py: Python<'_>,
+    cols: &NormaliseColumns<'_>,
+) -> PyResult<Py<PyAny>> {
+    let pandas = py.import("pandas")?;
+    let data = PyDict::new(py);
+    for (key, values) in &cols.columns {
+        let value_list = PyList::new(py, values.iter().cloned())?;
+        if cols.all_none_columns.contains(key) {
+            let kwargs = PyDict::new(py);
+            kwargs.set_item("dtype", "string")?;
+            let typed = pandas.call_method("array", (value_list,), Some(&kwargs))?;
+            data.set_item(key, typed)?;
+        } else {
+            data.set_item(key, value_list)?;
+        }
+    }
+    let df = pandas.call_method1("DataFrame", (data,))?;
+    Ok(df.unbind())
+}
+
+/// Reconstruct a polars DataFrame from unioned/null-filled columns. Only called
+/// after `require_importable` has confirmed polars is present.
+#[cfg(feature = "python")]
+fn reconstruct_polars_normalise(
+    py: Python<'_>,
+    cols: &NormaliseColumns<'_>,
+) -> PyResult<Py<PyAny>> {
+    let polars = py.import("polars")?;
+    let utf8_type = polars.getattr("Utf8")?;
+    let data = PyDict::new(py);
+    for (key, values) in &cols.columns {
+        let value_list = PyList::new(py, values.iter().cloned())?;
+        if cols.all_none_columns.contains(key) {
+            let series = polars.call_method1("Series", (value_list,))?;
+            let typed = series.call_method1("cast", (&utf8_type,))?;
+            data.set_item(key, typed)?;
+        } else {
+            data.set_item(key, value_list)?;
+        }
+    }
+    let df = polars.call_method1("DataFrame", (data,))?;
+    Ok(df.unbind())
+}
+
+/// Reconstruct a PyArrow Table from unioned/null-filled columns. Only called
+/// after `require_importable` has confirmed pyarrow is present.
+#[cfg(feature = "python")]
+fn reconstruct_pyarrow_normalise(
+    py: Python<'_>,
+    cols: &NormaliseColumns<'_>,
+) -> PyResult<Py<PyAny>> {
+    let pyarrow = py.import("pyarrow")?;
+    let data = PyDict::new(py);
+    for (key, values) in &cols.columns {
+        let value_list = PyList::new(py, values.iter().cloned())?;
+        if cols.all_none_columns.contains(key) {
+            let string_type = pyarrow.call_method0("string")?;
+            let kwargs = PyDict::new(py);
+            kwargs.set_item("type", string_type)?;
+            let typed = pyarrow.call_method("array", (value_list,), Some(&kwargs))?;
+            data.set_item(key, typed)?;
+        } else {
+            data.set_item(key, value_list)?;
+        }
+    }
+    let table = pyarrow
+        .getattr("Table")?
+        .call_method1("from_pydict", (data,))?;
+    Ok(table.unbind())
+}
+
+/// Reconstruct a real PySpark DataFrame by reusing the pandas reconstruction
+/// above, then handing it to Spark's own Arrow-optimized
+/// `SparkSession.createDataFrame(pandas.DataFrame)` bridge (Arrow conversion on
+/// by default since Spark 3.0 via `spark.sql.execution.arrow.pyspark.enabled`).
+/// This is the idiomatic, "native" way to get driver-side tabular data into a
+/// real distributed DataFrame -- deliberately not a hand-rolled `StructType` +
+/// row-tuple pipeline: reusing the pandas path means pyspark's output is
+/// *provably* consistent with pandas's, by construction, and delegates type
+/// inference to two mature, independently-tested systems instead of a bespoke
+/// third one. Requires pandas importable (a safe assumption in any real PySpark
+/// environment -- PySpark's own Arrow optimizations, and this project's
+/// `pandas_udf` docs example, already assume it).
+#[cfg(feature = "python")]
+fn reconstruct_pyspark_normalise(
+    py: Python<'_>,
+    spark: &Bound<'_, PyAny>,
+    cols: &NormaliseColumns<'_>,
+) -> PyResult<Py<PyAny>> {
+    if cols.columns.is_empty() {
+        let types_mod = py.import("pyspark.sql.types")?;
+        let empty_schema = types_mod.getattr("StructType")?.call0()?;
+        let empty_rows: Vec<Py<PyAny>> = Vec::new();
+        let df = spark.call_method1("createDataFrame", (empty_rows, empty_schema))?;
+        return Ok(df.unbind());
+    }
+
+    py.import("pandas").map_err(|_| {
+        JsonToolsError::new_err(
+            "normalise(target=\"pyspark\") requires pandas to be installed -- it's used \
+             internally to build the DataFrame handed to Spark's Arrow-optimized \
+             createDataFrame() bridge",
+        )
+    })?;
+    let pandas_df = reconstruct_pandas_normalise(py, cols)?;
+    let df = spark.call_method1("createDataFrame", (pandas_df,))?;
+    Ok(df.unbind())
+}
+
+// =============================================================================
 // PyJSONTools Helper Methods (DataFrame and Series Processing)
 // =============================================================================
 
@@ -1891,6 +2357,67 @@ impl PyJSONTools {
             JsonOutput::Single(_) => Err(PyValueError::new_err(
                 "Unexpected single result for Series input",
             )),
+        }
+    }
+
+    /// Backing implementation for `execute(json_input, normalise=True, target=...)`.
+    /// See the "Normalise" section above for the shared helpers this wires
+    /// together.
+    fn execute_normalise(
+        &self,
+        json_input: &Bound<'_, PyAny>,
+        target: Option<String>,
+    ) -> PyResult<Py<PyAny>> {
+        let py = json_input.py();
+
+        if !lock_config(&self.inner)?.is_flatten_mode() {
+            return Err(JsonToolsError::new_err(
+                "normalise=True requires .flatten() mode -- unflattened/nested JSON \
+                 can't produce clean scalar columns for a wide DataFrame",
+            ));
+        }
+
+        let requested_target = target.as_deref().map(NormaliseTarget::parse).transpose()?;
+
+        let (json_strings, detected) = extract_normalise_json_strings(json_input)?;
+        let resolved_target = resolve_normalise_target(py, detected, requested_target)?;
+
+        // For pyspark, resolve the active session up front (before doing any
+        // processing work) so a missing session fails fast with a clear error.
+        let spark_session = if resolved_target == NormaliseTarget::PySpark {
+            Some(require_active_spark_session(py)?)
+        } else {
+            require_importable(py, resolved_target)?;
+            None
+        };
+
+        // Process through the Rust engine (releases GIL) -- same mem::take/restore
+        // idiom `execute_dataframe`/`execute_series` above use to avoid cloning.
+        let result = py
+            .detach(|| {
+                let mut guard = lock_config(&self.inner)?;
+                let tools = mem::take(&mut *guard);
+                let result = tools.execute(json_strings);
+                *guard = tools;
+                result
+            })
+            .map_err(|e| JsonToolsError::new_err(format!("Failed to process JSON: {}", e)))?;
+
+        let processed_list = match result {
+            JsonOutput::Multiple(processed_list) => processed_list,
+            JsonOutput::Single(single) => vec![single],
+        };
+
+        let columns = union_and_columnarize(py, processed_list)?;
+
+        match resolved_target {
+            NormaliseTarget::Pandas => reconstruct_pandas_normalise(py, &columns),
+            NormaliseTarget::Polars => reconstruct_polars_normalise(py, &columns),
+            NormaliseTarget::PyArrow => reconstruct_pyarrow_normalise(py, &columns),
+            NormaliseTarget::PySpark => {
+                let spark = spark_session.expect("resolved to PySpark target above");
+                reconstruct_pyspark_normalise(py, &spark, &columns)
+            }
         }
     }
 }

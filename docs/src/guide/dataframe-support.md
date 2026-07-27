@@ -24,13 +24,24 @@ The Python bindings natively support DataFrame and Series objects from popular d
 
 > **PySpark DataFrame type preservation is the one exception to "perfect type
 > preservation" above.** A PySpark `DataFrame` is accepted as input (it's converted
-> via `.toPandas()` internally, processed, then converted back), but reconstruction
-> doesn't rebuild a distributed PySpark `DataFrame` -- there's no `SparkSession`
-> available at that point to do so -- so `.execute()` returns a plain Python `list`
-> of dicts instead. If you need the result back as a PySpark `DataFrame`, wrap it
-> yourself: `spark.createDataFrame(result)`. This is also a reminder that `.execute(df)`
-> on a PySpark DataFrame collects the whole thing to the driver first (see the note
+> via `.toPandas()` internally, processed, then converted back), but plain
+> `.execute(df)` reconstruction doesn't rebuild a distributed PySpark `DataFrame` --
+> there's no `SparkSession` available at that point to do so -- so `.execute()`
+> returns a plain Python `list` of dicts instead. If you need the result back as a
+> PySpark `DataFrame` from plain `.execute()`, wrap it yourself:
+> `spark.createDataFrame(result)`. This is also a reminder that `.execute(df)` on a
+> PySpark DataFrame collects the whole thing to the driver first (see the note
 > above) -- for a genuinely distributed path, use the `pandas_udf` pattern instead.
+>
+> **`normalise=True` closes this gap for one specific path** -- see
+> [Normalise: Always Get a Wide DataFrame](#normalise-always-get-a-wide-dataframe)
+> below. It still collects and processes on the driver exactly as described above;
+> the difference is only in the *last* step, where it hands the result to Spark's
+> own Arrow-optimized `SparkSession.createDataFrame(pandas.DataFrame)` bridge
+> instead of returning a plain list. That bridge genuinely distributes the
+> *resulting* DataFrame across the cluster, but it does **not** distribute the
+> flatten/processing computation itself -- for that, you still want the
+> `pandas_udf` pattern further down this page.
 
 ## Usage
 
@@ -83,12 +94,63 @@ result = jt.JSONTools().flatten().execute(series)
 print(type(result))  # <class 'pandas.core.series.Series'>
 ```
 
+## Normalise: Always Get a Wide DataFrame
+
+`.execute()` normally mirrors the input's own type (str→str, dict→dict, DataFrame→
+DataFrame). `execute(data, normalise=True)` instead always returns a genuine wide
+DataFrame -- one column per flattened key -- no matter what shape `data` is: a bare
+JSON string or dict becomes a 1-row DataFrame, a list becomes an N-row one, and an
+existing DataFrame/Series gets re-normalised the same way. Requires `.flatten()`
+mode (a `JsonToolsError` explains why if it's not set -- unflattened/nested JSON
+can't produce clean scalar columns).
+
+```python
+import json_tools_rs as jt
+
+tools = jt.JSONTools().flatten()
+
+# A single dict -> a 1-row DataFrame
+df = tools.execute({"user": {"name": "Alice", "age": 30}}, normalise=True)
+
+# A list of (possibly differently-shaped) records -> an N-row DataFrame, unioning
+# keys in first-seen order and null-filling any row missing a given key -- same
+# behavior as the "Medium" example above, just without needing a DataFrame as input
+# in the first place.
+data = [{"a": 1, "b": {"x": "hi"}}, {"a": 2, "c": True}]
+df = tools.execute(data, normalise=True)
+```
+
+Pass `target` to pick the library explicitly, or omit it to auto-resolve: an input
+that's already a live DataFrame/Series keeps that backend; otherwise pandas → polars
+→ pyarrow is tried in order (first installed wins). `target="pyspark"` is never
+chosen automatically for bare JSON input -- it's only used when explicitly requested
+or when the input itself was already a PySpark object -- and requires an active
+`SparkSession` (auto-discovered via `SparkSession.getActiveSession()`):
+
+```python
+import json_tools_rs as jt
+from pyspark.sql import SparkSession
+
+SparkSession.builder.getOrCreate()  # normalise auto-discovers this
+
+tools = jt.JSONTools().flatten()
+data = [{"user": {"name": "Alice", "age": 30}}, {"user": {"name": "Bob", "age": 25}}]
+
+spark_df = tools.execute(data, normalise=True, target="pyspark")
+print(type(spark_df))  # <class 'pyspark.sql.dataframe.DataFrame'>
+```
+
+Under the hood, the `pyspark` target reuses the exact same pandas reconstruction as
+`target="pandas"`, then hands that DataFrame to Spark's own Arrow-optimized
+`SparkSession.createDataFrame(pandas.DataFrame)` bridge -- see the note earlier on
+this page for what that does and doesn't distribute.
+
 ## How It Works
 
 1. **Detection**: The library uses duck typing to detect DataFrame/Series objects (checks for `.to_dict()`, `.to_list()`, etc.)
 2. **Extraction**: Rows are extracted as JSON strings or dicts
 3. **Processing**: Each row is processed through the Rust engine (with automatic parallelism for large DataFrames)
-4. **Reconstruction**: Results are reconstructed into the original DataFrame/Series type using O(1) constructor calls (except PySpark DataFrames, which come back as a list of dicts -- see the note above)
+4. **Reconstruction**: Results are reconstructed into the original DataFrame/Series type using O(1) constructor calls (except PySpark DataFrames, which come back as a list of dicts unless `normalise=True` -- see the notes above)
 
 ## All Features Apply
 

@@ -2,11 +2,14 @@
 
 ## Unreleased
 
+## v0.9.9 (2026-07-28)
+
 ### Fixed
 - **Critical: `auto_convert_types` panicked on multi-byte UTF-8 content in specific positions** (e.g. `"5€ García"`, a `"+1Á2"` timezone offset) -- two fixed-byte-offset string slices assumed the offset was always a UTF-8 character boundary. Fixed with an `is_char_boundary` guard at each site; no behavior change for valid inputs. ([#29](https://github.com/amaye15/JSON-Tools-rs/issues/29))
 
 ### Added
 - **Python: `JSONTools` is now picklable**, including across a real process boundary (e.g. captured in a PySpark UDF/`mapInPandas` closure via cloudpickle) -- via `__reduce__` plus a new `to_config_json()`/`from_config_json()` method pair. ([#29](https://github.com/amaye15/JSON-Tools-rs/issues/29))
+- **Python: `execute(input, normalise=True, target=None)`** -- always returns a wide DataFrame (one column per flattened key) regardless of input shape, working natively across pandas, polars, pyarrow, and now genuinely PySpark (a real `pyspark.sql.DataFrame`, closing the previous list-of-dicts fallback for this path). See [DataFrame & Series Support](../guide/dataframe-support.md#normalise-always-get-a-wide-dataframe).
 
 See the repository's [CHANGELOG.md](https://github.com/amaye15/json-tools-rs/blob/master/CHANGELOG.md) for the full, itemized list.
 

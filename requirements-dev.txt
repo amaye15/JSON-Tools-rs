@@ -18,3 +18,13 @@ sphinx-rtd-theme>=1.2.0
 
 # Type checking
 types-setuptools
+
+# Optional: DataFrame library integration tests (TestDataFrameAndSeriesSupport,
+# TestNormalise). Not required to run the core suite -- tests guarded by
+# has_pandas/has_polars/has_pyarrow/has_pyspark skip cleanly when absent.
+# pyspark additionally needs a JDK; see .github/workflows/rust-ci.yml's
+# python-test-pyspark job for the CI setup.
+pandas
+polars
+pyarrow
+pyspark

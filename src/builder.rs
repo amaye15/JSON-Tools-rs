@@ -889,6 +889,7 @@ impl JSONTools {
     /// `auto_convert_types` is deliberately left unset here in favor of the
     /// four per-category `convert_*` flags, which fully capture the same
     /// resolved state unambiguously.
+    #[cfg(feature = "python")]
     pub(crate) fn to_config_json(&self) -> String {
         use crate::config_json::{
             BooleanConversionConfigWire, Config, DateConversionConfigWire,
@@ -958,5 +959,14 @@ impl JSONTools {
         // Infallible: `Config` is a plain data struct with no map keys, no
         // floats, nothing `serde_json` can fail to encode.
         serde_json::to_string(&config).expect("Config serialization is infallible")
+    }
+
+    /// True if `.flatten()` (not `.unflatten()`/`.normal()`/unset) is the configured
+    /// mode -- used by `PyJSONTools::execute_normalise` (`python.rs`) to reject
+    /// `normalise=True` early with a clear error, since unflattened/nested JSON
+    /// can't produce clean scalar columns for a wide DataFrame.
+    #[cfg(feature = "python")]
+    pub(crate) fn is_flatten_mode(&self) -> bool {
+        matches!(self.mode, Some(OperationMode::Flatten))
     }
 }

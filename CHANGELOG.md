@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.9] - 2026-07-28
+
 ### Fixed
 - **Critical: `auto_convert_types` panicked on multi-byte UTF-8 content in
   specific positions** (e.g. `"5€ García"`, `"0xÁ1F"`, a timezone offset like
@@ -33,6 +35,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   string in a distributed worker process). Verified across a real process
   boundary (`multiprocessing`, spawn context), not just in-process.
   ([#29](https://github.com/amaye15/JSON-Tools-rs/issues/29), point 2)
+- **Python: `execute(input, normalise=True, target=None)`** -- always returns a
+  wide DataFrame (one column per flattened key) regardless of input shape (a
+  bare `str`/`dict` becomes a 1-row DataFrame), working natively across pandas,
+  polars, pyarrow, and now genuinely **PySpark**: `target="pyspark"` closes the
+  long-standing gap where DataFrame reconstruction fell back to a plain list of
+  dicts (see the "Supported Libraries" caveat above and in
+  `docs/src/guide/dataframe-support.md`), by reusing the pandas reconstruction
+  path and handing it to Spark's own Arrow-optimized
+  `SparkSession.createDataFrame(pandas.DataFrame)` bridge rather than a
+  hand-rolled schema-inference pipeline. Target resolution: an explicit
+  `target` wins; otherwise a live DataFrame/Series input keeps its own
+  backend; otherwise pandas → polars → pyarrow is tried in order (pyspark is
+  never auto-selected for bare JSON input). Column union/null-fill order and
+  an explicit string type for all-`None` columns are handled uniformly across
+  all four targets, and a key-collision column that's list-valued in only
+  some rows (via `handle_key_collision(True)`) is now made uniformly
+  list-valued rather than crashing pyarrow/polars on the mixed types.
 
 ## [0.9.8] - 2026-07-26
 
