@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-## v0.9.9 (2026-07-28)
+## v0.9.10 (2026-07-28)
 
 ### Fixed
 - **Critical: `auto_convert_types` panicked on multi-byte UTF-8 content in specific positions** (e.g. `"5€ García"`, a `"+1Á2"` timezone offset) -- two fixed-byte-offset string slices assumed the offset was always a UTF-8 character boundary. Fixed with an `is_char_boundary` guard at each site; no behavior change for valid inputs. ([#29](https://github.com/amaye15/JSON-Tools-rs/issues/29))

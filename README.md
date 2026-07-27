@@ -342,7 +342,7 @@ v0.9.2, ships automatically on tagged releases):
 <dependency>
   <groupId>io.github.amaye15</groupId>
   <artifactId>json-tools-rs-spark</artifactId>
-  <version>0.9.8</version>
+  <version>0.9.10</version>
 </dependency>
 ```
 
@@ -427,7 +427,7 @@ Dual-licensed under either [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), a
 
 ## Changelog
 
-### v0.9.9 (Current)
+### v0.9.10 (Current)
 
 * **New**: `execute(input, normalise=True, target=None)` (Python) -- always returns a wide DataFrame (one column per flattened key) regardless of input shape (`str`/`dict`/`list`/DataFrame/Series all supported), working natively across pandas, polars, pyarrow, and now genuinely **PySpark** (a real `pyspark.sql.DataFrame`, closing the previous list-of-dicts fallback for this path). See [DataFrame & Series Support](https://amaye15.github.io/JSON-Tools-rs/guide/dataframe-support.html#normalise-always-get-a-wide-dataframe).
 * **New**: `JSONTools` (Python) is now picklable (`pickle.dumps`/`pickle.loads`), including across a real process boundary (e.g. captured in a PySpark UDF/`mapInPandas` closure via cloudpickle) -- via `__reduce__` plus a new `to_config_json()`/`from_config_json()` method pair. ([#29](https://github.com/amaye15/JSON-Tools-rs/issues/29))

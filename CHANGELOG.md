@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.9.9] - 2026-07-28
+## [0.9.10] - 2026-07-28
 
 ### Fixed
 - **Critical: `auto_convert_types` panicked on multi-byte UTF-8 content in
