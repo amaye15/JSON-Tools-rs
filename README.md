@@ -427,7 +427,15 @@ Dual-licensed under either [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), a
 
 ## Changelog
 
-### v0.9.8 (Current)
+### v0.9.9 (Current)
+
+* **New**: `execute(input, normalise=True, target=None)` (Python) -- always returns a wide DataFrame (one column per flattened key) regardless of input shape (`str`/`dict`/`list`/DataFrame/Series all supported), working natively across pandas, polars, pyarrow, and now genuinely **PySpark** (a real `pyspark.sql.DataFrame`, closing the previous list-of-dicts fallback for this path). See [DataFrame & Series Support](https://amaye15.github.io/JSON-Tools-rs/guide/dataframe-support.html#normalise-always-get-a-wide-dataframe).
+* **New**: `JSONTools` (Python) is now picklable (`pickle.dumps`/`pickle.loads`), including across a real process boundary (e.g. captured in a PySpark UDF/`mapInPandas` closure via cloudpickle) -- via `__reduce__` plus a new `to_config_json()`/`from_config_json()` method pair. ([#29](https://github.com/amaye15/JSON-Tools-rs/issues/29))
+* **Fix**: critical `auto_convert_types` panic on multi-byte UTF-8 content in specific positions (e.g. `"5€ García"`, a `"+1Á2"` timezone offset) -- two fixed-byte-offset string slices assumed the offset was always a UTF-8 character boundary. Fixed with an `is_char_boundary` guard at each site; no behavior change for valid inputs. ([#29](https://github.com/amaye15/JSON-Tools-rs/issues/29))
+
+See [CHANGELOG.md](CHANGELOG.md) for full details.
+
+### v0.9.8
 
 * **Changed**: [orjson](https://github.com/ijl/orjson) is now a required Python dependency, used automatically for dict/DataFrame-row JSON (de)serialization -- `pip install json-tools-rs` is all that's needed. A per-call fallback to the standard library still covers inputs orjson can't handle (e.g. integers beyond 64-bit range).
 * **Performance**: Python binding marshaling ~37% faster (dict calls) / ~39% faster (str calls) via a detection fast-path plus the orjson backend; JVM binding marshaling ~22-38% faster per call (UTF-8 `byte[]` across the JNI boundary instead of `String`); unflatten ~5-6% faster and roundtrip ~4-5% faster (corpus-tuned container capacity hints, single-lookup `entry()`); flatten ~13-16% faster across payload sizes (removed a double-scan in the core tape scanner).
