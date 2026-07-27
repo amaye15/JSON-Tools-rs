@@ -4497,7 +4497,9 @@ class TestNormalise:
 
     def test_unknown_target_errors(self):
         tools = json_tools_rs.JSONTools().flatten()
-        with pytest.raises(json_tools_rs.JsonToolsError, match="Unknown normalise target"):
+        with pytest.raises(
+            json_tools_rs.JsonToolsError, match="Unknown normalise target"
+        ):
             tools.execute({"a": 1}, normalise=True, target="numpy")
 
     def test_pyspark_target_without_pyspark_installed_errors(self):
@@ -4536,7 +4538,9 @@ class TestNormalise:
         if not self.has_pandas:
             pytest.skip("pandas not installed")
         tools = json_tools_rs.JSONTools().flatten()
-        df = tools.execute({"user": {"name": "Alice", "age": 30}}, normalise=True, target="pandas")
+        df = tools.execute(
+            {"user": {"name": "Alice", "age": 30}}, normalise=True, target="pandas"
+        )
         assert isinstance(df, self.pd.DataFrame)
         assert df.shape == (1, 2)
         assert df.iloc[0]["user.name"] == "Alice"
@@ -4564,8 +4568,13 @@ class TestNormalise:
         df = tools.execute(data, normalise=True, target="pandas")
         # First-seen order across all rows, not alphabetical.
         assert df.columns.tolist() == ["a", "b.x", "c"]
-        assert df.iloc[0]["c"] is None
-        assert df.iloc[1]["b.x"] is None
+        # pd.isna(), not `is None` -- pandas represents a missing value in a
+        # mixed-type/object column as Python None on some versions and as
+        # float('nan') on others (confirmed: pandas 2.3.3 gives None, pandas
+        # 3.0.5 gives nan, for this exact column shape); pd.isna() is the
+        # pandas-recommended check that's correct across both.
+        assert self.pd.isna(df.iloc[0]["c"])
+        assert self.pd.isna(df.iloc[1]["b.x"])
 
     def test_pandas_empty_list_zero_rows_no_error(self):
         if not self.has_pandas:
@@ -4648,7 +4657,9 @@ class TestNormalise:
         if not self.has_pyarrow:
             pytest.skip("pyarrow not installed")
         tools = json_tools_rs.JSONTools().flatten()
-        table = tools.execute({"user": {"name": "Alice"}}, normalise=True, target="pyarrow")
+        table = tools.execute(
+            {"user": {"name": "Alice"}}, normalise=True, target="pyarrow"
+        )
         assert isinstance(table, self.pa.Table)
         assert table.shape == (1, 1)
 
@@ -4689,7 +4700,9 @@ class TestNormalise:
         if not (self.has_pandas and self.has_polars):
             pytest.skip("pandas and polars both required")
         tools = json_tools_rs.JSONTools().flatten()
-        pdf = self.pd.DataFrame([{"user": {"name": "Alice"}}, {"user": {"name": "Bob"}}])
+        pdf = self.pd.DataFrame(
+            [{"user": {"name": "Alice"}}, {"user": {"name": "Bob"}}]
+        )
         out = tools.execute(pdf, normalise=True, target="polars")
         assert isinstance(out, self.pl.DataFrame)
         assert out.shape == (2, 1)
@@ -4717,7 +4730,10 @@ class TestNormalise:
         if not self.has_pyspark:
             pytest.skip("pyspark not installed")
         tools = json_tools_rs.JSONTools().flatten()
-        data = [{"user": {"name": "Alice", "age": 30}}, {"user": {"name": "Bob", "age": 25}}]
+        data = [
+            {"user": {"name": "Alice", "age": 30}},
+            {"user": {"name": "Bob", "age": 25}},
+        ]
         df = tools.execute(data, normalise=True, target="pyspark")
         from pyspark.sql import DataFrame as SparkDataFrame
 
@@ -4757,7 +4773,9 @@ class TestNormalise:
         self.spark.stop()
         try:
             tools = json_tools_rs.JSONTools().flatten()
-            with pytest.raises(json_tools_rs.JsonToolsError, match="active SparkSession"):
+            with pytest.raises(
+                json_tools_rs.JsonToolsError, match="active SparkSession"
+            ):
                 tools.execute({"a": 1}, normalise=True, target="pyspark")
         finally:
             self.spark = (
