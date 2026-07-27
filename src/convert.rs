@@ -557,8 +557,13 @@ fn try_parse_compact_datetime(s: &str) -> Option<String> {
         let time_part = &s[9..15];
         let offset_part = &s[15..];
 
-        // Format offset properly
-        let formatted_offset = if offset_part.len() == 5 {
+        // Format offset properly. `is_char_boundary(3)` guards the slice below --
+        // a multi-byte UTF-8 character straddling byte offset 3 (e.g. an offset
+        // of "+1Á2") would otherwise panic here. A real +HHMM offset is always
+        // pure ASCII, so failing the check just means this isn't a valid offset;
+        // the malformed string falls through to `parse_from_rfc3339` below and
+        // is correctly rejected as not a date, instead of panicking.
+        let formatted_offset = if offset_part.len() == 5 && offset_part.is_char_boundary(3) {
             // +HHMM -> +HH:MM
             format!("{}:{}", &offset_part[..3], &offset_part[3..])
         } else {
@@ -993,7 +998,13 @@ fn strip_currency_indicators(working_str: &str) -> &str {
 
     // Remove currency codes (USD, EUR, GBP, etc.) - 3 letter codes at start
     // Only remove if followed by a space to avoid false positives like "ABC123"
-    if without_currency.len() > 4 {
+    // `is_char_boundary(3)` guards the slice below: a multi-byte UTF-8 character
+    // straddling byte offset 3 (e.g. "5xÁ1000") would otherwise panic here -- a
+    // real production crash, not a hypothetical (see the regression tests). A
+    // real 3-letter currency code is always pure ASCII, so byte offset 3 is
+    // guaranteed a valid boundary for every genuine match; failing the check
+    // just means "not a currency-code prefix", which is the correct outcome.
+    if without_currency.len() > 4 && without_currency.is_char_boundary(3) {
         let first_three = &without_currency[..3];
         if first_three.bytes().all(|b| b.is_ascii_uppercase()) {
             let potential_code = &without_currency[3..];

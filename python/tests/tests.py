@@ -4310,3 +4310,113 @@ class TestJsonMarshalingCompat:
         tools = json_tools_rs.JSONTools().flatten()
         result = tools.execute({"id": "12345678901234567890123"})
         assert result["id"] == "12345678901234567890123"
+
+
+class TestPickling:
+    """JSONTools pickle support (github.com/amaye15/JSON-Tools-rs/issues/29,
+    point 2). Needed to capture a configured JSONTools in a closure that
+    crosses a process boundary -- e.g. a PySpark UDF/mapInPandas function,
+    which cloudpickle-serializes -- without the ASCII-workaround-style hacks
+    the issue describes needing before this existed."""
+
+    def test_pickle_roundtrip_preserves_behavior(self):
+        """A pickled-then-unpickled instance must process input identically
+        to the original, across a real pickle.dumps/loads cycle (not just
+        the underlying config-string mechanism)."""
+        import pickle
+
+        tools = (
+            json_tools_rs.JSONTools()
+            .flatten()
+            .separator("::")
+            .remove_nulls(True)
+            .key_replacement("r'^admin_'", "")
+            .auto_convert_types(True)
+        )
+        payload = {"admin_name": "Jane", "age": None, "id": "123"}
+        expected = tools.execute(payload)
+
+        restored = pickle.loads(pickle.dumps(tools))
+        assert restored.execute(payload) == expected
+
+    def test_pickle_roundtrip_preserves_nested_type_conversion_config(self):
+        """Nested per-category customization (not just top-level booleans)
+        must survive the round trip -- this is what actually exercises
+        to_config_json's date/null/boolean/number sub-config serialization,
+        not just the simple top-level flags."""
+        import pickle
+
+        tools = (
+            json_tools_rs.JSONTools()
+            .flatten()
+            .convert_dates(True, assume_utc_for_naive=False)
+            .convert_booleans(True, extra_true_tokens=["da"])
+            .exclude_key("secret")
+        )
+        payload = {"flag": "da", "when": "2024-01-15T10:30:00", "secret_x": "hidden", "y": 1}
+        expected = tools.execute(payload)
+
+        restored = pickle.loads(pickle.dumps(tools))
+        assert restored.execute(payload) == expected
+        # naive datetime must stay unchanged (assume_utc_for_naive=False survived
+        # the round trip -- without it, this input would get "Z" appended)
+        assert "Z" not in restored.execute(payload)["when"]
+        # extra_true_tokens=["da"] also survived: "da" recognized as boolean True
+        assert restored.execute(payload)["flag"] is True
+
+    def test_pickle_restored_instance_is_independent(self):
+        """Mutating the restored instance must not affect the original --
+        they must be two genuinely separate native handles, not sharing
+        interior state."""
+        import pickle
+
+        tools = json_tools_rs.JSONTools().flatten()
+        restored = pickle.loads(pickle.dumps(tools))
+        restored.lowercase_keys(True)
+
+        assert restored.execute({"Name": "X"}) == {"name": "X"}
+        assert tools.execute({"Name": "X"}) == {"Name": "X"}
+
+    def test_to_config_json_from_config_json_roundtrip(self):
+        """The lower-level mechanism pickling is built on, usable directly
+        (e.g. for a PySpark mapInPandas partition function to reconstruct a
+        fresh instance per-partition from a captured config string)."""
+        tools = json_tools_rs.JSONTools().flatten().remove_nulls(True).num_threads(4)
+        config = tools.to_config_json()
+        assert isinstance(config, str)
+
+        restored = json_tools_rs.JSONTools.from_config_json(config)
+        payload = {"a": None, "b": 1}
+        assert restored.execute(payload) == tools.execute(payload)
+
+    def test_pickle_across_real_process_boundary(self):
+        """The actual scenario from the issue: a configured JSONTools
+        captured in a closure shipped to a genuinely separate process (the
+        local analog of a Spark executor receiving a cloudpickled task).
+        Uses the 'spawn' start method so the child is a fresh interpreter,
+        not a fork inheriting the parent's already-loaded extension state."""
+        import multiprocessing as mp
+        import pickle
+
+        tools = json_tools_rs.JSONTools().flatten().auto_convert_types(True)
+        payload = {"count": "42", "name": "test"}
+        expected = tools.execute(payload)
+
+        ctx = mp.get_context("spawn")
+        queue = ctx.Queue()
+        proc = ctx.Process(
+            target=_pickle_worker, args=(pickle.dumps(tools), payload, queue)
+        )
+        proc.start()
+        result = queue.get(timeout=30)
+        proc.join()
+
+        assert result == expected
+
+
+def _pickle_worker(pickled_tools, payload, out_queue):
+    """Module-level (picklable) target for TestPickling's cross-process test."""
+    import pickle
+
+    tools = pickle.loads(pickled_tools)
+    out_queue.put(tools.execute(payload))

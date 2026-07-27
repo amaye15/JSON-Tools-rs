@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Critical: `auto_convert_types` panicked on multi-byte UTF-8 content in
+  specific positions** (e.g. `"5€ García"`, `"0xÁ1F"`, a timezone offset like
+  `"+1Á2"`) -- two fixed-byte-offset string slices (the 3-letter
+  currency-code check in `strip_currency_indicators`, and the `+HHMM` ->
+  `+HH:MM` offset formatter in the compact-datetime parser) assumed the
+  offset was always a UTF-8 character boundary without checking. Root-caused
+  by direct reproduction (not just static analysis) with `RUST_BACKTRACE=1`,
+  then swept the rest of `convert.rs`'s fixed-offset slices by construction
+  to confirm no others were reachable. Fixed with a cheap `is_char_boundary`
+  guard at each site -- zero behavior change for the (always-ASCII) valid
+  currency-code/offset formats, and a string that merely resembles one but
+  contains non-ASCII content in the checked position is now correctly left
+  as a string instead of crashing. ([#29](https://github.com/amaye15/JSON-Tools-rs/issues/29), point 1)
+
+### Added
+- **Python: `JSONTools` is now picklable** (`pickle.dumps`/`pickle.loads`),
+  which also means it can be captured in a cloudpickle-serialized closure --
+  e.g. inside a PySpark UDF or `mapInPandas` function -- without the
+  workarounds the linked issue describes needing before this existed.
+  Implemented via `__reduce__` plus a new `to_config_json()`/
+  `from_config_json()` method pair (also directly useful on their own for
+  reconstructing a fresh, independent instance from a captured config
+  string in a distributed worker process). Verified across a real process
+  boundary (`multiprocessing`, spawn context), not just in-process.
+  ([#29](https://github.com/amaye15/JSON-Tools-rs/issues/29), point 2)
+
 ## [0.9.8] - 2026-07-26
 
 ### Changed

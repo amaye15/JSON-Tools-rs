@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+- **Critical: `auto_convert_types` panicked on multi-byte UTF-8 content in specific positions** (e.g. `"5€ García"`, a `"+1Á2"` timezone offset) -- two fixed-byte-offset string slices assumed the offset was always a UTF-8 character boundary. Fixed with an `is_char_boundary` guard at each site; no behavior change for valid inputs. ([#29](https://github.com/amaye15/JSON-Tools-rs/issues/29))
+
+### Added
+- **Python: `JSONTools` is now picklable**, including across a real process boundary (e.g. captured in a PySpark UDF/`mapInPandas` closure via cloudpickle) -- via `__reduce__` plus a new `to_config_json()`/`from_config_json()` method pair. ([#29](https://github.com/amaye15/JSON-Tools-rs/issues/29))
+
+See the repository's [CHANGELOG.md](https://github.com/amaye15/json-tools-rs/blob/master/CHANGELOG.md) for the full, itemized list.
+
 ## v0.9.8 (2026-07-26)
 
 ### Changed

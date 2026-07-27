@@ -4828,4 +4828,140 @@ mod validation_and_edge_case_tests {
         assert_eq!(parsed["frac"], "1/2"); // disabled
         assert_eq!(parsed["core"], 123); // always-on core parsing
     }
+
+    // ============================================================================
+    // Regression tests: UTF-8 char-boundary panics in auto_convert_types
+    // (github.com/amaye15/JSON-Tools-rs/issues/29, point 1)
+    //
+    // Both bugs were fixed-byte-offset string slices (`&s[..3]`, `&s[..N]`) that
+    // assumed a specific byte offset was a char boundary without checking, when a
+    // multi-byte UTF-8 character could land exactly on that offset. Every case
+    // here panicked with "byte index N is not a char boundary" before the fix in
+    // src/convert.rs (`strip_currency_indicators`'s 3-letter-code check, and
+    // `try_parse_compact_datetime`'s +HHMM offset formatter); each is reproduced
+    // here with the exact multi-byte character positioned to straddle the
+    // vulnerable offset, not just "any accented string", so a future regression
+    // that shifts the bug to a different offset still gets caught.
+    // ============================================================================
+
+    /// `strip_currency_indicators`'s "first 3 bytes look like a currency code"
+    /// check (src/convert.rs, guarded by `is_char_boundary(3)`). `Á` is 2 bytes,
+    /// so `"5xÁ1000"` has a character straddling byte offset 3 exactly.
+    #[test]
+    fn test_auto_convert_no_panic_currency_code_check_multibyte_straddle() {
+        let cases = [
+            r#"{"amount": "5xÁ1000"}"#,
+            r#"{"amount": "1xÁ2345"}"#,
+            r#"{"amount": "5€ García"}"#,
+            r#"{"amount": "GAÁ 100"}"#,
+            r#"{"n": "0xÁ1F"}"#,
+            r#"{"n": "0bÁ101"}"#,
+            r#"{"n": "0oÁ17"}"#,
+        ];
+        for json in cases {
+            let result = JSONTools::new()
+                .flatten()
+                .auto_convert_types(true)
+                .execute(json)
+                .unwrap_or_else(|e| panic!("{json} should not error, got: {e}"));
+            // Not a valid currency-coded number -- must be left as a string,
+            // unmodified, not silently truncated or corrupted.
+            let parsed: Value = serde_json::from_str(&extract_single(result)).unwrap();
+            let (_, value) = parsed.as_object().unwrap().iter().next().unwrap();
+            assert!(
+                value.is_string(),
+                "{json} -> expected string, got {value:?}"
+            );
+        }
+    }
+
+    /// `try_parse_compact_datetime`'s "+HHMM -> +HH:MM" offset formatter
+    /// (src/convert.rs, guarded by `is_char_boundary(3)`). `Á` is 2 bytes, so an
+    /// offset of `"+1Á2"` has a character straddling byte offset 3 of the
+    /// 5-byte offset substring exactly.
+    #[test]
+    fn test_auto_convert_no_panic_datetime_offset_multibyte_straddle() {
+        let json = r#"{"d": "20240115T103000+1Á2"}"#;
+        let result = JSONTools::new()
+            .flatten()
+            .auto_convert_types(true)
+            .execute(json)
+            .unwrap_or_else(|e| panic!("{json} should not error, got: {e}"));
+        // Not a valid timezone offset -- must be left as a string, not parsed
+        // as a date (and, above all, must not panic).
+        let parsed: Value = serde_json::from_str(&extract_single(result)).unwrap();
+        assert_eq!(parsed["d"], "20240115T103000+1Á2");
+    }
+
+    /// The exact repro from the filed issue: an accented name must never panic
+    /// `auto_convert_types`, and -- unlike the `.encode("ascii", "ignore")`
+    /// workaround the issue describes -- must round-trip with zero data loss.
+    #[test]
+    fn test_auto_convert_no_panic_accented_names_roundtrip_exactly() {
+        let cases = [
+            ("García", "García"),
+            ("Ángel", "Ángel"),
+            ("Zoëy", "Zoëy"),
+            ("café", "café"),
+            ("naïve résumé", "naïve résumé"),
+            ("北京", "北京"),
+            ("Müller", "Müller"),
+            ("José", "José"),
+        ];
+        for (input, expected) in cases {
+            let json = serde_json::json!({"name": input}).to_string();
+            let result = JSONTools::new()
+                .flatten()
+                .auto_convert_types(true)
+                .execute(json.as_str())
+                .unwrap_or_else(|e| panic!("{input:?} should not error, got: {e}"));
+            let parsed: Value = serde_json::from_str(&extract_single(result)).unwrap();
+            assert_eq!(parsed["name"], expected, "input {input:?} corrupted");
+        }
+    }
+
+    /// Broad sweep: a multi-byte character inserted at every byte position (0
+    /// through len) of several representative number/date/currency-shaped
+    /// strings must never panic, regardless of exactly where it lands. This is
+    /// deliberately more exhaustive than the two exact reproductions above --
+    /// it's the regression net for "the same class of bug at a different
+    /// offset", not just the two specific offsets already found and fixed.
+    #[test]
+    fn test_auto_convert_no_panic_multibyte_at_every_position() {
+        let templates = [
+            "USD 1000",
+            "5000 CR",
+            "1,234.50",
+            "20240115T103000Z",
+            "20240115T103000+0500",
+            "2024-01-15T10:30:00+05:00",
+            "1/2",
+            "1 1/2",
+            "0x1F",
+            "50%",
+            "25bps",
+            "1.5k",
+        ];
+        for template in templates {
+            for byte_pos in 0..=template.len() {
+                // Skip positions that would themselves split a (currently
+                // all-ASCII) template mid-character -- not applicable here
+                // since every template is pure ASCII, so every byte_pos is a
+                // valid insertion point.
+                let mut mutated = String::with_capacity(template.len() + 2);
+                mutated.push_str(&template[..byte_pos]);
+                mutated.push('Á'); // 2-byte UTF-8 character
+                mutated.push_str(&template[byte_pos..]);
+                let json = serde_json::json!({"v": mutated}).to_string();
+                let tools = JSONTools::new().flatten().auto_convert_types(true);
+                let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    tools.execute(json.as_str())
+                }));
+                assert!(
+                    outcome.is_ok(),
+                    "panicked on template {template:?} with 'Á' inserted at byte {byte_pos}"
+                );
+            }
+        }
+    }
 }

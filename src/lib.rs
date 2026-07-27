@@ -439,6 +439,7 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 mod builder;
 pub(crate) mod cache;
 mod config;
+pub(crate) mod config_json;
 pub(crate) mod convert;
 mod error;
 pub(crate) mod flatten;

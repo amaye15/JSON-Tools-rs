@@ -483,6 +483,28 @@ elif output.is_multiple:
         print(item)
 ```
 
+### Pickling and `to_config_json()` / `from_config_json()`
+
+`JSONTools` instances are picklable (`pickle.dumps`/`pickle.loads`), which
+means a configured instance can also be captured in a closure that crosses a
+real process boundary via cloudpickle -- most notably inside a PySpark UDF or
+`mapInPandas` function, without needing a workaround.
+
+```python
+tools = jt.JSONTools().flatten().remove_nulls(True)
+
+config = tools.to_config_json()          # -> str
+restored = jt.JSONTools.from_config_json(config)  # a fresh, independent instance
+```
+
+`to_config_json()`/`from_config_json()` are the mechanism pickling is built
+on top of, and are directly useful on their own for the same reason: a
+`mapInPandas` partition function should close over the config *string* (not
+the `JSONTools` instance itself) and call `from_config_json()` once inside
+each partition to get a working, independent instance -- this is exactly how
+the pickle support works internally (`__reduce__` returns
+`(from_config_json, (config_json,))`).
+
 ## JsonOutput
 
 Output wrapper returned by `.execute_to_output()`. Provides typed access to results.

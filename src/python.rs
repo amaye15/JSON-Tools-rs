@@ -253,7 +253,7 @@ enum DataStructureType {
 
 /// Python wrapper for JsonOutput enum
 #[cfg(feature = "python")]
-#[pyclass(name = "JsonOutput", frozen, from_py_object)]
+#[pyclass(name = "JsonOutput", module = "json_tools_rs", frozen, from_py_object)]
 #[derive(Debug, Clone)]
 pub struct PyJsonOutput {
     inner: JsonOutput,
@@ -383,7 +383,7 @@ impl PyJsonOutput {
 /// print(results)  # ['{"a": 1}', '{"b": 2}'] (list of strings)
 /// ```
 #[cfg(feature = "python")]
-#[pyclass(name = "JSONTools")]
+#[pyclass(name = "JSONTools", module = "json_tools_rs")]
 pub struct PyJSONTools {
     // Use Mutex for interior mutability - allows mutation through shared reference
     // This eliminates the need to clone JSONTools on every builder method call
@@ -1534,6 +1534,54 @@ impl PyJSONTools {
         Err(PyValueError::new_err(
             "json_input must be a JSON string, Python dict, DataFrame, Series, list of JSON strings, or list of Python dicts",
         ))
+    }
+
+    /// Serialize this instance's configuration to a JSON string, from which an
+    /// equivalent, independent instance can be rebuilt via
+    /// `JSONTools.from_config_json(...)`.
+    ///
+    /// This is the mechanism behind pickle support (`__reduce__`, below) --
+    /// useful directly too for shipping a configured `JSONTools` across any
+    /// other process boundary that can't pickle a native extension object,
+    /// e.g. a PySpark `mapInPandas` partition function, which should close
+    /// over this string (not `self`) and call `from_config_json` fresh inside
+    /// each partition.
+    #[pyo3(text_signature = "($self)")]
+    pub fn to_config_json(&self) -> PyResult<String> {
+        let guard = lock_config(&self.inner)?;
+        Ok(guard.to_config_json())
+    }
+
+    /// Reconstruct a `JSONTools` instance from a JSON string previously
+    /// produced by `to_config_json()`. See that method's doc for why this
+    /// pair exists.
+    #[staticmethod]
+    #[pyo3(text_signature = "(config_json)")]
+    pub fn from_config_json(config_json: &str) -> PyResult<Self> {
+        let tools = crate::config_json::build_tools(config_json)
+            .map_err(|e| JsonToolsError::new_err(format!("Invalid configuration: {e}")))?;
+        Ok(Self {
+            inner: Mutex::new(tools),
+        })
+    }
+
+    /// Pickle support (`pickle.dumps`/`pickle.loads`, and by extension
+    /// cloudpickle-based closure capture, e.g. inside a PySpark UDF or
+    /// `mapInPandas` function) -- see github.com/amaye15/JSON-Tools-rs/issues/29.
+    ///
+    /// A `PyJSONTools` wraps a native Rust object with no Python `__dict__`,
+    /// so the standard `__reduce__` protocol is used instead of `__getstate__`/
+    /// `__setstate__`: returns `(from_config_json, (config_json_string,))`.
+    /// Unpickling calls `JSONTools.from_config_json(config_json_string)`,
+    /// which reconstructs an independent, equivalently-configured instance --
+    /// `from_config_json` is a `#[staticmethod]` on a module-registered class,
+    /// so pickle can serialize the callable itself by reference
+    /// (`json_tools_rs.JSONTools.from_config_json`), the same way it already
+    /// handles any other class/static method reference.
+    pub fn __reduce__<'py>(slf: &Bound<'py, Self>) -> PyResult<(Bound<'py, PyAny>, (String,))> {
+        let config_json = slf.borrow().to_config_json()?;
+        let ctor = slf.get_type().getattr("from_config_json")?;
+        Ok((ctor, (config_json,)))
     }
 }
 

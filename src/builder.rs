@@ -876,4 +876,87 @@ impl JSONTools {
         let config = ProcessingConfig::from_json_tools(self);
         Self::execute_with_processor(input, &config, process_single_json_normal)
     }
+
+    /// Serializes this configuration to a JSON blob that
+    /// `config_json::build_tools` can reconstruct an equivalent `JSONTools`
+    /// from -- the mechanism behind `PyJSONTools`'s pickle support
+    /// (`__reduce__`/`from_config_json` in `python.rs`) and the Rust-side
+    /// counterpart to JNI's `JsonTools.toConfigJson()` (Java-side).
+    ///
+    /// Every field is populated (not just ones a caller explicitly
+    /// customized): the round trip only needs to reproduce the *resolved*
+    /// state, not the exact sequence of builder calls used to reach it, so
+    /// `auto_convert_types` is deliberately left unset here in favor of the
+    /// four per-category `convert_*` flags, which fully capture the same
+    /// resolved state unambiguously.
+    pub(crate) fn to_config_json(&self) -> String {
+        use crate::config_json::{
+            BooleanConversionConfigWire, Config, DateConversionConfigWire,
+            NullConversionConfigWire, NumberConversionConfigWire,
+        };
+
+        let config = Config {
+            mode: self.mode.map(|m| {
+                match m {
+                    OperationMode::Flatten => "flatten",
+                    OperationMode::Unflatten => "unflatten",
+                    OperationMode::Normal => "normal",
+                }
+                .to_string()
+            }),
+            separator: Some(self.separator.clone()),
+            lowercase_keys: Some(self.lowercase_keys),
+            key_replacements: self.key_replacements.iter().cloned().collect(),
+            value_replacements: self.value_replacements.iter().cloned().collect(),
+            key_exclusions: self.key_exclusions.iter().cloned().collect(),
+            value_exclusions: self.value_exclusions.iter().cloned().collect(),
+            remove_empty_strings: Some(self.remove_empty_string_values),
+            remove_nulls: Some(self.remove_null_values),
+            remove_empty_objects: Some(self.remove_empty_objects),
+            remove_empty_arrays: Some(self.remove_empty_arrays),
+            handle_key_collision: Some(self.handle_key_collision),
+            auto_convert_types: None,
+            convert_dates: Some(self.date_conversion.enabled),
+            date_conversion_config: Some(DateConversionConfigWire {
+                normalize_to_utc: Some(self.date_conversion.normalize_to_utc),
+                assume_utc_for_naive: Some(self.date_conversion.assume_utc_for_naive),
+            }),
+            convert_nulls: Some(self.null_conversion.enabled),
+            null_conversion_config: Some(NullConversionConfigWire {
+                extra_tokens: self.null_conversion.extra_tokens.iter().cloned().collect(),
+            }),
+            convert_booleans: Some(self.boolean_conversion.enabled),
+            boolean_conversion_config: Some(BooleanConversionConfigWire {
+                extra_true_tokens: self
+                    .boolean_conversion
+                    .extra_true_tokens
+                    .iter()
+                    .cloned()
+                    .collect(),
+                extra_false_tokens: self
+                    .boolean_conversion
+                    .extra_false_tokens
+                    .iter()
+                    .cloned()
+                    .collect(),
+            }),
+            convert_numbers: Some(self.number_conversion.enabled),
+            number_conversion_config: Some(NumberConversionConfigWire {
+                currency: Some(self.number_conversion.currency),
+                percent: Some(self.number_conversion.percent),
+                basis_points: Some(self.number_conversion.basis_points),
+                suffixes: Some(self.number_conversion.suffixes),
+                fractions: Some(self.number_conversion.fractions),
+                radix: Some(self.number_conversion.radix),
+            }),
+            parallel_threshold: Some(self.parallel_threshold),
+            num_threads: self.num_threads,
+            nested_parallel_threshold: Some(self.nested_parallel_threshold),
+            max_array_index: Some(self.max_array_index),
+        };
+
+        // Infallible: `Config` is a plain data struct with no map keys, no
+        // floats, nothing `serde_json` can fail to encode.
+        serde_json::to_string(&config).expect("Config serialization is infallible")
+    }
 }

@@ -141,3 +141,25 @@ class JSONTools:
     def execute_to_output(self, json_input: Any) -> JsonOutput:
         """Execute and return a JsonOutput wrapper instead of auto-detecting type."""
         ...
+
+    def to_config_json(self) -> str:
+        """Serialize this instance's configuration to a JSON string.
+
+        Pairs with `from_config_json` to rebuild an equivalent, independent
+        instance elsewhere -- e.g. inside a PySpark `mapInPandas` partition
+        function, which should close over this string (not the instance
+        itself) and call `from_config_json` fresh per partition. Also the
+        mechanism behind this class's pickle support.
+        """
+        ...
+
+    @staticmethod
+    def from_config_json(config_json: str) -> "JSONTools":
+        """Reconstruct a JSONTools instance from a `to_config_json()` string."""
+        ...
+
+    def __reduce__(self) -> Any:
+        """Pickle support (also enables cloudpickle-based closure capture,
+        e.g. inside a PySpark UDF), via the to_config_json/from_config_json
+        round trip."""
+        ...
