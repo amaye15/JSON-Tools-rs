@@ -197,6 +197,13 @@ print(type(result))  # <class 'pandas.core.frame.DataFrame'>
 
 # Also works with Polars, PyArrow Tables, and PySpark DataFrames
 # Series input → Series output (Pandas, Polars, PyArrow)
+
+# Or skip having a DataFrame at all -- normalise=True always returns a wide
+# DataFrame regardless of input shape (dict, str, list), with target= picking
+# the library (pandas/polars/pyarrow/pyspark) or auto-resolving if omitted.
+df = jt.JSONTools().flatten().execute(
+    {"user": {"name": "Alice", "age": 30}}, normalise=True
+)
 ```
 
 ### JVM / Spark

@@ -37,8 +37,8 @@ The Python bindings natively support DataFrame and Series objects from popular d
 > [Normalise: Always Get a Wide DataFrame](#normalise-always-get-a-wide-dataframe)
 > below. It still collects and processes on the driver exactly as described above;
 > the difference is only in the *last* step, where it hands the result to Spark's
-> own Arrow-optimized `SparkSession.createDataFrame(pandas.DataFrame)` bridge
-> instead of returning a plain list. That bridge genuinely distributes the
+> own Arrow-optimized `SparkSession.createDataFrame(pandas.DataFrame, schema)`
+> bridge instead of returning a plain list. That bridge genuinely distributes the
 > *resulting* DataFrame across the cluster, but it does **not** distribute the
 > flatten/processing computation itself -- for that, you still want the
 > `pandas_udf` pattern further down this page.
@@ -104,28 +104,116 @@ existing DataFrame/Series gets re-normalised the same way. Requires `.flatten()`
 mode (a `JsonToolsError` explains why if it's not set -- unflattened/nested JSON
 can't produce clean scalar columns).
 
+### A single record → a 1-row DataFrame
+
+No DataFrame library or wrapping needed on the input side at all -- useful for
+turning a single API response or log line straight into a table row:
+
 ```python
 import json_tools_rs as jt
 
 tools = jt.JSONTools().flatten()
 
-# A single dict -> a 1-row DataFrame
 df = tools.execute({"user": {"name": "Alice", "age": 30}}, normalise=True)
-
-# A list of (possibly differently-shaped) records -> an N-row DataFrame, unioning
-# keys in first-seen order and null-filling any row missing a given key -- same
-# behavior as the "Medium" example above, just without needing a DataFrame as input
-# in the first place.
-data = [{"a": 1, "b": {"x": "hi"}}, {"a": 2, "c": True}]
-df = tools.execute(data, normalise=True)
+print(df)
+#   user.name  user.age
+# 0     Alice        30
 ```
+
+### Heterogeneous records → union + null-fill
+
+A list of records that don't all share the same keys gets unioned into one
+consistent set of columns, in first-seen order, with `None`/null filling any row
+that's missing a given key -- the same union/null-fill behavior the "Medium"
+example above shows for an existing DataFrame, just starting from plain
+dicts instead:
+
+```python
+import json_tools_rs as jt
+
+tools = jt.JSONTools().flatten()
+data = [
+    {"a": 1, "b": {"x": "hi"}},
+    {"a": 2, "c": True},
+]
+df = tools.execute(data, normalise=True)
+print(df)
+#    a   b.x     c
+# 0  1    hi  None
+# 1  2  None  True
+```
+
+### Choosing the target library
 
 Pass `target` to pick the library explicitly, or omit it to auto-resolve: an input
 that's already a live DataFrame/Series keeps that backend; otherwise pandas → polars
 → pyarrow is tried in order (first installed wins). `target="pyspark"` is never
-chosen automatically for bare JSON input -- it's only used when explicitly requested
-or when the input itself was already a PySpark object -- and requires an active
-`SparkSession` (auto-discovered via `SparkSession.getActiveSession()`):
+chosen automatically for bare JSON input -- see [below](#pyspark-a-real-distributed-dataframe-not-a-list).
+
+```python
+import json_tools_rs as jt
+
+tools = jt.JSONTools().flatten()
+data = [{"a": 1, "b": 2}, {"a": 3, "b": 4}]
+
+pandas_df = tools.execute(data, normalise=True, target="pandas")
+polars_df = tools.execute(data, normalise=True, target="polars")
+arrow_table = tools.execute(data, normalise=True, target="pyarrow")
+
+print(type(pandas_df), type(polars_df), type(arrow_table))
+# <class 'pandas.core.frame.DataFrame'> <class 'polars.dataframe.frame.DataFrame'> <class 'pyarrow.lib.Table'>
+```
+
+`target=None`'s auto-resolution also applies when the input is already a live
+DataFrame/Series -- useful for re-normalising into a *different* backend than the
+one you started with, or for cleaning up something that isn't wide yet:
+
+```python
+import json_tools_rs as jt
+import pandas as pd
+
+tools = jt.JSONTools().flatten()
+pandas_df = pd.DataFrame([{"user": {"name": "Alice"}}, {"user": {"name": "Bob"}}])
+
+# target=None here would keep pandas (input's own backend); pass target= to convert
+polars_df = tools.execute(pandas_df, normalise=True, target="polars")
+print(type(polars_df))  # <class 'polars.dataframe.frame.DataFrame'>
+```
+
+### Composing with the rest of the builder pipeline
+
+`normalise` is just the reconstruction step -- every other builder feature still
+runs first, exactly as it would for plain `.execute()`:
+
+```python
+import json_tools_rs as jt
+
+tools = (
+    jt.JSONTools()
+    .flatten()
+    .separator("::")
+    .remove_nulls(True)
+    .key_replacement("r'^admin_'", "")
+    .auto_convert_types(True)
+)
+
+data = [
+    {"admin_name": "Jane", "admin_status": None, "count": "42"},
+    {"admin_name": "Bob", "count": "7"},
+]
+df = tools.execute(data, normalise=True, target="pandas")
+print(df)
+#    name  count
+# 0  Jane     42
+# 1   Bob      7
+```
+
+### PySpark: a real distributed DataFrame, not a list
+
+`target="pyspark"` requires an active `SparkSession` (auto-discovered via
+`SparkSession.getActiveSession()`) and is never chosen automatically for bare
+JSON input -- only via an explicit `target="pyspark"`, or when the input itself
+was already a live PySpark object:
 
 ```python
 import json_tools_rs as jt
@@ -137,13 +225,51 @@ tools = jt.JSONTools().flatten()
 data = [{"user": {"name": "Alice", "age": 30}}, {"user": {"name": "Bob", "age": 25}}]
 
 spark_df = tools.execute(data, normalise=True, target="pyspark")
-print(type(spark_df))  # <class 'pyspark.sql.dataframe.DataFrame'>
+from pyspark.sql import DataFrame as SparkDataFrame
+print(isinstance(spark_df, SparkDataFrame))  # True -- a real, distributed DataFrame
+spark_df.show()
+# +---------+--------+
+# |user.name|user.age|
+# +---------+--------+
+# |    Alice|      30|
+# |      Bob|      25|
+# +---------+--------+
 ```
 
 Under the hood, the `pyspark` target reuses the exact same pandas reconstruction as
-`target="pandas"`, then hands that DataFrame to Spark's own Arrow-optimized
-`SparkSession.createDataFrame(pandas.DataFrame)` bridge -- see the note earlier on
-this page for what that does and doesn't distribute.
+`target="pandas"`, then hands that DataFrame -- plus an explicit `StructType`
+schema computed from the data -- to Spark's own Arrow-optimized
+`SparkSession.createDataFrame(pandas.DataFrame, schema)` bridge, rather than
+letting Spark infer the schema itself. This isn't just style: schema inference
+from a pandas DataFrame is unreliable specifically on the non-Arrow fallback path
+Spark silently takes when pyarrow isn't installed (pyspark does not depend on
+pyarrow) -- an explicit schema sidesteps that entirely. See the note earlier on
+this page for what this bridge does and doesn't distribute (the reconstruction,
+not the flatten computation itself).
+
+### What happens without `.flatten()` mode
+
+`normalise=True` needs `.flatten()` mode specifically -- `.unflatten()`, `.normal()`,
+or no mode set all raise a clear error rather than silently producing columns full
+of nested objects:
+
+```python
+import json_tools_rs as jt
+
+tools = jt.JSONTools().unflatten()
+tools.execute({"a.b": 1}, normalise=True)
+# json_tools_rs.JsonToolsError: normalise=True requires .flatten() mode -- unflattened/nested
+# JSON can't produce clean scalar columns for a wide DataFrame
+```
+
+`target` is only meaningful alongside `normalise=True` -- setting it without also
+setting `normalise=True` is rejected too, rather than silently ignored:
+
+```python
+tools = jt.JSONTools().flatten()
+tools.execute({"a": 1}, target="pandas")  # normalise=True missing
+# json_tools_rs.JsonToolsError: target is only valid when normalise=True
+```
 
 ## How It Works
 

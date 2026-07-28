@@ -91,6 +91,33 @@ print(type(result))  # <class 'pandas.core.frame.DataFrame'>
 # Also works with Polars, PyArrow Tables, and PySpark DataFrames
 ```
 
+## Normalise: Always Get a DataFrame
+
+Sometimes you don't have a DataFrame to start with -- just a dict, a string, or a
+list of records -- but you still want a wide table back. `normalise=True` does
+that regardless of input shape, with `target` picking the library (or auto-resolving
+if omitted):
+
+```python
+import json_tools_rs as jt
+
+tools = jt.JSONTools().flatten()
+
+# A bare dict -> a 1-row DataFrame, no DataFrame input required
+df = tools.execute({"user": {"name": "Alice", "age": 30}}, normalise=True)
+print(df)
+#   user.name  user.age
+# 0     Alice        30
+
+# A list of differently-shaped records -> unioned, null-filled columns
+data = [{"a": 1, "b": {"x": "hi"}}, {"a": 2, "c": True}]
+df = tools.execute(data, normalise=True, target="polars")
+```
+
+See [DataFrame & Series Support](../guide/dataframe-support.md#normalise-always-get-a-wide-dataframe)
+for the full picture, including composing with the rest of the builder pipeline
+and genuine PySpark DataFrame output via `target="pyspark"`.
+
 ## Error Handling
 
 ```python
