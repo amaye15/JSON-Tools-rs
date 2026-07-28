@@ -349,7 +349,7 @@ v0.9.2, ships automatically on tagged releases):
 <dependency>
   <groupId>io.github.amaye15</groupId>
   <artifactId>json-tools-rs-spark</artifactId>
-  <version>0.9.11</version>
+  <version>0.9.12</version>
 </dependency>
 ```
 
@@ -434,7 +434,11 @@ Dual-licensed under either [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), a
 
 ## Changelog
 
-### v0.9.11 (Current)
+### v0.9.12 (Current)
+
+* **Fix**: `execute(df)` in `.flatten()` mode now auto-expands DataFrame columns holding JSON *strings*, not just columns already typed as dicts/structs ([#30](https://github.com/amaye15/JSON-Tools-rs/issues/30)). **Behavior change:** a DataFrame with a JSON-string column now produces more/differently-shaped output columns in flatten mode than before; `.unflatten()`/`.normal()` mode are unaffected.
+
+### v0.9.11
 
 * **Fix**: `execute(..., normalise=True, target="pyspark")` could silently corrupt an all-`None` column on Spark's non-Arrow fallback path (taken automatically when pyarrow isn't installed, which pyspark does not depend on) -- a missing value could serialize as the literal string `"<NA>"` instead of a real null. Fixed by computing an explicit `StructType` schema from the data (instead of relying on Spark to infer it) and using plain Python `None` instead of pandas's nullable extension type, verified correct with and without pyarrow installed.
 
