@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.11] - 2026-07-28
+
+### Fixed
+- **`execute(..., normalise=True, target="pyspark")` could silently corrupt an
+  all-`None` column.** Schema was previously left for Spark to infer from the
+  intermediate pandas DataFrame; confirmed empirically that inference is
+  unreliable specifically on the non-Arrow fallback path Spark silently takes
+  when pyarrow isn't installed (a real, reachable configuration -- pyspark
+  does not depend on pyarrow). A missing value could serialize as the literal
+  string `"<NA>"` instead of a real null (from pandas's nullable `"string"`
+  dtype's `pd.NA` sentinel), and separately, an all-`None` column could infer
+  as `StructType([])` (empty struct) instead of a null string column. Fixed
+  by computing an explicit `pyspark.sql.types.StructType` schema from the
+  data and using plain Python `None` instead of the nullable extension type,
+  verified correct on both the Arrow and non-Arrow paths, with and without
+  pyarrow installed. This also allowed removing the all-`None`-column special
+  casing previously present in the pandas/polars/pyarrow reconstructors:
+  none of those three actually need it (each has its own harmless default
+  for an all-`None` column), so it's now scoped only to where it's actually
+  needed.
+
 ## [0.9.10] - 2026-07-28
 
 ### Fixed

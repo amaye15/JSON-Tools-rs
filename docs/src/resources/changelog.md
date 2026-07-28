@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## v0.9.11 (2026-07-28)
+
+### Fixed
+- **`normalise(target="pyspark")` could silently corrupt an all-`None` column** on Spark's non-Arrow fallback path (taken when pyarrow isn't installed) -- a missing value could serialize as the literal string `"<NA>"` instead of a real null. Fixed by passing an explicit schema to `createDataFrame` instead of relying on Spark to infer it.
+
+See the repository's [CHANGELOG.md](https://github.com/amaye15/json-tools-rs/blob/master/CHANGELOG.md) for the full, itemized list.
+
 ## v0.9.10 (2026-07-28)
 
 ### Fixed

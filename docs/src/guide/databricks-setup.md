@@ -39,7 +39,7 @@ RETURNS STRING
 LANGUAGE JAVA
 DETERMINISTIC
 ENVIRONMENT (
-  java_dependencies = '["/Volumes/my_catalog/my_schema/jars/json-tools-rs-spark-0.9.10.jar"]',
+  java_dependencies = '["/Volumes/my_catalog/my_schema/jars/json-tools-rs-spark-0.9.11.jar"]',
   environment_version = '4')
 HANDLER 'io.github.amaye15.jsontoolsrs.SomeHandler.flatten';
 ```
