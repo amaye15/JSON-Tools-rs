@@ -15,8 +15,6 @@ use pyo3::sync::PyOnceLock;
 use pyo3::types::{PyBytes, PyDict, PyList, PyModule, PyString};
 
 #[cfg(feature = "python")]
-use std::collections::HashSet;
-#[cfg(feature = "python")]
 use std::mem;
 #[cfg(feature = "python")]
 use std::sync::Mutex;
@@ -1984,18 +1982,17 @@ fn require_active_spark_session(py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
 /// Flattened rows reshaped into columns for `normalise=True`, keyed by
 /// first-seen field order, with every column's length equal to the row count
 /// (a row missing a given key contributes `None` for it).
+///
+/// Values are left as plain `None` for missing cells -- pandas/polars/pyarrow
+/// all handle an all-`None` column on their own without crashing (`object`,
+/// `Null`, and `null`-typed respectively; confirmed empirically). PySpark is
+/// the one target that needs special handling, done entirely within
+/// `reconstruct_pyspark_normalise` via an explicit schema -- see its doc
+/// comment for why.
 #[cfg(feature = "python")]
 struct NormaliseColumns<'py> {
     /// Column name -> per-row values, in first-seen key order.
     columns: IndexMap<String, Vec<Bound<'py, PyAny>>>,
-    /// Names of columns whose every value is `None`. Left as plain `None`
-    /// lists, these convert to an ambiguous type (pandas `object`, pyarrow/Spark
-    /// `null`) that a `pandas -> pyarrow -> Spark` Arrow conversion can choke on
-    /// (confirmed empirically: an all-`None` `object`-dtype pandas column
-    /// converts to Arrow's `null` type via `pyarrow.Table.from_pandas`, which
-    /// PySpark's schema conversion does not accept) -- reconstructors give these
-    /// an explicit string/utf8 type instead, uniformly across all four targets.
-    all_none_columns: HashSet<String>,
 }
 
 /// Parse each processed (flattened) JSON string into a row, union every row's
@@ -2034,18 +2031,13 @@ fn union_and_columnarize<'py>(
 
     let mut columns: IndexMap<String, Vec<Bound<'py, PyAny>>> =
         IndexMap::with_capacity(key_order.len());
-    let mut all_none_columns = HashSet::new();
 
     for key in &key_order {
         let mut col: Vec<Bound<'py, PyAny>> = Vec::with_capacity(n_rows);
-        let mut all_none = true;
         let mut any_list = false;
         for row in &rows {
             let value = match row.get_item(key)? {
                 Some(v) => {
-                    if !v.is_none() {
-                        all_none = false;
-                    }
                     if v.is_instance_of::<PyList>() {
                         any_list = true;
                     }
@@ -2071,16 +2063,10 @@ fn union_and_columnarize<'py>(
                 }
             }
         }
-        if all_none {
-            all_none_columns.insert(key.clone());
-        }
         columns.insert(key.clone(), col);
     }
 
-    Ok(NormaliseColumns {
-        columns,
-        all_none_columns,
-    })
+    Ok(NormaliseColumns { columns })
 }
 
 /// Reconstruct a pandas DataFrame from unioned/null-filled columns. Only called
@@ -2093,15 +2079,7 @@ fn reconstruct_pandas_normalise(
     let pandas = py.import("pandas")?;
     let data = PyDict::new(py);
     for (key, values) in &cols.columns {
-        let value_list = PyList::new(py, values.iter().cloned())?;
-        if cols.all_none_columns.contains(key) {
-            let kwargs = PyDict::new(py);
-            kwargs.set_item("dtype", "string")?;
-            let typed = pandas.call_method("array", (value_list,), Some(&kwargs))?;
-            data.set_item(key, typed)?;
-        } else {
-            data.set_item(key, value_list)?;
-        }
+        data.set_item(key, PyList::new(py, values.iter().cloned())?)?;
     }
     let df = pandas.call_method1("DataFrame", (data,))?;
     Ok(df.unbind())
@@ -2115,17 +2093,9 @@ fn reconstruct_polars_normalise(
     cols: &NormaliseColumns<'_>,
 ) -> PyResult<Py<PyAny>> {
     let polars = py.import("polars")?;
-    let utf8_type = polars.getattr("Utf8")?;
     let data = PyDict::new(py);
     for (key, values) in &cols.columns {
-        let value_list = PyList::new(py, values.iter().cloned())?;
-        if cols.all_none_columns.contains(key) {
-            let series = polars.call_method1("Series", (value_list,))?;
-            let typed = series.call_method1("cast", (&utf8_type,))?;
-            data.set_item(key, typed)?;
-        } else {
-            data.set_item(key, value_list)?;
-        }
+        data.set_item(key, PyList::new(py, values.iter().cloned())?)?;
     }
     let df = polars.call_method1("DataFrame", (data,))?;
     Ok(df.unbind())
@@ -2141,16 +2111,7 @@ fn reconstruct_pyarrow_normalise(
     let pyarrow = py.import("pyarrow")?;
     let data = PyDict::new(py);
     for (key, values) in &cols.columns {
-        let value_list = PyList::new(py, values.iter().cloned())?;
-        if cols.all_none_columns.contains(key) {
-            let string_type = pyarrow.call_method0("string")?;
-            let kwargs = PyDict::new(py);
-            kwargs.set_item("type", string_type)?;
-            let typed = pyarrow.call_method("array", (value_list,), Some(&kwargs))?;
-            data.set_item(key, typed)?;
-        } else {
-            data.set_item(key, value_list)?;
-        }
+        data.set_item(key, PyList::new(py, values.iter().cloned())?)?;
     }
     let table = pyarrow
         .getattr("Table")?
@@ -2158,16 +2119,68 @@ fn reconstruct_pyarrow_normalise(
     Ok(table.unbind())
 }
 
+/// Infer a single column's PySpark type from its first non-`None` value
+/// (columns are already uniformly typed by this point -- see
+/// `union_and_columnarize`'s list-collision-uniformity handling -- except for
+/// genuinely mixed-type columns arising from different rows' same key holding
+/// different JSON leaf types across documents, which is a pre-existing,
+/// out-of-scope edge case shared with pandas/polars/pyarrow's own type
+/// inference). An all-`None` column (no non-`None` value found) defaults to
+/// `StringType`, matching the other three targets' own harmless defaults for
+/// the same case (pandas `object`, polars `Null`, pyarrow `null`).
+#[cfg(feature = "python")]
+fn infer_spark_type<'py>(
+    types_mod: &Bound<'py, PyModule>,
+    values: &[Bound<'py, PyAny>],
+) -> PyResult<Bound<'py, PyAny>> {
+    for v in values {
+        if v.is_none() {
+            continue;
+        }
+        // bool before int: Python's bool is an int subclass.
+        if v.is_instance_of::<pyo3::types::PyBool>() {
+            return types_mod.getattr("BooleanType")?.call0();
+        }
+        if v.is_instance_of::<pyo3::types::PyInt>() {
+            return types_mod.getattr("LongType")?.call0();
+        }
+        if v.is_instance_of::<pyo3::types::PyFloat>() {
+            return types_mod.getattr("DoubleType")?.call0();
+        }
+        if v.is_instance_of::<PyList>() {
+            let element_type = types_mod.getattr("StringType")?.call0()?;
+            return types_mod.getattr("ArrayType")?.call1((element_type,));
+        }
+        // str, and anything else JSON can produce as a leaf -> StringType.
+        return types_mod.getattr("StringType")?.call0();
+    }
+    types_mod.getattr("StringType")?.call0()
+}
+
 /// Reconstruct a real PySpark DataFrame by reusing the pandas reconstruction
-/// above, then handing it to Spark's own Arrow-optimized
-/// `SparkSession.createDataFrame(pandas.DataFrame)` bridge (Arrow conversion on
-/// by default since Spark 3.0 via `spark.sql.execution.arrow.pyspark.enabled`).
-/// This is the idiomatic, "native" way to get driver-side tabular data into a
-/// real distributed DataFrame -- deliberately not a hand-rolled `StructType` +
-/// row-tuple pipeline: reusing the pandas path means pyspark's output is
-/// *provably* consistent with pandas's, by construction, and delegates type
-/// inference to two mature, independently-tested systems instead of a bespoke
-/// third one. Requires pandas importable (a safe assumption in any real PySpark
+/// above for the actual data, then handing it to Spark's own Arrow-optimized
+/// `SparkSession.createDataFrame(pandas.DataFrame, schema)` bridge (Arrow
+/// conversion on by default since Spark 3.0 via
+/// `spark.sql.execution.arrow.pyspark.enabled`) -- the idiomatic, "native" way
+/// to get driver-side tabular data into a real distributed DataFrame.
+///
+/// The schema is passed explicitly rather than left for Spark to infer, which
+/// is not optional polish: confirmed empirically that inference is unreliable
+/// on the *non*-Arrow fallback path Spark silently takes when pyarrow isn't
+/// installed (a real, reachable configuration -- pyspark does not depend on
+/// pyarrow). An all-`None` column corrupted to `StructType([])` (empty
+/// struct) instead of a null string column, and separately, pandas's nullable
+/// `"string"` dtype's `pd.NA` sentinel (an earlier version of this function
+/// used it for exactly this all-`None` case) serialized as the *literal
+/// string* `"<NA>"` on that same fallback path instead of a real null --
+/// silent data corruption, not a crash, so it would not have been obvious
+/// without checking actual cell values. Plain Python `None` plus an explicit
+/// schema was verified correct on both the Arrow and non-Arrow paths, with
+/// and without pyarrow installed, for both all-`None` and mixed-value
+/// columns -- schema-driven construction sidesteps inference on either path
+/// entirely rather than depending on either one behaving correctly.
+///
+/// Requires pandas importable (a safe assumption in any real PySpark
 /// environment -- PySpark's own Arrow optimizations, and this project's
 /// `pandas_udf` docs example, already assume it).
 #[cfg(feature = "python")]
@@ -2176,8 +2189,9 @@ fn reconstruct_pyspark_normalise(
     spark: &Bound<'_, PyAny>,
     cols: &NormaliseColumns<'_>,
 ) -> PyResult<Py<PyAny>> {
+    let types_mod = py.import("pyspark.sql.types")?;
+
     if cols.columns.is_empty() {
-        let types_mod = py.import("pyspark.sql.types")?;
         let empty_schema = types_mod.getattr("StructType")?.call0()?;
         let empty_rows: Vec<Py<PyAny>> = Vec::new();
         let df = spark.call_method1("createDataFrame", (empty_rows, empty_schema))?;
@@ -2191,8 +2205,17 @@ fn reconstruct_pyspark_normalise(
              createDataFrame() bridge",
         )
     })?;
+
+    let struct_field_cls = types_mod.getattr("StructField")?;
+    let mut fields: Vec<Bound<'_, PyAny>> = Vec::with_capacity(cols.columns.len());
+    for (key, values) in &cols.columns {
+        let field_type = infer_spark_type(&types_mod, values)?;
+        fields.push(struct_field_cls.call1((key, field_type, true))?);
+    }
+    let schema = types_mod.getattr("StructType")?.call1((fields,))?;
+
     let pandas_df = reconstruct_pandas_normalise(py, cols)?;
-    let df = spark.call_method1("createDataFrame", (pandas_df,))?;
+    let df = spark.call_method1("createDataFrame", (pandas_df, schema))?;
     Ok(df.unbind())
 }
 

@@ -4633,7 +4633,11 @@ class TestNormalise:
         tools = json_tools_rs.JSONTools().flatten()
         data = [{"a": 1, "b": None}, {"a": 2, "b": None}]
         df = tools.execute(data, normalise=True, target="polars")
-        assert df["b"].dtype == self.pl.Utf8
+        # polars's own harmless default for an all-None column (Null dtype) --
+        # no explicit typing needed/attempted here, unlike the pyspark target,
+        # which has a real reason to force an explicit schema (see
+        # reconstruct_pyspark_normalise's doc comment).
+        assert df["b"].dtype == self.pl.Null
         assert df["b"].is_null().all()
 
     def test_polars_key_collision_mixed_list_scalar_columns(self):
@@ -4677,7 +4681,12 @@ class TestNormalise:
         tools = json_tools_rs.JSONTools().flatten()
         data = [{"a": 1, "b": None}, {"a": 2, "b": None}]
         table = tools.execute(data, normalise=True, target="pyarrow")
-        assert table.schema.field("b").type == self.pa.string()
+        # pyarrow's own harmless default for an all-None column (null type) --
+        # no explicit typing needed/attempted here; see the polars test above
+        # and reconstruct_pyspark_normalise's doc comment for why pyspark
+        # alone needs a real, explicit-schema fix instead.
+        assert table.schema.field("b").type == self.pa.null()
+        assert table.column("b").null_count == 2
 
     def test_pyarrow_key_collision_mixed_list_scalar_columns(self):
         if not self.has_pyarrow:
@@ -4738,7 +4747,11 @@ class TestNormalise:
         from pyspark.sql import DataFrame as SparkDataFrame
 
         assert isinstance(df, SparkDataFrame)
-        rows = df.orderBy("user.name").collect()
+        # Backtick-quoted: "user.name" is a literal flat column name (flatten's
+        # separator produced the dot), not Spark's dotted nested-field syntax --
+        # without backticks, Spark tries to resolve a `user` struct column
+        # containing a `name` field, which doesn't exist here.
+        rows = df.orderBy("`user.name`").collect()
         assert [r["user.name"] for r in rows] == ["Alice", "Bob"]
         assert [r["user.age"] for r in rows] == [30, 25]
 
@@ -4753,6 +4766,16 @@ class TestNormalise:
 
         assert isinstance(field.dataType, StringType)
         assert df.count() == 2
+        # Regression guard for a real corruption bug found in this exact
+        # scenario: on the non-Arrow fallback path Spark silently takes when
+        # pyarrow isn't installed, pandas's nullable "string" dtype's pd.NA
+        # sentinel (an earlier version of the Rust reconstruction used it for
+        # all-None columns) serialized as the *literal string* "<NA>" instead
+        # of a real null -- `isNull()`/`.count()` alone wouldn't have caught
+        # this, only checking the actual collected value does.
+        rows = df.collect()
+        assert all(r["b"] is None for r in rows)
+        assert df.filter(df.b.isNull()).count() == 2
 
     def test_pyspark_empty_input_produces_empty_dataframe(self):
         if not self.has_pyspark:

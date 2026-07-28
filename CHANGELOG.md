@@ -43,15 +43,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   dicts (see the "Supported Libraries" caveat above and in
   `docs/src/guide/dataframe-support.md`), by reusing the pandas reconstruction
   path and handing it to Spark's own Arrow-optimized
-  `SparkSession.createDataFrame(pandas.DataFrame)` bridge rather than a
-  hand-rolled schema-inference pipeline. Target resolution: an explicit
-  `target` wins; otherwise a live DataFrame/Series input keeps its own
-  backend; otherwise pandas → polars → pyarrow is tried in order (pyspark is
-  never auto-selected for bare JSON input). Column union/null-fill order and
-  an explicit string type for all-`None` columns are handled uniformly across
-  all four targets, and a key-collision column that's list-valued in only
-  some rows (via `handle_key_collision(True)`) is now made uniformly
-  list-valued rather than crashing pyarrow/polars on the mixed types.
+  `SparkSession.createDataFrame(pandas.DataFrame, schema)` bridge. The schema
+  is passed explicitly rather than left for Spark to infer: confirmed
+  empirically that inference is unreliable on the non-Arrow fallback path
+  Spark silently takes when pyarrow isn't installed (a real, reachable
+  configuration), including a case where a missing value serialized as the
+  literal string `"<NA>"` instead of a real null. Target resolution: an
+  explicit `target` wins; otherwise a live DataFrame/Series input keeps its
+  own backend; otherwise pandas → polars → pyarrow is tried in order (pyspark
+  is never auto-selected for bare JSON input). Column union/null-fill order is
+  handled uniformly across all four targets, and a key-collision column
+  that's list-valued in only some rows (via `handle_key_collision(True)`) is
+  now made uniformly list-valued rather than crashing pyarrow/polars on the
+  mixed types.
 
 ## [0.9.8] - 2026-07-26
 
