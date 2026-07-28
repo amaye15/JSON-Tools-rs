@@ -680,6 +680,135 @@ fn dataframe_to_json_strings(
     }
 }
 
+/// Rows sampled to decide whether a column holds JSON-string values worth
+/// auto-expanding -- bounded regardless of DataFrame size, so detection stays
+/// cheap. A column that's null (or otherwise never a string) in every sampled
+/// row won't be detected -- a safe fallback (stays a plain column, not a
+/// crash), not a guarantee of detecting every genuinely-JSON column.
+#[cfg(feature = "python")]
+const JSON_COLUMN_DETECTION_SAMPLE_SIZE: usize = 20;
+
+/// Detect top-level keys, across a sample of row-JSON strings, that hold a JSON
+/// *string* value which itself parses as a JSON object or array -- not any
+/// scalar, since a string that happens to parse as a bare number/bool/null
+/// isn't a column-expansion candidate. Array is included deliberately: a
+/// JSON-string-encoded array should expand into indexed sub-columns the same
+/// way an already-list-typed cell does today. A key must parse successfully in
+/// *every* sampled row where it appears as a string -- conservative: any
+/// failure in the sample disqualifies the whole column from auto-expansion, no
+/// partial/mixed result.
+#[cfg(feature = "python")]
+fn detect_json_string_columns(rows: &[String]) -> Vec<String> {
+    let sample_size = rows.len().min(JSON_COLUMN_DETECTION_SAMPLE_SIZE);
+    let mut seen: IndexMap<String, usize> = IndexMap::new();
+    let mut parsed_ok: IndexMap<String, usize> = IndexMap::new();
+
+    for row in &rows[..sample_size] {
+        let Ok(serde_json::Value::Object(obj)) = crate::json_parser::parse_json(row) else {
+            continue;
+        };
+        for (key, value) in &obj {
+            let serde_json::Value::String(s) = value else {
+                continue;
+            };
+            *seen.entry(key.clone()).or_insert(0) += 1;
+            if matches!(
+                crate::json_parser::parse_json(s),
+                Ok(serde_json::Value::Object(_)) | Ok(serde_json::Value::Array(_))
+            ) {
+                *parsed_ok.entry(key.clone()).or_insert(0) += 1;
+            }
+        }
+    }
+
+    seen.into_iter()
+        .filter(|(key, count)| parsed_ok.get(key).copied().unwrap_or(0) == *count)
+        .map(|(key, _)| key)
+        .collect()
+}
+
+/// Splice `target_keys`' string values into parsed nested JSON within a single
+/// row. Returns `None` if the row doesn't parse as a JSON object at all, or if
+/// none of `target_keys` actually needed splicing in this row -- both cases
+/// left unchanged by the caller (cheaper than a no-op reserialize). Increments
+/// `failure_counts[key]` for any target key present as a string in this row
+/// whose value fails to re-parse as an object/array here (the sample that
+/// drove detection can still be wrong for a specific later row).
+#[cfg(feature = "python")]
+fn splice_row(
+    row: &str,
+    target_keys: &[String],
+    failure_counts: &mut IndexMap<String, usize>,
+) -> Option<String> {
+    let serde_json::Value::Object(mut obj) = crate::json_parser::parse_json(row).ok()? else {
+        return None;
+    };
+    let mut changed = false;
+    for key in target_keys {
+        if let Some(serde_json::Value::String(s)) = obj.get(key) {
+            match crate::json_parser::parse_json(s) {
+                Ok(parsed @ (serde_json::Value::Object(_) | serde_json::Value::Array(_))) => {
+                    obj.insert(key.clone(), parsed);
+                    changed = true;
+                }
+                _ => {
+                    *failure_counts.entry(key.clone()).or_insert(0) += 1;
+                }
+            }
+        }
+    }
+    if changed {
+        crate::json_parser::to_string(&obj).ok()
+    } else {
+        None
+    }
+}
+
+/// Apply `detect_json_string_columns`, then splice each detected key's per-row
+/// string value into genuine nested JSON across all rows -- so `flatten()`
+/// expands it exactly the same way an already-dict/struct-typed column does
+/// today, with no Python-level parse or dict-object-graph construction (the
+/// overhead github.com/amaye15/JSON-Tools-rs/issues/30 reports paying via a
+/// manual `orjson.loads()` workaround). A row that fails to re-parse despite
+/// its column being detected keeps its original string value for that row only
+/// (best-effort, not a hard error -- this is heuristic auto-detection, not a
+/// guarantee); if any row failed for a given column, emits one aggregated
+/// Python warning per column naming the failure count, so this stays loud
+/// instead of silently producing a column that's structurally different for
+/// just that one row. Rows with none of the detected columns present pass
+/// through completely unchanged (zero parse/reserialize cost) -- the common
+/// case for a DataFrame with no JSON-string columns at all.
+#[cfg(feature = "python")]
+fn expand_json_string_columns(py: Python<'_>, rows: Vec<String>) -> PyResult<Vec<String>> {
+    let target_keys = detect_json_string_columns(&rows);
+    if target_keys.is_empty() {
+        return Ok(rows);
+    }
+
+    let mut failure_counts: IndexMap<String, usize> = IndexMap::new();
+    let mut out = Vec::with_capacity(rows.len());
+    for row in rows {
+        let spliced = splice_row(&row, &target_keys, &mut failure_counts);
+        out.push(spliced.unwrap_or(row));
+    }
+
+    if !failure_counts.is_empty() {
+        let warnings = py.import("warnings")?;
+        for (key, count) in &failure_counts {
+            warnings.call_method1(
+                "warn",
+                (format!(
+                    "JSON-string column expansion: {count} row(s) in column \"{key}\" looked \
+                     like JSON in a sample but failed to parse and were left as their \
+                     original string value",
+                ),),
+            )?;
+        }
+    }
+
+    Ok(out)
+}
+
 /// Convert a Python list of dicts to per-item JSON strings via Python's own
 /// `json` module (see `py_dumps`'s doc comment).
 #[cfg(feature = "python")]
@@ -1865,7 +1994,11 @@ fn extract_normalise_json_strings(
     if let Some(structure) = detect_data_structure(json_input)? {
         let json_strings = match structure {
             DataStructureType::DataFrame(df_type) => {
-                dataframe_to_json_strings(json_input, df_type)?
+                let rows = dataframe_to_json_strings(json_input, df_type)?;
+                // Unconditional here (no is_flatten_mode() check needed): the only
+                // caller, execute_normalise, already hard-requires flatten mode
+                // before reaching this function at all -- see its doc comment.
+                expand_json_string_columns(py, rows)?
             }
             DataStructureType::Series(series_type) => {
                 let list = series_to_list(json_input, series_type)?;
@@ -2236,7 +2369,18 @@ impl PyJSONTools {
         // Step 1: Convert DataFrame directly to per-row JSON strings (native
         // to_json/write_ndjson where available -- see `dataframe_to_json_strings`'s
         // doc comment)
-        let json_strings = dataframe_to_json_strings(df, df_type)?;
+        let mut json_strings = dataframe_to_json_strings(df, df_type)?;
+
+        // Step 1.5: In flatten mode only, auto-expand any column holding JSON
+        // *strings* (not already dicts/structs) the same way a dict-typed column
+        // already expands -- see `expand_json_string_columns`'s doc comment
+        // (github.com/amaye15/JSON-Tools-rs/issues/30). Gated on flatten mode
+        // specifically: `dataframe_to_json_strings`'s own contract is "native
+        // per-row JSON text, unmodified," so `.normal()`/`.unflatten()` DataFrame
+        // processing is intentionally untouched by this.
+        if lock_config(&self.inner)?.is_flatten_mode() {
+            json_strings = expand_json_string_columns(py, json_strings)?;
+        }
 
         // Step 2: Process through existing pipeline (releases GIL)
         let result = py

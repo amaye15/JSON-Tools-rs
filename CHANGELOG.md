@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.12] - 2026-07-29
+
+### Fixed
+- **`execute(df)` in `.flatten()` mode now auto-expands DataFrame columns
+  holding JSON *strings*, not just columns already typed as dicts/structs.**
+  ([#30](https://github.com/amaye15/JSON-Tools-rs/issues/30)) Previously, a
+  column already holding a Python dict/struct serialized as genuine nested JSON
+  within each row and flattened correctly; a column holding a JSON *string*
+  serialized as an escaped string value instead, which `.flatten()` correctly
+  never re-parses as JSON (not its contract) -- so it stayed an opaque,
+  unexpanded string. Detection (bounded to the first 20 rows) requires a
+  column's sampled string values to *all* parse as a JSON object or array
+  (never any bare scalar); a detected column's row that fails to re-parse later
+  keeps its original string value and triggers an aggregated `warnings.warn(...)`
+  naming the column and failure count, rather than silently producing a
+  structurally inconsistent row. Implemented as a backend-agnostic Rust-side
+  splice over the row-JSON text already produced for all four DataFrame
+  backends (pandas/polars/pyarrow/PySpark), avoiding the Python-level
+  `orjson.loads()`-per-row + dict-object-graph-construction overhead the
+  issue's own workaround was paying. Required enabling `serde_json`'s
+  `preserve_order` feature so spliced rows keep their original key order
+  instead of being silently alphabetized.
+  **Behavior change:** any DataFrame with a column that happens to hold
+  JSON-object/array-shaped strings will now produce more (differently-shaped)
+  output columns from `execute(df)` in `.flatten()` mode than before -- scoped
+  specifically to flatten mode; `.unflatten()`/`.normal()` DataFrame processing
+  is unaffected.
+
 ## [0.9.11] - 2026-07-28
 
 ### Fixed

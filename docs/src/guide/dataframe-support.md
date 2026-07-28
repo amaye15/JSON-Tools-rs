@@ -78,10 +78,11 @@ print(result.columns)  # ['user.name', 'user.age']
 ```
 
 > A column holding pre-serialized JSON *strings* (e.g. `pl.DataFrame({"data": ['{"a":
-> 1}', ...]})`) is exported by `write_ndjson` as `{"data": "{\"a\": 1}"}` per row --
-> the nested structure is trapped inside a string value, so flattening it is a no-op.
-> To flatten nested data with polars, use struct-typed columns (as above), which
-> serialize as real nested JSON.
+> 1}', ...]})`) also flattens correctly in `.flatten()` mode -- `execute()`
+> auto-detects columns holding JSON strings and expands them the same way a
+> struct-typed column already does, so `data` becomes `data.a` here too. See
+> [Auto-Expanding JSON-String Columns](#auto-expanding-json-string-columns) below
+> for the detection rules and caveats.
 
 ### Pandas Series
 
@@ -93,6 +94,74 @@ series = pd.Series(['{"a": {"b": 1}}', '{"c": {"d": 2}}'])
 result = jt.JSONTools().flatten().execute(series)
 print(type(result))  # <class 'pandas.core.series.Series'>
 ```
+
+## Auto-Expanding JSON-String Columns
+
+A DataFrame column that's already a dict/struct expands into flattened columns
+automatically -- that's just `.flatten()` finding real nested JSON in the row. A
+column holding **pre-serialized JSON strings** (common with data loaded from a
+JSON/JSONL file, a database `TEXT`/`JSON` column, or an upstream system that
+already serialized a payload) used to stay an opaque string instead, since a
+string *value* isn't something `.flatten()` re-parses -- that's not its contract.
+`execute()` on a DataFrame in `.flatten()` mode now detects columns holding JSON
+strings and expands them the same way, so it "just works" without a manual
+pre-parsing step
+(see [issue #30](https://github.com/amaye15/JSON-Tools-rs/issues/30)):
+
+```python
+import json_tools_rs as jt
+import pandas as pd
+
+df = pd.DataFrame({
+    "id": [1, 2],
+    "payload": ['{"user": {"name": "Alice"}}', '{"user": {"name": "Bob"}}'],
+})
+
+result = jt.JSONTools().flatten().execute(df)
+print(result)
+#    id payload.user.name
+# 0   1             Alice
+# 1   2               Bob
+```
+
+This closes the gap the previous version of this page documented for the polars
+`write_ndjson` case above, and applies uniformly to pandas, polars, pyarrow, and
+PySpark (PySpark DataFrames convert to pandas internally first, so they get this
+for free too).
+
+### Detection rules
+
+- Runs **only in `.flatten()` mode** -- `.unflatten()` and `.normal()` DataFrame
+  processing are unaffected; a JSON-string column stays exactly as-is in those
+  modes.
+- A column is a candidate only if its values, when parsed, are JSON **objects or
+  arrays** -- not any scalar. A column of plain strings that happen to parse as a
+  bare number/bool/null is never touched, and neither is a column of ordinary text:
+
+  ```python
+  df = pd.DataFrame({"id": [1], "notes": ["just some text"]})
+  result = jt.JSONTools().flatten().execute(df)
+  print(result)
+  #    id           notes
+  # 0   1  just some text
+  ```
+- Detection samples the first 20 rows: a column must parse successfully as JSON in
+  *every* sampled row where it holds a string value, or the whole column is left
+  untouched (conservative -- no partial/mixed expansion). A column that's `None`
+  in every one of the first 20 rows won't be detected even if later rows hold real
+  JSON -- a known limitation of sample-based detection, not a crash.
+- A JSON-string-encoded **array** expands into indexed sub-columns
+  (`col.0`, `col.1`, ...) the same way an already-list-typed column does today --
+  including for a large array (e.g. a stringified embedding vector with hundreds of
+  elements). There's currently no cap on this (unlike `.unflatten()`'s
+  `max_array_index`, which guards against reconstructing a huge sparse array from a
+  numeric key, not against a real array this large) -- a very wide array column
+  will produce that many DataFrame columns.
+- A row that fails to re-parse despite its column being detected (malformed JSON
+  in just that one row, past the sample) keeps its original string value for that
+  row only, and a Python warning is emitted naming the column and how many rows
+  were affected -- so this stays visible instead of silently leaving that row's
+  data in a different shape than the rest of the column.
 
 ## Normalise: Always Get a Wide DataFrame
 
@@ -275,8 +344,9 @@ tools.execute({"a": 1}, target="pandas")  # normalise=True missing
 
 1. **Detection**: The library uses duck typing to detect DataFrame/Series objects (checks for `.to_dict()`, `.to_list()`, etc.)
 2. **Extraction**: Rows are extracted as JSON strings or dicts
-3. **Processing**: Each row is processed through the Rust engine (with automatic parallelism for large DataFrames)
-4. **Reconstruction**: Results are reconstructed into the original DataFrame/Series type using O(1) constructor calls (except PySpark DataFrames, which come back as a list of dicts unless `normalise=True` -- see the notes above)
+3. **JSON-string-column expansion** (`.flatten()` mode only): columns holding JSON strings are detected and spliced into genuine nested JSON in each row -- see [Auto-Expanding JSON-String Columns](#auto-expanding-json-string-columns) above
+4. **Processing**: Each row is processed through the Rust engine (with automatic parallelism for large DataFrames)
+5. **Reconstruction**: Results are reconstructed into the original DataFrame/Series type using O(1) constructor calls (except PySpark DataFrames, which come back as a list of dicts unless `normalise=True` -- see the notes above)
 
 ## All Features Apply
 

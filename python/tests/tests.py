@@ -4806,3 +4806,249 @@ class TestNormalise:
                 .appName("json_tools_rs_normalise_tests")
                 .getOrCreate()
             )
+
+
+class TestJsonStringColumnExpansion:
+    """Test auto-expansion of DataFrame columns holding JSON *strings* (not
+    already dicts/structs) in .flatten() mode -- see
+    github.com/amaye15/JSON-Tools-rs/issues/30. A dict/struct-typed column
+    already expanded before this fix; a JSON-string column previously stayed
+    an opaque, unexpanded string."""
+
+    @pytest.fixture(autouse=True)
+    def setup(self):
+        try:
+            import pandas as pd
+
+            self.pd = pd
+            self.has_pandas = True
+        except ImportError:
+            self.has_pandas = False
+
+        try:
+            import polars as pl
+
+            self.pl = pl
+            self.has_polars = True
+        except ImportError:
+            self.has_polars = False
+
+        try:
+            import pyarrow as pa
+
+            self.pa = pa
+            self.has_pyarrow = True
+        except ImportError:
+            self.has_pyarrow = False
+
+        try:
+            import pyspark  # noqa: F401
+            from pyspark.sql import SparkSession
+
+            self.spark = (
+                SparkSession.builder.master("local[2]")
+                .appName("json_tools_rs_json_column_tests")
+                .getOrCreate()
+            )
+            self.has_pyspark = True
+        except ImportError:
+            self.has_pyspark = False
+
+    # =========================================================================
+    # Basic expansion, per backend
+    # =========================================================================
+
+    def test_pandas_json_string_column_expands(self):
+        if not self.has_pandas:
+            pytest.skip("pandas not installed")
+        tools = json_tools_rs.JSONTools().flatten().separator("__")
+        df = self.pd.DataFrame(
+            {
+                "id": [1, 2],
+                "name": ["Alice", "Bob"],
+                "json_col": ['{"a": {"b": 1}}', '{"a": {"b": 2}}'],
+            }
+        )
+        result = tools.execute(df)
+        assert result.columns.tolist() == ["id", "name", "json_col__a__b"]
+        assert result["json_col__a__b"].tolist() == [1, 2]
+
+    def test_polars_json_string_column_expands(self):
+        if not self.has_polars:
+            pytest.skip("polars not installed")
+        tools = json_tools_rs.JSONTools().flatten()
+        df = self.pl.DataFrame(
+            {"id": [1, 2], "json_col": ['{"a": {"b": 1}}', '{"a": {"b": 2}}']}
+        )
+        result = tools.execute(df)
+        assert result.columns == ["id", "json_col.a.b"]
+
+    def test_pyarrow_json_string_column_expands(self):
+        if not self.has_pyarrow:
+            pytest.skip("pyarrow not installed")
+        tools = json_tools_rs.JSONTools().flatten()
+        table = self.pa.table(
+            {"id": [1, 2], "json_col": ['{"a": {"b": 1}}', '{"a": {"b": 2}}']}
+        )
+        result = tools.execute(table)
+        assert result.column_names == ["id", "json_col.a.b"]
+
+    # =========================================================================
+    # Detection correctness
+    # =========================================================================
+
+    def test_plain_string_column_not_expanded(self):
+        if not self.has_pandas:
+            pytest.skip("pandas not installed")
+        tools = json_tools_rs.JSONTools().flatten()
+        df = self.pd.DataFrame(
+            {"id": [1, 2], "notes": ["hello world", "just some text"]}
+        )
+        result = tools.execute(df)
+        assert result.columns.tolist() == ["id", "notes"]
+        assert result["notes"].tolist() == ["hello world", "just some text"]
+
+    def test_column_only_sometimes_json_not_expanded(self):
+        """A column where only some values look like JSON must not partially
+        expand -- conservative: any non-parsing string in the sample
+        disqualifies the whole column."""
+        if not self.has_pandas:
+            pytest.skip("pandas not installed")
+        tools = json_tools_rs.JSONTools().flatten()
+        df = self.pd.DataFrame(
+            {
+                "id": [1, 2, 3],
+                "mixed_col": ['{"a": 1}', "just plain text", '{"b": 2}'],
+            }
+        )
+        result = tools.execute(df)
+        assert result.columns.tolist() == ["id", "mixed_col"]
+
+    def test_json_string_column_with_nulls_still_expands(self):
+        if not self.has_pandas:
+            pytest.skip("pandas not installed")
+        tools = json_tools_rs.JSONTools().flatten()
+        df = self.pd.DataFrame(
+            {"id": [1, 2, 3], "json_col": ['{"a": 1}', None, '{"a": 3}']}
+        )
+        result = tools.execute(df)
+        assert "json_col.a" in result.columns.tolist()
+        assert result.loc[result["id"] == 1, "json_col.a"].iloc[0] == 1
+        assert result.loc[result["id"] == 3, "json_col.a"].iloc[0] == 3
+
+    def test_json_string_array_column_expands_into_indexed_columns(self):
+        """A JSON-string-encoded array expands into indexed sub-columns the
+        same way an already-list-typed column does today."""
+        if not self.has_pandas:
+            pytest.skip("pandas not installed")
+        tools = json_tools_rs.JSONTools().flatten()
+        df = self.pd.DataFrame({"id": [1, 2], "tags": ['["python", "rust"]', '["go"]']})
+        result = tools.execute(df)
+        assert "tags.0" in result.columns.tolist()
+        assert "tags.1" in result.columns.tolist()
+        assert result.loc[result["id"] == 1, "tags.0"].iloc[0] == "python"
+
+    def test_large_json_string_array_column_no_cap(self):
+        """Pins current behavior: flatten's array walk has no cap (unlike
+        unflatten's max_array_index DoS protection), so a large embedded
+        array explodes into that many columns. Not a regression target for
+        this fix -- documents the existing, accepted limitation explicitly."""
+        if not self.has_pandas:
+            pytest.skip("pandas not installed")
+        import json as json_module
+
+        tools = json_tools_rs.JSONTools().flatten()
+        big_array = json_module.dumps(list(range(150)))
+        df = self.pd.DataFrame({"id": [1], "vec": [big_array]})
+        result = tools.execute(df)
+        assert len(result.columns) == 151
+        assert "vec.0" in result.columns.tolist()
+        assert "vec.149" in result.columns.tolist()
+
+    def test_malformed_json_beyond_sample_keeps_original_and_warns(self):
+        """A column detected as JSON via its sample, but with one malformed
+        row further down, keeps that row's original string value (does not
+        crash or corrupt) and emits exactly one aggregated warning naming the
+        column and failure count."""
+        if not self.has_pandas:
+            pytest.skip("pandas not installed")
+        tools = json_tools_rs.JSONTools().flatten()
+        rows = [f'{{"a": {i}}}' for i in range(25)]
+        rows[22] = '{"a": broken'
+        df = self.pd.DataFrame({"id": range(25), "json_col": rows})
+
+        with pytest.warns(UserWarning, match="json_col"):
+            result = tools.execute(df)
+
+        assert "json_col.a" in result.columns.tolist()
+        bad_row = result.loc[result["id"] == 22]
+        assert bad_row["json_col"].iloc[0] == '{"a": broken'
+        assert self.pd.isna(bad_row["json_col.a"].iloc[0])
+
+    # =========================================================================
+    # Mode scoping (the wiring correction found during planning)
+    # =========================================================================
+
+    def test_normal_mode_json_string_column_untouched(self):
+        if not self.has_pandas:
+            pytest.skip("pandas not installed")
+        tools = json_tools_rs.JSONTools().normal()
+        df = self.pd.DataFrame({"id": [1], "json_col": ['{"a": 1}']})
+        result = tools.execute(df)
+        assert result.columns.tolist() == ["id", "json_col"]
+        assert result["json_col"].iloc[0] == '{"a": 1}'
+
+    def test_unflatten_mode_json_string_column_untouched(self):
+        if not self.has_pandas:
+            pytest.skip("pandas not installed")
+        tools = json_tools_rs.JSONTools().unflatten()
+        df = self.pd.DataFrame({"id": [1], "json_col": ['{"a": 1}']})
+        result = tools.execute(df)
+        assert result.columns.tolist() == ["id", "json_col"]
+        assert result["json_col"].iloc[0] == '{"a": 1}'
+
+    # =========================================================================
+    # Composition with existing features
+    # =========================================================================
+
+    def test_mixed_dict_and_json_string_columns_both_expand(self):
+        if not self.has_pandas:
+            pytest.skip("pandas not installed")
+        tools = json_tools_rs.JSONTools().flatten()
+        df = self.pd.DataFrame(
+            {
+                "id": [1, 2],
+                "dict_col": [{"x": 1}, {"x": 2}],
+                "json_col": ['{"y": 10}', '{"y": 20}'],
+            }
+        )
+        result = tools.execute(df)
+        assert result.columns.tolist() == ["id", "dict_col.x", "json_col.y"]
+
+    def test_json_string_column_with_normalise(self):
+        if not self.has_pandas:
+            pytest.skip("pandas not installed")
+        tools = json_tools_rs.JSONTools().flatten()
+        data = [
+            {"id": 1, "json_col": '{"a": {"b": 1}}'},
+            {"id": 2, "json_col": '{"a": {"b": 2}}'},
+        ]
+        result = tools.execute(self.pd.DataFrame(data), normalise=True, target="pandas")
+        assert "json_col.a.b" in result.columns.tolist()
+        assert result["json_col.a.b"].tolist() == [1, 2]
+
+    def test_pyspark_json_string_column_expands(self):
+        """The issue's own reported scenario: a PySpark DataFrame with a JSON
+        string column."""
+        if not self.has_pyspark:
+            pytest.skip("pyspark not installed")
+        tools = json_tools_rs.JSONTools().flatten().separator("__")
+        data = [
+            {"id": 1, "name": "Alice", "json_col": '{"a": {"b": 1}}'},
+            {"id": 2, "name": "Bob", "json_col": '{"a": {"b": 2}}'},
+        ]
+        spark_df = self.spark.createDataFrame(data)
+        result = tools.execute(spark_df)
+        assert isinstance(result, list)
+        assert result[0]["json_col__a__b"] == 1
+        assert result[1]["json_col__a__b"] == 2

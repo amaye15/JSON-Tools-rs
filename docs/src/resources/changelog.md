@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## v0.9.12 (2026-07-29)
+
+### Fixed
+- **`execute(df)` in `.flatten()` mode now auto-expands DataFrame columns holding JSON *strings*, not just columns already typed as dicts/structs** ([#30](https://github.com/amaye15/JSON-Tools-rs/issues/30)) -- see [Auto-Expanding JSON-String Columns](../guide/dataframe-support.md#auto-expanding-json-string-columns). **Behavior change:** a DataFrame with a JSON-string column now produces more/differently-shaped output columns in flatten mode than before; `.unflatten()`/`.normal()` mode are unaffected.
+
+See the repository's [CHANGELOG.md](https://github.com/amaye15/json-tools-rs/blob/master/CHANGELOG.md) for the full, itemized list.
+
 ## v0.9.11 (2026-07-28)
 
 ### Fixed

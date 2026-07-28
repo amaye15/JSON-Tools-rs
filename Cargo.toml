@@ -1,6 +1,6 @@
 [package]
 name = "json-tools-rs"
-version = "0.9.11"
+version = "0.9.12"
 edition = "2021"
 rust-version = "1.80"
 description = "A high-performance Rust library for advanced JSON manipulation with SIMD-accelerated parsing, Rayon parallelism, and Python bindings with DataFrame/Series support"
@@ -39,7 +39,7 @@ path = "src/main.rs"
 regex = "1.12.3"
 # JSON parsing: sonic-rs on 64-bit (fastest), simd-json on 32-bit (fallback)
 serde = { version = "1.0.228", features = ["rc", "derive"] }  # rc: Arc<T> serialization; derive: jvm feature's JvmConfig
-serde_json = "1.0.149"
+serde_json = { version = "1.0.149", features = ["preserve_order"] }  # preserve_order: JSON-string-column splicing (python.rs) needs row key order intact, not alphabetized -- backed by indexmap, already a direct dependency below
 pyo3 = { version = "0.29.0", features = ["extension-module"], optional = true }
 memchr = "2.8.0"  # SIMD-optimized byte searching
 smallvec = "1.15.1"  # Stack-allocated vectors for small buffers
