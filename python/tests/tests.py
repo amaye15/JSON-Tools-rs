@@ -5156,6 +5156,103 @@ class TestExecuteDataFrameTypeMatching:
     # TestNormalise.test_pyspark_target_no_active_session_errors.
 
 
+class TestPySparkMixedTypeColumnFallback:
+    """execute(spark_df) with auto_convert_types(True) must not crash when a
+    flattened column ends up holding genuinely mixed Python types across rows
+    (e.g. a JSON string "Smith" stays a str, but "123" in another row becomes
+    int 123) -- github.com/amaye15/JSON-Tools-rs/issues/32. Confirmed via
+    direct reproduction (with Arrow fallback explicitly disabled, matching
+    the reporter's Databricks Serverless environment) that this previously
+    raised `PySparkTypeError: Exception thrown when converting pandas.Series
+    (object) ... to Arrow Array` -- infer_spark_type picked a schema type
+    from only the column's first value, so a later, differently-typed value
+    in the same column broke Spark's Arrow bridge."""
+
+    @pytest.fixture(autouse=True)
+    def setup(self):
+        try:
+            import pyspark  # noqa: F401
+            from pyspark.sql import SparkSession
+
+            self.spark = (
+                SparkSession.builder.master("local[2]")
+                .appName("json_tools_rs_mixed_type_tests")
+                # Matches the reporter's environment: without this, Spark
+                # silently retries via a non-Arrow fallback and the bug never
+                # surfaces as a raised exception.
+                .config("spark.sql.execution.arrow.pyspark.fallback.enabled", "false")
+                .getOrCreate()
+            )
+            self.has_pyspark = True
+        except ImportError:
+            self.has_pyspark = False
+
+    def test_str_and_numeric_mix_falls_back_to_string_column(self):
+        if not self.has_pyspark:
+            pytest.skip("pyspark not installed")
+        from pyspark.sql import DataFrame as SparkDataFrame
+        from pyspark.sql import types as T
+
+        data = [
+            {"json": '{"env": {"idverification": {"lastname": "Smith"}}}'},
+            {"json": '{"env": {"idverification": {"lastname": "123"}}}'},
+        ]
+        spark_df = self.spark.createDataFrame(data)
+        tools = (
+            json_tools_rs.JSONTools().flatten().separator("__").auto_convert_types(True)
+        )
+        result = tools.execute(spark_df)  # must not raise
+        assert isinstance(result, SparkDataFrame)
+        col = "json__env__idverification__lastname"
+        assert result.schema[col].dataType == T.StringType()
+        values = {r[col] for r in result.collect()}
+        assert values == {"Smith", "123"}
+
+    def test_str_and_bool_mix_falls_back_to_string_column(self):
+        if not self.has_pyspark:
+            pytest.skip("pyspark not installed")
+        from pyspark.sql import types as T
+
+        data = [{"json": '{"flag": "maybe"}'}, {"json": '{"flag": "true"}'}]
+        spark_df = self.spark.createDataFrame(data)
+        tools = json_tools_rs.JSONTools().flatten().auto_convert_types(True)
+        result = tools.execute(spark_df)  # must not raise
+        assert result.schema["json.flag"].dataType == T.StringType()
+        # "true" was already auto-converted to the Python bool True before the
+        # mixed-type fallback stringified the whole column, so it comes back
+        # as Python's str(True) == "True", not the original JSON text "true".
+        values = {r["json.flag"] for r in result.collect()}
+        assert values == {"maybe", "True"}
+
+    def test_int_and_float_mix_promotes_to_double_not_string(self):
+        """A column mixing ints and floats is a genuinely different case:
+        pandas already promotes it to a uniform float64 column when the
+        DataFrame is built, so it should stay numeric (DoubleType), not fall
+        back to string like the str/bool/numeric mixes above."""
+        if not self.has_pyspark:
+            pytest.skip("pyspark not installed")
+        from pyspark.sql import types as T
+
+        data = [{"json": '{"score": "5"}'}, {"json": '{"score": "5.5"}'}]
+        spark_df = self.spark.createDataFrame(data)
+        tools = json_tools_rs.JSONTools().flatten().auto_convert_types(True)
+        result = tools.execute(spark_df)
+        assert result.schema["json.score"].dataType == T.DoubleType()
+        values = {r["json.score"] for r in result.collect()}
+        assert values == {5.0, 5.5}
+
+    def test_uniform_bool_column_still_boolean(self):
+        if not self.has_pyspark:
+            pytest.skip("pyspark not installed")
+        from pyspark.sql import types as T
+
+        data = [{"json": '{"active": "true"}'}, {"json": '{"active": "false"}'}]
+        spark_df = self.spark.createDataFrame(data)
+        tools = json_tools_rs.JSONTools().flatten().auto_convert_types(True)
+        result = tools.execute(spark_df)
+        assert result.schema["json.active"].dataType == T.BooleanType()
+
+
 class TestJsonStringColumnSpliceScale:
     """Larger-scale correctness coverage for the RawValue-based splice_row
     redesign (github.com/amaye15/JSON-Tools-rs/issues/31 performance fix) --

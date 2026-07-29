@@ -2255,6 +2255,50 @@ fn union_and_columnarize<'py>(
                     *cell = PyList::new(py, [cell.clone()])?.into_any();
                 }
             }
+        } else {
+            // `auto_convert_types` converts each value independently based on its
+            // own content (github.com/amaye15/JSON-Tools-rs/issues/32) -- the same
+            // key can hold a clean numeric string in one row ("123" -> int 123)
+            // and ordinary text in another ("Smith" -> stays str), producing a
+            // column with genuinely mixed Python types. pandas tolerates that as
+            // an `object`-dtype column, but the Arrow bridge PySpark reconstruction
+            // relies on does not: confirmed empirically, Spark's `createDataFrame`
+            // raises `PySparkTypeError: Exception thrown when converting
+            // pandas.Series (object) ... to Arrow Array` the moment a column mixes
+            // e.g. str and int. int/float mixes are left alone -- pandas already
+            // promotes those to a uniform float64 column, and `infer_spark_type`
+            // accounts for that -- but any other combination (str with bool/
+            // numeric, or bool with numeric) falls back to stringifying every
+            // value in the column, the same least-surprising fallback every other
+            // target already uses for a column it can't type consistently.
+            let mut has_bool = false;
+            let mut has_numeric = false;
+            let mut has_str = false;
+            for cell in col.iter() {
+                if cell.is_none() {
+                    continue;
+                }
+                if cell.is_instance_of::<pyo3::types::PyBool>() {
+                    has_bool = true;
+                } else if cell.is_instance_of::<pyo3::types::PyInt>()
+                    || cell.is_instance_of::<pyo3::types::PyFloat>()
+                {
+                    has_numeric = true;
+                } else if cell.is_instance_of::<PyString>() {
+                    has_str = true;
+                }
+            }
+            let kinds_present = [has_bool, has_numeric, has_str]
+                .iter()
+                .filter(|present| **present)
+                .count();
+            if kinds_present > 1 {
+                for cell in col.iter_mut() {
+                    if !cell.is_none() {
+                        *cell = cell.str()?.into_any();
+                    }
+                }
+            }
         }
         columns.insert(key.clone(), col);
     }
@@ -2312,41 +2356,66 @@ fn reconstruct_pyarrow_normalise(
     Ok(table.unbind())
 }
 
-/// Infer a single column's PySpark type from its first non-`None` value
-/// (columns are already uniformly typed by this point -- see
-/// `union_and_columnarize`'s list-collision-uniformity handling -- except for
-/// genuinely mixed-type columns arising from different rows' same key holding
-/// different JSON leaf types across documents, which is a pre-existing,
-/// out-of-scope edge case shared with pandas/polars/pyarrow's own type
-/// inference). An all-`None` column (no non-`None` value found) defaults to
-/// `StringType`, matching the other three targets' own harmless defaults for
-/// the same case (pandas `object`, polars `Null`, pyarrow `null`).
+/// Infer a single column's PySpark type by scanning every non-`None` value
+/// (columns are already uniformly typed by this point for the cases that
+/// matter -- see `union_and_columnarize`'s list-collision and mixed-scalar-type
+/// uniformity handling, github.com/amaye15/JSON-Tools-rs/issues/32 -- except
+/// for a pre-existing, out-of-scope edge case shared with pandas/polars/
+/// pyarrow's own type inference: a leaf value that's neither bool/int/float/
+/// str/list, e.g. a stray nested object). Scanning all values, not just the
+/// first, matters specifically for int/float mixes: `union_and_columnarize`
+/// deliberately leaves those alone rather than stringifying them (pandas
+/// already promotes such a column to a uniform `float64` when the DataFrame
+/// is built), so the declared schema type must independently arrive at the
+/// same `DoubleType` conclusion regardless of which value happens to come
+/// first -- picking `LongType` from an early int while a later float made the
+/// real pandas column `float64` is exactly the mismatch that made Spark's
+/// Arrow bridge raise `PySparkTypeError` in the first place. An all-`None`
+/// column (no non-`None` value found) defaults to `StringType`, matching the
+/// other three targets' own harmless defaults for the same case (pandas
+/// `object`, polars `Null`, pyarrow `null`).
 #[cfg(feature = "python")]
 fn infer_spark_type<'py>(
     types_mod: &Bound<'py, PyModule>,
     values: &[Bound<'py, PyAny>],
 ) -> PyResult<Bound<'py, PyAny>> {
+    let mut saw_bool = false;
+    let mut saw_int = false;
+    let mut saw_float = false;
+    let mut saw_list = false;
+    let mut saw_other = false;
     for v in values {
         if v.is_none() {
             continue;
         }
         // bool before int: Python's bool is an int subclass.
         if v.is_instance_of::<pyo3::types::PyBool>() {
-            return types_mod.getattr("BooleanType")?.call0();
+            saw_bool = true;
+        } else if v.is_instance_of::<pyo3::types::PyInt>() {
+            saw_int = true;
+        } else if v.is_instance_of::<pyo3::types::PyFloat>() {
+            saw_float = true;
+        } else if v.is_instance_of::<PyList>() {
+            saw_list = true;
+        } else if !v.is_instance_of::<PyString>() {
+            saw_other = true;
         }
-        if v.is_instance_of::<pyo3::types::PyInt>() {
-            return types_mod.getattr("LongType")?.call0();
-        }
-        if v.is_instance_of::<pyo3::types::PyFloat>() {
-            return types_mod.getattr("DoubleType")?.call0();
-        }
-        if v.is_instance_of::<PyList>() {
-            let element_type = types_mod.getattr("StringType")?.call0()?;
-            return types_mod.getattr("ArrayType")?.call1((element_type,));
-        }
-        // str, and anything else JSON can produce as a leaf -> StringType.
-        return types_mod.getattr("StringType")?.call0();
     }
+    if saw_bool {
+        return types_mod.getattr("BooleanType")?.call0();
+    }
+    if saw_list {
+        let element_type = types_mod.getattr("StringType")?.call0()?;
+        return types_mod.getattr("ArrayType")?.call1((element_type,));
+    }
+    if saw_float {
+        return types_mod.getattr("DoubleType")?.call0();
+    }
+    if saw_int {
+        return types_mod.getattr("LongType")?.call0();
+    }
+    // Uniform str, uniform/all-`saw_other`, or all-`None` -> StringType.
+    let _ = saw_other;
     types_mod.getattr("StringType")?.call0()
 }
 

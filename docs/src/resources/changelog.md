@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## v0.9.14 (2026-07-29)
+
+### Fixed
+- **`execute(spark_df)` with `auto_convert_types(True)` no longer crashes on columns with genuinely mixed types** ([#32](https://github.com/amaye15/JSON-Tools-rs/issues/32)). A column that ends up holding e.g. both `str` and `int` values across rows (a natural consequence of per-value auto-conversion) previously broke Spark's Arrow bridge with `PySparkTypeError`; such columns now fall back to a uniform string column instead, while `int`/`float`-only mixes still promote correctly to `double`. Also hardens `normalise(target=...)` for all four DataFrame backends, which share the same column-unioning step.
+
+See the repository's [CHANGELOG.md](https://github.com/amaye15/json-tools-rs/blob/master/CHANGELOG.md) for the full, itemized list.
+
 ## v0.9.13 (2026-07-29)
 
 ### Fixed

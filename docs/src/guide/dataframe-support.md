@@ -313,6 +313,16 @@ pyarrow) -- an explicit schema sidesteps that entirely. See the note earlier on
 this page for what this bridge does and doesn't distribute (the reconstruction,
 not the flatten computation itself).
 
+> **Mixed-type columns with `auto_convert_types`.** `auto_convert_types(True)`
+> converts each value independently based on its own content, so the same
+> flattened key can hold a clean numeric string in one row (`"123"` -> `int
+> 123`) and ordinary text in another (`"Smith"` -> stays `str`). For the
+> `pyspark` target, a column like that is detected and stringified as a whole
+> (falling back to `StringType` for every value in it) rather than crashing
+> Spark's Arrow bridge with a `PySparkTypeError`. Columns mixing only `int`
+> and `float` are unaffected -- they promote to a numeric `double` column,
+> matching pandas's own automatic promotion for the same case.
+
 ### What happens without `.flatten()` mode
 
 `normalise=True` needs `.flatten()` mode specifically -- `.unflatten()`, `.normal()`,

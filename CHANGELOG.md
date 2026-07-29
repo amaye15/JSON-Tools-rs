@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.14] - 2026-07-29
+
+### Fixed
+- **`execute(spark_df)` with `auto_convert_types(True)` no longer crashes on
+  columns with genuinely mixed types.**
+  ([#32](https://github.com/amaye15/JSON-Tools-rs/issues/32))
+  `auto_convert_types` converts each value independently based on its own
+  content, so the same flattened key can hold a clean numeric string in one
+  row (`"123"` -> `int 123`) and ordinary text in another (`"Smith"` -> stays
+  `str`). The PySpark reconstruction path (shared with
+  `normalise(target="pyspark")`, added for
+  [#31](https://github.com/amaye15/JSON-Tools-rs/issues/31)) inferred a
+  column's Spark schema type from only its *first* non-null value, so a
+  later, differently-typed value in the same column broke Spark's Arrow
+  bridge with `PySparkTypeError: Exception thrown when converting
+  pandas.Series (object) ... to Arrow Array` -- confirmed via direct
+  reproduction of the reported error, under the same Arrow-fallback-disabled
+  configuration Databricks Serverless uses. Columns with genuinely
+  incompatible mixed types (string mixed with number and/or boolean) now
+  fall back to a uniform string column instead of crashing; columns mixing
+  only `int`/`float` still promote correctly to a numeric `double` column
+  (matching pandas's own automatic promotion), and uniform bool/numeric/
+  string columns are unaffected. This also hardens
+  `normalise(target=...)` for all four DataFrame backends, since the fix
+  lives in the column-unioning step they all share.
+- The issue's other reported symptom -- `execute(spark_df)` returning
+  `list[dict]` instead of a real PySpark DataFrame -- was independently
+  reproduced against the published 0.9.13 wheel and found to already be
+  fixed by [#31](https://github.com/amaye15/JSON-Tools-rs/issues/31); no
+  further change was needed for that part.
+
 ## [0.9.13] - 2026-07-29
 
 ### Fixed
