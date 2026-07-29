@@ -31,11 +31,14 @@ SCENARIOS = [
     ("large", 754, 4042),
 ]
 
+
 # Heterogeneous: only every 3rd row carries the "extra_i" key, so the union
 # has more columns than any single row -- exercises the sparse/union case
 # issues #32/#33 are actually about, not just a uniform dense grid.
 def make_row(i: int, n_cols: int) -> dict:
-    row = {f"field_{j}": (i * j if j % 3 == 0 else f"value_{i}_{j}") for j in range(n_cols)}
+    row = {
+        f"field_{j}": (i * j if j % 3 == 0 else f"value_{i}_{j}") for j in range(n_cols)
+    }
     if i % 3 == 0:
         row["extra_marker"] = i
     return row
@@ -54,7 +57,9 @@ def time_once(data: list, target: str) -> float:
 
 def time_once_pyspark(data: list, spark) -> float:
     tools = jt.JSONTools().flatten()
-    sdf = spark.createDataFrame([{"json": __import__("json").dumps(row)} for row in data])
+    sdf = spark.createDataFrame(
+        [{"json": __import__("json").dumps(row)} for row in data]
+    )
     start = time.perf_counter()
     tools.execute(sdf)
     return time.perf_counter() - start
@@ -72,8 +77,12 @@ def bench_pyspark(data: list, spark, repeats: int) -> float:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--csv", action="store_true", help="Print CSV instead of a table")
-    parser.add_argument("--repeats", type=int, default=3, help="Median of this many runs per scenario")
+    parser.add_argument(
+        "--csv", action="store_true", help="Print CSV instead of a table"
+    )
+    parser.add_argument(
+        "--repeats", type=int, default=3, help="Median of this many runs per scenario"
+    )
     parser.add_argument(
         "--with-pyspark",
         action="store_true",
@@ -119,7 +128,9 @@ def main() -> None:
         for name, n_rows, n_cols, target, t in rows_out:
             print(f"{name},{n_rows},{n_cols},{target},{t:.6f}")
     else:
-        header = f"{'scenario':<10} {'rows':>6} {'cols':>6} {'target':<10} {'median_s':>10}"
+        header = (
+            f"{'scenario':<10} {'rows':>6} {'cols':>6} {'target':<10} {'median_s':>10}"
+        )
         print(header)
         print("-" * len(header))
         for name, n_rows, n_cols, target, t in rows_out:
