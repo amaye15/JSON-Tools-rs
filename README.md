@@ -349,7 +349,7 @@ v0.9.2, ships automatically on tagged releases):
 <dependency>
   <groupId>io.github.amaye15</groupId>
   <artifactId>json-tools-rs-spark</artifactId>
-  <version>0.9.15</version>
+  <version>0.9.16</version>
 </dependency>
 ```
 
@@ -434,7 +434,11 @@ Dual-licensed under either [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), a
 
 ## Changelog
 
-### v0.9.15 (Current)
+### v0.9.16 (Current)
+
+* **Performance**: `execute(..., normalise=True, target=...)` and PySpark `execute(spark_df)` are 13-18% faster for large/wide results (e.g. 754 rows x 4,042 columns). `union_and_columnarize` rewritten from an O(rows x columns) `PyDict` hash-lookup pattern to a single forward pass, plus `PyOnceLock`-cached pandas/polars/pyarrow/pyspark module imports across the reconstruction path. Verified via interleaved A/B against the real Python API.
+
+### v0.9.15
 
 * **Fix**: `execute(spark_df)` no longer crashes when a `.key_replacement()`/`.handle_key_collision(True)` list column holds genuinely mixed element types ([#33](https://github.com/amaye15/JSON-Tools-rs/issues/33)). The list-flavored twin of the 0.9.14 fix: a collision list is built from each colliding key's own independently-converted value, so a single row's collision could already mix kinds (e.g. `[100, "abc"]`); such columns now fall back to string elements, while uniformly-typed list columns (e.g. all `int`) correctly get a typed array instead of unnecessary stringification.
 

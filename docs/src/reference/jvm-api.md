@@ -12,7 +12,7 @@ Maven coordinates (published on tagged releases):
 <dependency>
   <groupId>io.github.amaye15</groupId>
   <artifactId>json-tools-rs-spark</artifactId>
-  <version>0.9.15</version>
+  <version>0.9.16</version>
 </dependency>
 ```
 
