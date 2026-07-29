@@ -349,7 +349,7 @@ v0.9.2, ships automatically on tagged releases):
 <dependency>
   <groupId>io.github.amaye15</groupId>
   <artifactId>json-tools-rs-spark</artifactId>
-  <version>0.9.12</version>
+  <version>0.9.13</version>
 </dependency>
 ```
 
@@ -434,7 +434,12 @@ Dual-licensed under either [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), a
 
 ## Changelog
 
-### v0.9.12 (Current)
+### v0.9.13 (Current)
+
+* **Fix**: `execute(df)` on a PySpark DataFrame now returns a real, distributed `pyspark.sql.DataFrame`, not a plain `list[dict]` ([#31](https://github.com/amaye15/JSON-Tools-rs/issues/31)). **Behavior change:** code relying on the old list fallback needs updating. Polars input was independently confirmed to already work correctly.
+* **Performance**: JSON-string-column auto-expansion (0.9.12) is ~40-43% faster for large embedded payloads, rewritten around `serde_json::value::RawValue` to avoid a redundant full-tree parse/reserialize per row, while keeping the same graceful per-row fallback behavior.
+
+### v0.9.12
 
 * **Fix**: `execute(df)` in `.flatten()` mode now auto-expands DataFrame columns holding JSON *strings*, not just columns already typed as dicts/structs ([#30](https://github.com/amaye15/JSON-Tools-rs/issues/30)). **Behavior change:** a DataFrame with a JSON-string column now produces more/differently-shaped output columns in flatten mode than before; `.unflatten()`/`.normal()` mode are unaffected.
 
