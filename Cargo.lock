@@ -474,7 +474,7 @@ dependencies = [
 
 [[package]]
 name = "json-tools-rs"
-version = "0.9.14"
+version = "0.9.15"
 dependencies = [
  "bumpalo",
  "chrono",

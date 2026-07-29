@@ -349,7 +349,7 @@ v0.9.2, ships automatically on tagged releases):
 <dependency>
   <groupId>io.github.amaye15</groupId>
   <artifactId>json-tools-rs-spark</artifactId>
-  <version>0.9.14</version>
+  <version>0.9.15</version>
 </dependency>
 ```
 
@@ -434,7 +434,11 @@ Dual-licensed under either [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), a
 
 ## Changelog
 
-### v0.9.14 (Current)
+### v0.9.15 (Current)
+
+* **Fix**: `execute(spark_df)` no longer crashes when a `.key_replacement()`/`.handle_key_collision(True)` list column holds genuinely mixed element types ([#33](https://github.com/amaye15/JSON-Tools-rs/issues/33)). The list-flavored twin of the 0.9.14 fix: a collision list is built from each colliding key's own independently-converted value, so a single row's collision could already mix kinds (e.g. `[100, "abc"]`); such columns now fall back to string elements, while uniformly-typed list columns (e.g. all `int`) correctly get a typed array instead of unnecessary stringification.
+
+### v0.9.14
 
 * **Fix**: `execute(spark_df)` with `auto_convert_types(True)` no longer crashes on columns with genuinely mixed types ([#32](https://github.com/amaye15/JSON-Tools-rs/issues/32)). A column that ends up holding both `str` and `int` values across rows (a natural consequence of per-value auto-conversion) previously broke Spark's Arrow bridge with `PySparkTypeError`; such columns now fall back to a uniform string column instead, while `int`/`float`-only mixes still promote correctly to `double`. Also hardens `normalise(target=...)` for all four DataFrame backends, which share the same column-unioning step.
 
