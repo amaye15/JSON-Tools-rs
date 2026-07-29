@@ -349,7 +349,7 @@ v0.9.2, ships automatically on tagged releases):
 <dependency>
   <groupId>io.github.amaye15</groupId>
   <artifactId>json-tools-rs-spark</artifactId>
-  <version>0.9.13</version>
+  <version>0.9.14</version>
 </dependency>
 ```
 
@@ -434,7 +434,11 @@ Dual-licensed under either [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), a
 
 ## Changelog
 
-### v0.9.13 (Current)
+### v0.9.14 (Current)
+
+* **Fix**: `execute(spark_df)` with `auto_convert_types(True)` no longer crashes on columns with genuinely mixed types ([#32](https://github.com/amaye15/JSON-Tools-rs/issues/32)). A column that ends up holding both `str` and `int` values across rows (a natural consequence of per-value auto-conversion) previously broke Spark's Arrow bridge with `PySparkTypeError`; such columns now fall back to a uniform string column instead, while `int`/`float`-only mixes still promote correctly to `double`. Also hardens `normalise(target=...)` for all four DataFrame backends, which share the same column-unioning step.
+
+### v0.9.13
 
 * **Fix**: `execute(df)` on a PySpark DataFrame now returns a real, distributed `pyspark.sql.DataFrame`, not a plain `list[dict]` ([#31](https://github.com/amaye15/JSON-Tools-rs/issues/31)). **Behavior change:** code relying on the old list fallback needs updating. Polars input was independently confirmed to already work correctly.
 * **Performance**: JSON-string-column auto-expansion (0.9.12) is ~40-43% faster for large embedded payloads, rewritten around `serde_json::value::RawValue` to avoid a redundant full-tree parse/reserialize per row, while keeping the same graceful per-row fallback behavior.
