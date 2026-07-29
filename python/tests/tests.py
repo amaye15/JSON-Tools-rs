@@ -5161,12 +5161,22 @@ class TestPySparkMixedTypeColumnFallback:
     flattened column ends up holding genuinely mixed Python types across rows
     (e.g. a JSON string "Smith" stays a str, but "123" in another row becomes
     int 123) -- github.com/amaye15/JSON-Tools-rs/issues/32. Confirmed via
-    direct reproduction (with Arrow fallback explicitly disabled, matching
-    the reporter's Databricks Serverless environment) that this previously
-    raised `PySparkTypeError: Exception thrown when converting pandas.Series
-    (object) ... to Arrow Array` -- infer_spark_type picked a schema type
-    from only the column's first value, so a later, differently-typed value
-    in the same column broke Spark's Arrow bridge."""
+    direct reproduction, with Arrow fallback explicitly disabled and pyarrow
+    installed (matching the reporter's Databricks Serverless environment),
+    that this previously raised `PySparkTypeError: Exception thrown when
+    converting pandas.Series (object) ... to Arrow Array` -- infer_spark_type
+    picked a schema type from only the column's first value, so a later,
+    differently-typed value in the same column broke Spark's Arrow bridge.
+
+    These tests deliberately leave Spark's Arrow fallback at its default
+    (enabled) rather than forcing that strict configuration: CI's dedicated
+    pyspark job installs no pyarrow, under which forcing fallback off breaks
+    every createDataFrame call with an unrelated `PACKAGE_NOT_INSTALLED`
+    error before the mixed-type fallback logic is ever reached. The schema/
+    value assertions below hold regardless of which internal path Spark
+    takes, since `reconstruct_pyspark_normalise` always passes an explicit
+    schema either way -- so they still cover the fix's actual behavior.
+    """
 
     @pytest.fixture(autouse=True)
     def setup(self):
@@ -5177,10 +5187,6 @@ class TestPySparkMixedTypeColumnFallback:
             self.spark = (
                 SparkSession.builder.master("local[2]")
                 .appName("json_tools_rs_mixed_type_tests")
-                # Matches the reporter's environment: without this, Spark
-                # silently retries via a non-Arrow fallback and the bug never
-                # surfaces as a raised exception.
-                .config("spark.sql.execution.arrow.pyspark.fallback.enabled", "false")
                 .getOrCreate()
             )
             self.has_pyspark = True
