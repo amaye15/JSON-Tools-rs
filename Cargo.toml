@@ -1,6 +1,6 @@
 [package]
 name = "json-tools-rs"
-version = "0.9.12"
+version = "0.9.13"
 edition = "2021"
 rust-version = "1.80"
 description = "A high-performance Rust library for advanced JSON manipulation with SIMD-accelerated parsing, Rayon parallelism, and Python bindings with DataFrame/Series support"
@@ -39,7 +39,7 @@ path = "src/main.rs"
 regex = "1.12.3"
 # JSON parsing: sonic-rs on 64-bit (fastest), simd-json on 32-bit (fallback)
 serde = { version = "1.0.228", features = ["rc", "derive"] }  # rc: Arc<T> serialization; derive: jvm feature's JvmConfig
-serde_json = { version = "1.0.149", features = ["preserve_order"] }  # preserve_order: JSON-string-column splicing (python.rs) needs row key order intact, not alphabetized -- backed by indexmap, already a direct dependency below
+serde_json = { version = "1.0.149", features = ["preserve_order", "raw_value"] }  # preserve_order: JSON-string-column splicing (python.rs) needs row key order intact, not alphabetized -- backed by indexmap, already a direct dependency below. raw_value: RawValue lets that same splice avoid building a full Value tree for a large embedded payload (issue #31 perf fix)
 pyo3 = { version = "0.29.0", features = ["extension-module"], optional = true }
 memchr = "2.8.0"  # SIMD-optimized byte searching
 smallvec = "1.15.1"  # Stack-allocated vectors for small buffers
@@ -66,7 +66,11 @@ rayon = "1.12.0"  # Persistent work-stealing thread pool: avoids per-call OS thr
 # O(1) lookup + insertion order, for unflatten's object tree (no per-node sort needed).
 # Pinned <2.12: indexmap 2.12.0 raised its own rust-version to 1.82, and 2.14.0 requires
 # edition2024 (~1.85) -- both above this crate's MSRV of 1.80. 2.11.x's MSRV is 1.63.
-indexmap = ">=2.11, <2.12"
+# serde feature: lets python.rs deserialize a JSON object directly into an
+# IndexMap<String, &RawValue> (order-preserving, source-text order) for the
+# issue #31 splice-row perf fix -- adds no new crate/version, indexmap is already
+# pulled in transitively at the same 2.11.x via serde_json's preserve_order feature.
+indexmap = { version = ">=2.11, <2.12", features = ["serde"] }
 
 [target.'cfg(target_pointer_width = "64")'.dependencies]
 # sonic-rs is fastest but only works on 64-bit architectures.

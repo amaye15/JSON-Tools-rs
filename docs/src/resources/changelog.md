@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## v0.9.13 (2026-07-29)
+
+### Fixed
+- **`execute(df)` on a PySpark DataFrame now returns a real, distributed `pyspark.sql.DataFrame`, not a plain `list[dict]`** ([#31](https://github.com/amaye15/JSON-Tools-rs/issues/31)). **Behavior change:** code relying on the old list fallback needs updating.
+
+### Performance
+- **JSON-string-column auto-expansion (0.9.12) is ~40-43% faster for large embedded payloads**, rewritten around `serde_json::value::RawValue` to avoid a redundant full-tree parse/reserialize per row, while keeping the same graceful per-row fallback behavior. See [CHANGELOG.md](https://github.com/amaye15/json-tools-rs/blob/master/CHANGELOG.md) for the full root-cause writeup.
+
+See the repository's [CHANGELOG.md](https://github.com/amaye15/json-tools-rs/blob/master/CHANGELOG.md) for the full, itemized list.
+
 ## v0.9.12 (2026-07-29)
 
 ### Fixed

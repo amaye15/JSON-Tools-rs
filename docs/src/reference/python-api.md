@@ -439,9 +439,9 @@ Execute the configured operation. By default (`normalise=False`) the return type
 | `polars.Series` | `polars.Series` |
 | `pyarrow.Table` | `pyarrow.Table` |
 | `pyarrow.ChunkedArray` | `pyarrow.Array` (reconstructed via `pyarrow.array()`, not re-chunked) |
-| `pyspark.sql.DataFrame` | `list[dict]` (no `SparkSession` round-trip available for reconstruction; falls back to a plain list) |
+| `pyspark.sql.DataFrame` | `pyspark.sql.DataFrame` (a real, distributed DataFrame -- schema-driven reconstruction via the active `SparkSession`, auto-discovered via `SparkSession.getActiveSession()`) |
 
-**Raises:** `JsonToolsError` if no mode is set, input is invalid, or processing fails.
+**Raises:** `JsonToolsError` if no mode is set, input is invalid, processing fails, or (PySpark input) no active `SparkSession` is found.
 
 ```python
 # String input -> string output
@@ -656,20 +656,30 @@ result_table = jt.JSONTools().flatten().execute(table)
 
 ### PySpark DataFrame
 
-`.execute(df)` collects the DataFrame to the driver via `toPandas()`, runs it through the same row-is-a-JSON-object pipeline as Pandas (so a `StructType` column flattens; a plain string column does not), and -- because there's no `SparkSession` available inside the native call to rebuild a distributed `DataFrame` -- returns a plain **`list[dict]`**, not a new `pyspark.sql.DataFrame`.
+`.execute(df)` collects the DataFrame to the driver via `toPandas()`, runs it through the same row-is-a-JSON-object pipeline as Pandas (so a `StructType` column flattens; a plain string column does not, unless it holds JSON -- see [Auto-Expanding JSON-String Columns](../guide/dataframe-support.md#auto-expanding-json-string-columns)), then reconstructs a genuine, distributed `pyspark.sql.DataFrame` via the active `SparkSession` ([#31](https://github.com/amaye15/JSON-Tools-rs/issues/31); auto-discovered via `SparkSession.getActiveSession()`, raising `JsonToolsError` if none is found).
 
 ```python
-from pyspark.sql import SparkSession, Row
+from pyspark.sql import SparkSession
 
 spark = SparkSession.builder.getOrCreate()
 df = spark.createDataFrame([
-    Row(user=Row(name="Alice", age=30)),
-    Row(user=Row(name="Bob", age=25)),
+    {"name": "Alice", "age": 30},
+    {"name": "Bob", "age": 25},
 ])
 
 result = jt.JSONTools().flatten().execute(df)
-# result is a list[dict], e.g. [{"user.name": "Alice", "user.age": 30}, ...]
+print(type(result))  # <class 'pyspark.sql.dataframe.DataFrame'>
 ```
+
+> **Nested `StructType` columns and `.toPandas()`:** a top-level flat column always
+> flattens correctly, as above. A nested struct column *usually* flattens correctly
+> too, but its exact behavior through `toPandas()`'s non-Arrow fallback path (taken
+> automatically when pyarrow isn't installed) can differ from the Arrow-optimized
+> path in edge cases -- e.g. a `Row`-typed nested field has been observed losing its
+> field *names* on that fallback path (surfacing as positional `user.0`/`user.1`
+> instead of `user.name`/`user.age`), a PySpark `toPandas()` characteristic, not
+> something this library controls. Installing pyarrow avoids the fallback path
+> entirely and is recommended for any nested-struct-heavy workload.
 
 ## JsonToolsError
 

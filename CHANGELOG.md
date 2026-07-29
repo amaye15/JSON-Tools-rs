@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.13] - 2026-07-29
+
+### Fixed
+- **`execute(df)` on a PySpark DataFrame now returns a real, distributed
+  `pyspark.sql.DataFrame`, not a plain `list[dict]`.**
+  ([#31](https://github.com/amaye15/JSON-Tools-rs/issues/31)) Reuses the same
+  schema-driven reconstruction `normalise(target="pyspark")` already used
+  (active `SparkSession` auto-discovered via `SparkSession.getActiveSession()`,
+  raising `JsonToolsError` if none is found). **Behavior change:** any code
+  that relied on `.execute(spark_df)` returning a plain list needs updating --
+  it now returns a DataFrame. Polars input was independently confirmed to
+  already work correctly (`execute(polars_df)` -> `polars.DataFrame`); the
+  issue's claim it was untested/unsupported did not hold up under direct
+  reproduction.
+
+### Performance
+- **JSON-string-column auto-expansion (added in 0.9.12 for issue #30) is now
+  meaningfully faster for large embedded payloads**, root-caused via direct
+  profiling rather than guessing: the per-row splice step was building a full
+  `serde_json::Value` tree for the embedded content and reserializing the
+  whole row, both `O(field count)` in that content -- expensive and, for a
+  payload expanding into thousands of columns, done twice over (the core
+  flatten engine parses the same content again moments later regardless).
+  Rewritten around `serde_json::value::RawValue` (validated via a dedicated
+  design-review pass against indexmap's and serde_json's actual source, not
+  assumed) to avoid ever building that tree, while keeping the exact same
+  graceful per-row fallback behavior (a malformed cell keeps its original
+  string value and triggers a warning, rather than failing the whole call --
+  confirmed necessary regardless of performance goals, since the core batch
+  engine fails the entire batch on any single bad item). Benchmarked
+  ~40-43% faster on synthetic 200-row/500-key and 100-row/4,000-key cases
+  (the latter matching the issue's own reported scale); also strictly safer
+  for non-target fields, which are now copied verbatim instead of being
+  reformatted through a parse/reserialize round-trip.
+
 ## [0.9.12] - 2026-07-29
 
 ### Fixed

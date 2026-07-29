@@ -5039,9 +5039,15 @@ class TestJsonStringColumnExpansion:
 
     def test_pyspark_json_string_column_expands(self):
         """The issue's own reported scenario: a PySpark DataFrame with a JSON
-        string column."""
+        string column. Since github.com/amaye15/JSON-Tools-rs/issues/31,
+        execute() on PySpark input returns a real PySpark DataFrame (not a
+        list) -- see TestExecuteDataFrameTypeMatching for dedicated coverage
+        of that behavior; this test focuses on the JSON-string expansion
+        composing correctly with it."""
         if not self.has_pyspark:
             pytest.skip("pyspark not installed")
+        from pyspark.sql import DataFrame as SparkDataFrame
+
         tools = json_tools_rs.JSONTools().flatten().separator("__")
         data = [
             {"id": 1, "name": "Alice", "json_col": '{"a": {"b": 1}}'},
@@ -5049,6 +5055,186 @@ class TestJsonStringColumnExpansion:
         ]
         spark_df = self.spark.createDataFrame(data)
         result = tools.execute(spark_df)
-        assert isinstance(result, list)
-        assert result[0]["json_col__a__b"] == 1
-        assert result[1]["json_col__a__b"] == 2
+        assert isinstance(result, SparkDataFrame)
+        rows = {r["id"]: r for r in result.collect()}
+        assert rows[1]["json_col__a__b"] == 1
+        assert rows[2]["json_col__a__b"] == 2
+
+
+class TestExecuteDataFrameTypeMatching:
+    """execute() should return the same DataFrame type as the input --
+    github.com/amaye15/JSON-Tools-rs/issues/31. Pandas and polars already
+    worked before this fix (pinned here as regression coverage, since the
+    issue incorrectly reported polars as unsupported); PySpark previously
+    fell back to a plain list of dicts."""
+
+    @pytest.fixture(autouse=True)
+    def setup(self):
+        try:
+            import pandas as pd
+
+            self.pd = pd
+            self.has_pandas = True
+        except ImportError:
+            self.has_pandas = False
+
+        try:
+            import polars as pl
+
+            self.pl = pl
+            self.has_polars = True
+        except ImportError:
+            self.has_polars = False
+
+        try:
+            import pyspark  # noqa: F401
+            from pyspark.sql import SparkSession
+
+            self.spark = (
+                SparkSession.builder.master("local[2]")
+                .appName("json_tools_rs_type_matching_tests")
+                .getOrCreate()
+            )
+            self.has_pyspark = True
+        except ImportError:
+            self.has_pyspark = False
+
+    def test_pandas_input_returns_pandas(self):
+        if not self.has_pandas:
+            pytest.skip("pandas not installed")
+        tools = json_tools_rs.JSONTools().flatten()
+        df = self.pd.DataFrame([{"user": {"name": "Alice"}}, {"user": {"name": "Bob"}}])
+        result = tools.execute(df)
+        assert isinstance(result, self.pd.DataFrame)
+
+    def test_polars_input_returns_polars(self):
+        """Regression pin: the issue reported this as untested/unsupported,
+        but it already worked before this fix -- confirmed by direct
+        reproduction during investigation, not assumed."""
+        if not self.has_polars:
+            pytest.skip("polars not installed")
+        tools = json_tools_rs.JSONTools().flatten()
+        df = self.pl.DataFrame([{"user": {"name": "Alice"}}, {"user": {"name": "Bob"}}])
+        result = tools.execute(df)
+        assert isinstance(result, self.pl.DataFrame)
+
+    def test_pyspark_input_returns_pyspark(self):
+        """Deliberately flat (non-nested) input data: this test exercises
+        execute()'s *output* type (a real PySpark DataFrame vs. the old
+        list-of-dicts fallback), not PySpark's own struct/map schema
+        inference or its toPandas() struct-field-naming behavior for nested
+        columns -- both separate, pre-existing PySpark characteristics
+        unrelated to this fix, easy to trip over accidentally with nested
+        test data (confirmed while writing this test: a plain dict with mixed
+        value types infers MapType and stringifies everything; a Row-based
+        struct survives schema inference but loses its field *names* through
+        the non-Arrow toPandas() fallback, becoming positional user__0/
+        user__1 instead of user__name/user__age)."""
+        if not self.has_pyspark:
+            pytest.skip("pyspark not installed")
+        from pyspark.sql import DataFrame as SparkDataFrame
+
+        tools = json_tools_rs.JSONTools().flatten()
+        data = [{"name": "Alice", "age": 30}, {"name": "Bob", "age": 25}]
+        spark_df = self.spark.createDataFrame(data)
+        result = tools.execute(spark_df)
+        assert isinstance(result, SparkDataFrame)
+        rows = {r["name"]: r for r in result.collect()}
+        assert rows["Alice"]["age"] == 30
+        assert rows["Bob"]["age"] == 25
+
+    # No "no active session" test here, deliberately: unlike normalise's
+    # equivalent test (which uses a plain dict input, needing no live session
+    # to extract from), this code path's *input* is already a live PySpark
+    # DataFrame -- stopping the session first breaks the extraction step
+    # itself (dataframe_to_json_strings's toPandas() call) before this
+    # library's own require_active_spark_session check is ever reached,
+    # surfacing an unrelated internal PySpark error instead. There's no
+    # realistic way to have a usable live PySpark DataFrame with no active
+    # session, so this scenario isn't reachable for this call path.
+    # require_active_spark_session itself is already covered by
+    # TestNormalise.test_pyspark_target_no_active_session_errors.
+
+
+class TestJsonStringColumnSpliceScale:
+    """Larger-scale correctness coverage for the RawValue-based splice_row
+    redesign (github.com/amaye15/JSON-Tools-rs/issues/31 performance fix) --
+    the existing TestJsonStringColumnExpansion suite already covers behavior
+    at small scale; this exercises the same code path at a scale closer to
+    the issue's own reported scenario (thousands of embedded keys)."""
+
+    @pytest.fixture(autouse=True)
+    def setup(self):
+        try:
+            import pandas as pd
+
+            self.pd = pd
+            self.has_pandas = True
+        except ImportError:
+            self.has_pandas = False
+
+    def test_large_embedded_object_expands_correctly(self):
+        if not self.has_pandas:
+            pytest.skip("pandas not installed")
+        import json as json_module
+
+        n_keys = 2000
+        payload = json_module.dumps({f"field_{i}": f"value_{i}" for i in range(n_keys)})
+        df = self.pd.DataFrame({"id": [1, 2], "json_col": [payload, payload]})
+        tools = json_tools_rs.JSONTools().flatten()
+        result = tools.execute(df)
+
+        assert result.shape == (2, n_keys + 1)
+        assert result["json_col.field_0"].iloc[0] == "value_0"
+        assert result["json_col.field_1999"].iloc[1] == "value_1999"
+        # Column order: id first (first-seen), then the expanded keys in the
+        # embedded object's own original key order -- not alphabetized (the
+        # exact risk `preserve_order`/the IndexMap-based redesign guards
+        # against).
+        cols = result.columns.tolist()
+        assert cols[0] == "id"
+        assert cols[1] == "json_col.field_0"
+        assert cols[2] == "json_col.field_1"
+
+    def test_large_embedded_array_expands_correctly(self):
+        if not self.has_pandas:
+            pytest.skip("pandas not installed")
+        import json as json_module
+
+        n_items = 1000
+        payload = json_module.dumps([f"item_{i}" for i in range(n_items)])
+        df = self.pd.DataFrame({"id": [1], "vec": [payload]})
+        tools = json_tools_rs.JSONTools().flatten()
+        result = tools.execute(df)
+
+        assert len(result.columns) == n_items + 1
+        assert result["vec.0"].iloc[0] == "item_0"
+        assert result[f"vec.{n_items - 1}"].iloc[0] == f"item_{n_items - 1}"
+
+    def test_large_payload_with_other_columns_preserved_verbatim(self):
+        """Non-target fields (id, name, score here) must survive the splice
+        unaffected by the size of the target column's payload -- confirming
+        the redesign's verbatim-copy behavior for fields it doesn't touch.
+        (score uses a value that round-trips exactly through pandas's own
+        to_json -- its default double_precision=10 is a separate, pre-existing
+        characteristic of that native serialization step, unrelated to and
+        unaffected by this splice redesign.)"""
+        if not self.has_pandas:
+            pytest.skip("pandas not installed")
+        import json as json_module
+
+        payload = json_module.dumps({f"field_{i}": i for i in range(1500)})
+        df = self.pd.DataFrame(
+            {
+                "id": [1],
+                "name": ["Alice"],
+                "score": [3.14159265],
+                "json_col": [payload],
+            }
+        )
+        tools = json_tools_rs.JSONTools().flatten()
+        result = tools.execute(df)
+
+        assert result["name"].iloc[0] == "Alice"
+        assert result["score"].iloc[0] == 3.14159265
+        assert result["json_col.field_1499"].iloc[0] == 1499

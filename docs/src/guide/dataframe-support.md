@@ -20,28 +20,25 @@ The Python bindings natively support DataFrame and Series objects from popular d
 | Pandas | Yes | Yes |
 | Polars | Yes | Yes |
 | PyArrow | Yes (Table) | Yes (Array) |
-| PySpark | Yes (input; result comes back as a list of dicts, see below) | -- |
+| PySpark | Yes -- a real, distributed `pyspark.sql.DataFrame` back | -- |
 
-> **PySpark DataFrame type preservation is the one exception to "perfect type
-> preservation" above.** A PySpark `DataFrame` is accepted as input (it's converted
-> via `.toPandas()` internally, processed, then converted back), but plain
-> `.execute(df)` reconstruction doesn't rebuild a distributed PySpark `DataFrame` --
-> there's no `SparkSession` available at that point to do so -- so `.execute()`
-> returns a plain Python `list` of dicts instead. If you need the result back as a
-> PySpark `DataFrame` from plain `.execute()`, wrap it yourself:
-> `spark.createDataFrame(result)`. This is also a reminder that `.execute(df)` on a
-> PySpark DataFrame collects the whole thing to the driver first (see the note
-> above) -- for a genuinely distributed path, use the `pandas_udf` pattern instead.
->
-> **`normalise=True` closes this gap for one specific path** -- see
-> [Normalise: Always Get a Wide DataFrame](#normalise-always-get-a-wide-dataframe)
-> below. It still collects and processes on the driver exactly as described above;
-> the difference is only in the *last* step, where it hands the result to Spark's
-> own Arrow-optimized `SparkSession.createDataFrame(pandas.DataFrame, schema)`
-> bridge instead of returning a plain list. That bridge genuinely distributes the
-> *resulting* DataFrame across the cluster, but it does **not** distribute the
-> flatten/processing computation itself -- for that, you still want the
+> **PySpark DataFrame reconstruction.** A PySpark `DataFrame` is accepted as input
+> (it's converted via `.toPandas()` internally, processed, then converted back) and
+> `.execute(df)` reconstructs a genuine PySpark `DataFrame`
+> ([#31](https://github.com/amaye15/JSON-Tools-rs/issues/31); earlier versions
+> returned a plain Python `list` of dicts here, since there was no `SparkSession`
+> reachable at reconstruction time -- an active session is now auto-discovered via
+> `SparkSession.getActiveSession()`, the same mechanism `normalise(target="pyspark")`
+> already used). This is still a reminder that `.execute(df)` on a PySpark DataFrame
+> collects the whole thing to the driver first (see the note above) and only the
+> *final* reconstruction step is genuinely distributed (via Spark's own
+> Arrow-optimized `SparkSession.createDataFrame(pandas.DataFrame, schema)` bridge) --
+> the flatten/processing computation itself is not distributed. For that, use the
 > `pandas_udf` pattern further down this page.
+>
+> `normalise=True` (see [below](#normalise-always-get-a-wide-dataframe)) uses this
+> exact same reconstruction mechanism -- the two paths are now consistent with each
+> other, not just individually documented.
 
 ## Usage
 
@@ -346,7 +343,7 @@ tools.execute({"a": 1}, target="pandas")  # normalise=True missing
 2. **Extraction**: Rows are extracted as JSON strings or dicts
 3. **JSON-string-column expansion** (`.flatten()` mode only): columns holding JSON strings are detected and spliced into genuine nested JSON in each row -- see [Auto-Expanding JSON-String Columns](#auto-expanding-json-string-columns) above
 4. **Processing**: Each row is processed through the Rust engine (with automatic parallelism for large DataFrames)
-5. **Reconstruction**: Results are reconstructed into the original DataFrame/Series type using O(1) constructor calls (except PySpark DataFrames, which come back as a list of dicts unless `normalise=True` -- see the notes above)
+5. **Reconstruction**: Results are reconstructed into the original DataFrame/Series type -- O(1) constructor calls for pandas/polars/pyarrow, or a schema-driven `SparkSession.createDataFrame(...)` call for PySpark (see the note above)
 
 ## All Features Apply
 
