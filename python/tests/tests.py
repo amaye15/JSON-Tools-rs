@@ -5259,6 +5259,88 @@ class TestPySparkMixedTypeColumnFallback:
         assert result.schema["json.active"].dataType == T.BooleanType()
 
 
+class TestPySparkMixedTypeListColumnFallback:
+    """execute(spark_df) with .key_replacement()/.handle_key_collision(True)
+    and auto_convert_types(True) must not crash when a `handle_key_collision`
+    list ends up holding genuinely mixed element types -- either within a
+    single row's own collision (colliding source keys are each converted
+    independently, so one row's collision list can already be e.g.
+    `[100, "abc"]`), or across rows once a scalar (no collision that row) is
+    wrapped into a single-element list alongside a differently-typed element
+    from another row's collision -- github.com/amaye15/JSON-Tools-rs/
+    issues/33. This is the list-flavored twin of
+    TestPySparkMixedTypeColumnFallback: v0.9.14 fixed the pure-scalar case
+    but `infer_spark_type` still hardcoded `ArrayType(StringType)` for any
+    list-valued column regardless of the actual element types, so a column
+    like this one still broke Spark's Arrow bridge with `PySparkTypeError:
+    ... to Arrow Array (list<element: string>)` -- confirmed via direct
+    reproduction against the published 0.9.14 wheel before fixing."""
+
+    @pytest.fixture(autouse=True)
+    def setup(self):
+        try:
+            import pyspark  # noqa: F401
+            from pyspark.sql import SparkSession
+
+            self.spark = (
+                SparkSession.builder.master("local[2]")
+                .appName("json_tools_rs_mixed_type_list_tests")
+                .getOrCreate()
+            )
+            self.has_pyspark = True
+        except ImportError:
+            self.has_pyspark = False
+
+    def test_collision_list_with_mixed_element_types_falls_back_to_string_elements(
+        self,
+    ):
+        if not self.has_pyspark:
+            pytest.skip("pyspark not installed")
+        from pyspark.sql import types as T
+
+        data = [
+            {"json": '{"User_id": "100", "Admin_id": "abc"}'},
+            {"json": '{"User_id": "200"}'},
+        ]
+        spark_df = self.spark.createDataFrame(data)
+        tools = (
+            json_tools_rs.JSONTools()
+            .flatten()
+            .key_replacement("r'(User|Admin)_'", "")
+            .handle_key_collision(True)
+            .auto_convert_types(True)
+        )
+        result = tools.execute(spark_df)  # must not raise
+        assert result.schema["json.id"].dataType == T.ArrayType(T.StringType())
+        rows = {tuple(r["json.id"]) for r in result.collect()}
+        assert rows == {("100", "abc"), ("200",)}
+
+    def test_collision_list_with_uniform_int_elements_stays_long_array(self):
+        """A collision list where every element is genuinely the same kind
+        (here, int) should keep that kind rather than falling back to
+        string -- only genuine mismatches trigger the string fallback."""
+        if not self.has_pyspark:
+            pytest.skip("pyspark not installed")
+        from pyspark.sql import types as T
+
+        data = [
+            {"json": '{"User_id": "100", "Admin_id": "200"}'},
+            {"json": '{"User_id": "300"}'},
+        ]
+        spark_df = self.spark.createDataFrame(data)
+        tools = (
+            json_tools_rs.JSONTools()
+            .flatten()
+            .key_replacement("r'(User|Admin)_'", "")
+            .handle_key_collision(True)
+            .auto_convert_types(True)
+        )
+        result = tools.execute(spark_df)
+        assert result.schema["json.id"].dataType == T.ArrayType(T.LongType())
+        rows = {tuple(r["json.id"]) for r in result.collect()}
+        assert rows == {(100, 200), (300,)}
+
+
 class TestJsonStringColumnSpliceScale:
     """Larger-scale correctness coverage for the RawValue-based splice_row
     redesign (github.com/amaye15/JSON-Tools-rs/issues/31 performance fix) --

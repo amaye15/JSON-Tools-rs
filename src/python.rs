@@ -2188,6 +2188,28 @@ struct NormaliseColumns<'py> {
     columns: IndexMap<String, Vec<Bound<'py, PyAny>>>,
 }
 
+/// Classify a leaf value into the three JSON-adjacent "kinds" this module's
+/// column-type-consistency checks care about (github.com/amaye15/
+/// JSON-Tools-rs/issues/32, #33): bool, numeric (int or float -- pandas
+/// promotes a mix of those to a uniform `float64` column on its own, so
+/// they're deliberately not distinguished here), and str. `None` and
+/// anything else (e.g. a stray nested list/dict) classify as "none of the
+/// three", which never contributes to a mixed-kind count -- consistent with
+/// treating null and unclassifiable leaves as compatible with any column.
+#[cfg(feature = "python")]
+fn classify_scalar_kind(v: &Bound<'_, PyAny>) -> (bool, bool, bool) {
+    if v.is_instance_of::<pyo3::types::PyBool>() {
+        (true, false, false)
+    } else if v.is_instance_of::<pyo3::types::PyInt>() || v.is_instance_of::<pyo3::types::PyFloat>()
+    {
+        (false, true, false)
+    } else if v.is_instance_of::<PyString>() {
+        (false, false, true)
+    } else {
+        (false, false, false)
+    }
+}
+
 /// Parse each processed (flattened) JSON string into a row, union every row's
 /// keys in first-seen order, and null-fill any row missing a given key -- shared
 /// by all four `normalise` targets so their union/null-fill behavior is
@@ -2255,6 +2277,49 @@ fn union_and_columnarize<'py>(
                     *cell = PyList::new(py, [cell.clone()])?.into_any();
                 }
             }
+            // Shape uniformity (list vs. scalar) isn't the whole story
+            // (github.com/amaye15/JSON-Tools-rs/issues/33): a collision list
+            // is built from each colliding source key's own independently
+            // `auto_convert_types`-converted value, so a *single* row's
+            // collision can already mix kinds (e.g. `[100, "abc"]`), and a
+            // scalar just wrapped above carries whatever kind it already had.
+            // `infer_spark_type` declares one element type for the whole
+            // column; if the actual elements disagree, Arrow rejects it with
+            // the list-flavored twin of the scalar mismatch below
+            // (`Arrow Array (list<element: ...>)` instead of
+            // `Arrow Array (...)`). Stringify every element in every list
+            // cell when that happens, mirroring the scalar-column fallback.
+            let (has_bool, has_numeric, has_str) = col
+                .iter()
+                .filter_map(|cell| cell.cast::<PyList>().ok())
+                .flat_map(|list| list.iter())
+                .map(|item| classify_scalar_kind(&item))
+                .fold((false, false, false), |acc, k| {
+                    (acc.0 || k.0, acc.1 || k.1, acc.2 || k.2)
+                });
+            if [has_bool, has_numeric, has_str]
+                .iter()
+                .filter(|present| **present)
+                .count()
+                > 1
+            {
+                for cell in col.iter_mut() {
+                    let Ok(list) = cell.cast::<PyList>() else {
+                        continue;
+                    };
+                    let stringified = list
+                        .iter()
+                        .map(|item| {
+                            if item.is_none() {
+                                Ok(item)
+                            } else {
+                                item.str().map(|s| s.into_any())
+                            }
+                        })
+                        .collect::<PyResult<Vec<_>>>()?;
+                    *cell = PyList::new(py, stringified)?.into_any();
+                }
+            }
         } else {
             // `auto_convert_types` converts each value independently based on its
             // own content (github.com/amaye15/JSON-Tools-rs/issues/32) -- the same
@@ -2271,23 +2336,12 @@ fn union_and_columnarize<'py>(
             // numeric, or bool with numeric) falls back to stringifying every
             // value in the column, the same least-surprising fallback every other
             // target already uses for a column it can't type consistently.
-            let mut has_bool = false;
-            let mut has_numeric = false;
-            let mut has_str = false;
-            for cell in col.iter() {
-                if cell.is_none() {
-                    continue;
-                }
-                if cell.is_instance_of::<pyo3::types::PyBool>() {
-                    has_bool = true;
-                } else if cell.is_instance_of::<pyo3::types::PyInt>()
-                    || cell.is_instance_of::<pyo3::types::PyFloat>()
-                {
-                    has_numeric = true;
-                } else if cell.is_instance_of::<PyString>() {
-                    has_str = true;
-                }
-            }
+            let (has_bool, has_numeric, has_str) = col
+                .iter()
+                .map(classify_scalar_kind)
+                .fold((false, false, false), |acc, k| {
+                    (acc.0 || k.0, acc.1 || k.1, acc.2 || k.2)
+                });
             let kinds_present = [has_bool, has_numeric, has_str]
                 .iter()
                 .filter(|present| **present)
@@ -2359,21 +2413,25 @@ fn reconstruct_pyarrow_normalise(
 /// Infer a single column's PySpark type by scanning every non-`None` value
 /// (columns are already uniformly typed by this point for the cases that
 /// matter -- see `union_and_columnarize`'s list-collision and mixed-scalar-type
-/// uniformity handling, github.com/amaye15/JSON-Tools-rs/issues/32 -- except
-/// for a pre-existing, out-of-scope edge case shared with pandas/polars/
-/// pyarrow's own type inference: a leaf value that's neither bool/int/float/
-/// str/list, e.g. a stray nested object). Scanning all values, not just the
-/// first, matters specifically for int/float mixes: `union_and_columnarize`
-/// deliberately leaves those alone rather than stringifying them (pandas
-/// already promotes such a column to a uniform `float64` when the DataFrame
-/// is built), so the declared schema type must independently arrive at the
-/// same `DoubleType` conclusion regardless of which value happens to come
-/// first -- picking `LongType` from an early int while a later float made the
-/// real pandas column `float64` is exactly the mismatch that made Spark's
-/// Arrow bridge raise `PySparkTypeError` in the first place. An all-`None`
-/// column (no non-`None` value found) defaults to `StringType`, matching the
-/// other three targets' own harmless defaults for the same case (pandas
-/// `object`, polars `Null`, pyarrow `null`).
+/// uniformity handling, github.com/amaye15/JSON-Tools-rs/issues/32, #33 --
+/// except for a pre-existing, out-of-scope edge case shared with pandas/
+/// polars/pyarrow's own type inference: a leaf value that's neither bool/
+/// int/float/str/list, e.g. a stray nested object). Scanning all values, not
+/// just the first, matters specifically for int/float mixes: `union_and_
+/// columnarize` deliberately leaves those alone rather than stringifying
+/// them (pandas already promotes such a column to a uniform `float64` when
+/// the DataFrame is built), so the declared schema type must independently
+/// arrive at the same `DoubleType` conclusion regardless of which value
+/// happens to come first -- picking `LongType` from an early int while a
+/// later float made the real pandas column `float64` is exactly the
+/// mismatch that made Spark's Arrow bridge raise `PySparkTypeError` in the
+/// first place. The same reasoning applies one level down for list-valued
+/// columns: the element type is derived from every element of every list in
+/// the column, not just the first list's first element, since `union_and_
+/// columnarize` only guarantees element-kind uniformity, not which kind. An
+/// all-`None` column (no non-`None` value found) defaults to `StringType`,
+/// matching the other three targets' own harmless defaults for the same
+/// case (pandas `object`, polars `Null`, pyarrow `null`).
 #[cfg(feature = "python")]
 fn infer_spark_type<'py>(
     types_mod: &Bound<'py, PyModule>,
@@ -2405,7 +2463,36 @@ fn infer_spark_type<'py>(
         return types_mod.getattr("BooleanType")?.call0();
     }
     if saw_list {
-        let element_type = types_mod.getattr("StringType")?.call0()?;
+        let mut elem_bool = false;
+        let mut elem_int = false;
+        let mut elem_float = false;
+        for v in values {
+            let Ok(list) = v.cast::<PyList>() else {
+                continue;
+            };
+            for item in list.iter() {
+                if item.is_none() {
+                    continue;
+                }
+                // bool before int: Python's bool is an int subclass.
+                if item.is_instance_of::<pyo3::types::PyBool>() {
+                    elem_bool = true;
+                } else if item.is_instance_of::<pyo3::types::PyInt>() {
+                    elem_int = true;
+                } else if item.is_instance_of::<pyo3::types::PyFloat>() {
+                    elem_float = true;
+                }
+            }
+        }
+        let element_type = if elem_bool {
+            types_mod.getattr("BooleanType")?.call0()?
+        } else if elem_float {
+            types_mod.getattr("DoubleType")?.call0()?
+        } else if elem_int {
+            types_mod.getattr("LongType")?.call0()?
+        } else {
+            types_mod.getattr("StringType")?.call0()?
+        };
         return types_mod.getattr("ArrayType")?.call1((element_type,));
     }
     if saw_float {

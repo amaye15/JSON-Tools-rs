@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.15] - 2026-07-29
+
+### Fixed
+- **`execute(spark_df)` no longer crashes when a `.key_replacement()` /
+  `.handle_key_collision(True)` list column holds genuinely mixed element
+  types.** ([#33](https://github.com/amaye15/JSON-Tools-rs/issues/33)) The
+  list-flavored twin of the 0.9.14 fix: a `handle_key_collision` list is
+  built from each colliding source key's own independently
+  `auto_convert_types`-converted value, so a single row's collision could
+  already mix kinds (e.g. `[100, "abc"]`), and `infer_spark_type` hardcoded
+  `ArrayType(StringType)` for every list-valued column regardless of the
+  actual element types -- Arrow rejected the mismatch with `PySparkTypeError:
+  ... to Arrow Array (list<element: string>)`, confirmed via direct
+  reproduction against the published 0.9.14 wheel. `union_and_columnarize`
+  now checks every element of every list in a column for the same kind of
+  consistency the 0.9.14 fix applied to scalar columns, falling back to
+  string elements when they're genuinely mixed; `infer_spark_type` derives
+  the array's element type from every element across the column instead of
+  hardcoding `StringType`, so a uniformly-typed list column (e.g. all `int`)
+  now correctly gets `ArrayType(LongType)` instead of unnecessarily
+  stringifying. Also hardens `normalise(target=...)` for all four DataFrame
+  backends, since the fix lives in the shared column-unioning step.
+
 ## [0.9.14] - 2026-07-29
 
 ### Fixed

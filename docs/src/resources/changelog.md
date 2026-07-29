@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## v0.9.15 (2026-07-29)
+
+### Fixed
+- **`execute(spark_df)` no longer crashes when a `.key_replacement()`/`.handle_key_collision(True)` list column holds genuinely mixed element types** ([#33](https://github.com/amaye15/JSON-Tools-rs/issues/33)). The list-flavored twin of the 0.9.14 fix: a collision list is built from each colliding key's own independently-converted value, so a single row's collision could already mix kinds (e.g. `[100, "abc"]`); such columns now fall back to string elements, while uniformly-typed list columns (e.g. all `int`) correctly get a typed array instead of unnecessary stringification.
+
+See the repository's [CHANGELOG.md](https://github.com/amaye15/json-tools-rs/blob/master/CHANGELOG.md) for the full, itemized list.
+
 ## v0.9.14 (2026-07-29)
 
 ### Fixed

@@ -321,7 +321,13 @@ not the flatten computation itself).
 > (falling back to `StringType` for every value in it) rather than crashing
 > Spark's Arrow bridge with a `PySparkTypeError`. Columns mixing only `int`
 > and `float` are unaffected -- they promote to a numeric `double` column,
-> matching pandas's own automatic promotion for the same case.
+> matching pandas's own automatic promotion for the same case. The same
+> protection applies one level down for `.key_replacement()` /
+> `.handle_key_collision(True)` list columns: a collision list is built from
+> each colliding key's own independently-converted value, so a single row's
+> collision can itself hold mixed element types (e.g. `[100, "abc"]`) --
+> those elements fall back to strings too, while a uniformly-typed collision
+> column (e.g. every element an `int`) gets a correctly-typed array instead.
 
 ### What happens without `.flatten()` mode
 
