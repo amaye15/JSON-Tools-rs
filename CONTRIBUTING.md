@@ -92,6 +92,28 @@ cargo run --release --example bench_compare <old> <new>    # or two specific one
 alongside a change if the numbers actually mean something for that change — don't
 commit noise from an idle-machine sanity check.
 
+### Benchmarking the Python DataFrame reconstruction path
+
+`bench_quick`/Criterion only exercise the pure-Rust core and can't reach code behind
+the `python` feature. `execute(..., normalise=True, target=...)` and PySpark
+`execute(spark_df)` reconstruct a DataFrame from unioned/null-filled columns
+(`union_and_columnarize` + `reconstruct_*_normalise` in `src/python.rs`) — a separate,
+Python-call-only hot path with its own dedicated harness:
+
+```bash
+maturin develop --release --features python
+python python/benchmarks/bench_normalise.py                   # pandas/polars/pyarrow
+python python/benchmarks/bench_normalise.py --csv
+python python/benchmarks/bench_normalise.py --with-pyspark     # also benchmark PySpark (starts a local SparkSession)
+```
+
+Like `bench_quick`, this is hand-timed and informational, not statistically rigorous.
+Not wired into CI (no persistent history file) since it needs a built Python extension
+rather than a plain `cargo` invocation — run it manually before/after a change to this
+reconstruction path, ideally via an interleaved A/B against a `git worktree` at the
+prior commit rather than a single before/after run (isolated/non-interleaved
+measurements have been misleading for this codebase before).
+
 ### Profiling (macOS)
 
 The project uses [samply](https://github.com/mstange/samply) for profiling on macOS:

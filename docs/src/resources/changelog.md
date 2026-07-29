@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## v0.9.16 (2026-07-30)
+
+### Performance
+- **`execute(..., normalise=True, target=...)` and PySpark `execute(spark_df)` are 13-18% faster for large/wide results** (e.g. 754 rows x 4,042 columns). `union_and_columnarize` rewritten from an O(rows x columns) `PyDict` hash-lookup pattern to a single forward pass, plus `PyOnceLock`-cached pandas/polars/pyarrow/pyspark module imports across the reconstruction path. Verified via interleaved A/B against the real Python API.
+
+See the repository's [CHANGELOG.md](https://github.com/amaye15/json-tools-rs/blob/master/CHANGELOG.md) for the full, itemized list.
+
 ## v0.9.15 (2026-07-29)
 
 ### Fixed

@@ -2089,6 +2089,39 @@ fn extract_normalise_json_strings(
     ))
 }
 
+#[cfg(feature = "python")]
+static PANDAS_MODULE: PyOnceLock<Py<PyModule>> = PyOnceLock::new();
+#[cfg(feature = "python")]
+static POLARS_MODULE: PyOnceLock<Py<PyModule>> = PyOnceLock::new();
+#[cfg(feature = "python")]
+static PYARROW_MODULE: PyOnceLock<Py<PyModule>> = PyOnceLock::new();
+#[cfg(feature = "python")]
+static PYSPARK_MODULE: PyOnceLock<Py<PyModule>> = PyOnceLock::new();
+#[cfg(feature = "python")]
+static PYSPARK_SQL_MODULE: PyOnceLock<Py<PyModule>> = PyOnceLock::new();
+#[cfg(feature = "python")]
+static PYSPARK_TYPES_MODULE: PyOnceLock<Py<PyModule>> = PyOnceLock::new();
+
+/// Import-and-cache a top-level module the first time it's needed. Mirrors
+/// `json_callables`'s existing `PyOnceLock` idiom (see its doc comment)
+/// applied to modules instead of callables: every `normalise=True`/PySpark-
+/// `execute()` call previously paid a fresh `sys.modules` lookup +
+/// module-object materialization on each of `resolve_normalise_target`'s
+/// auto-detect probe, `require_importable`, and every `reconstruct_*_
+/// normalise` function -- up to 4 redundant imports of the *same* module
+/// (e.g. `reconstruct_pyspark_normalise` importing `pandas` just to check
+/// it's installed, then calling `reconstruct_pandas_normalise`, which
+/// imports `pandas` again) on a single call.
+#[cfg(feature = "python")]
+fn cached_import<'py>(
+    py: Python<'py>,
+    cell: &'static PyOnceLock<Py<PyModule>>,
+    name: &str,
+) -> PyResult<Bound<'py, PyModule>> {
+    let module = cell.get_or_try_init(py, || py.import(name).map(|m| m.unbind()))?;
+    Ok(module.bind(py).clone())
+}
+
 /// Resolve the effective `NormaliseTarget`: an explicit `target=` wins outright;
 /// otherwise an input that was itself a live DataFrame/Series of a known backend
 /// keeps that backend; otherwise try pandas -> polars -> pyarrow, first installed
@@ -2121,7 +2154,13 @@ fn resolve_normalise_target(
         NormaliseTarget::Polars,
         NormaliseTarget::PyArrow,
     ] {
-        if py.import(candidate.name()).is_ok() {
+        let cell = match candidate {
+            NormaliseTarget::Pandas => &PANDAS_MODULE,
+            NormaliseTarget::Polars => &POLARS_MODULE,
+            NormaliseTarget::PyArrow => &PYARROW_MODULE,
+            NormaliseTarget::PySpark => unreachable!("PySpark excluded from this candidate list"),
+        };
+        if cached_import(py, cell, candidate.name()).is_ok() {
             return Ok(candidate);
         }
     }
@@ -2141,7 +2180,13 @@ fn require_importable<'py>(
     py: Python<'py>,
     target: NormaliseTarget,
 ) -> PyResult<Bound<'py, PyModule>> {
-    py.import(target.name()).map_err(|_| {
+    let cell = match target {
+        NormaliseTarget::Pandas => &PANDAS_MODULE,
+        NormaliseTarget::Polars => &POLARS_MODULE,
+        NormaliseTarget::PyArrow => &PYARROW_MODULE,
+        NormaliseTarget::PySpark => &PYSPARK_MODULE,
+    };
+    cached_import(py, cell, target.name()).map_err(|_| {
         JsonToolsError::new_err(format!(
             "normalise(target=\"{}\") requires the '{}' package to be installed",
             target.name(),
@@ -2155,7 +2200,7 @@ fn require_importable<'py>(
 /// driver/notebook with a session created (`SparkSession.builder.getOrCreate()`).
 #[cfg(feature = "python")]
 fn require_active_spark_session(py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
-    let pyspark_sql = py.import("pyspark.sql").map_err(|_| {
+    let pyspark_sql = cached_import(py, &PYSPARK_SQL_MODULE, "pyspark.sql").map_err(|_| {
         JsonToolsError::new_err(
             "normalise(target=\"pyspark\") requires the 'pyspark' package to be installed",
         )
@@ -2244,24 +2289,46 @@ fn union_and_columnarize<'py>(
         rows.push(dict);
     }
 
-    let mut columns: IndexMap<String, Vec<Bound<'py, PyAny>>> =
-        IndexMap::with_capacity(key_order.len());
+    let n_keys = key_order.len();
 
-    for key in &key_order {
-        let mut col: Vec<Bound<'py, PyAny>> = Vec::with_capacity(n_rows);
-        let mut any_list = false;
-        for row in &rows {
-            let value = match row.get_item(key)? {
-                Some(v) => {
-                    if v.is_instance_of::<PyList>() {
-                        any_list = true;
-                    }
-                    v
-                }
-                None => py.None().into_bound(py),
+    // Scatter each row's own (key, value) pairs directly into pre-sized
+    // per-column slots via a single native `dict` iteration per row, instead
+    // of the previous `for key in &key_order { for row in &rows {
+    // row.get_item(key)? } }` -- an O(n_rows * n_keys) `PyDict.get_item` hash
+    // lookup (~3 million individual PyO3 dict lookups for issue #31's own
+    // reported 754-row/4,042-column case). A single pass over each row's own
+    // entries costs O(total key/value pairs actually present) instead: a
+    // native `dict.items()` walk (no hashing, just an internal table scan)
+    // plus one Rust-side `IndexSet::get_index_of` lookup per entry
+    // (already-hashed via Rust's own hasher, not a Python C-API call).
+    // Strictly cheaper in the dense case and asymptotically better in the
+    // sparse/heterogeneous case issues #32/#33 are actually about (rows with
+    // different key subsets after a `key_replacement` collision).
+    let mut column_slots: Vec<Vec<Option<Bound<'py, PyAny>>>> =
+        (0..n_keys).map(|_| vec![None; n_rows]).collect();
+    let mut any_list_per_col: Vec<bool> = vec![false; n_keys];
+
+    for (row_idx, row) in rows.iter().enumerate() {
+        for (key, value) in row.iter() {
+            let key_str: &str = key.extract()?;
+            let Some(col_idx) = key_order.get_index_of(key_str) else {
+                continue; // unreachable: key_order was built from these same rows above
             };
-            col.push(value);
+            if value.is_instance_of::<PyList>() {
+                any_list_per_col[col_idx] = true;
+            }
+            column_slots[col_idx][row_idx] = Some(value);
         }
+    }
+
+    let mut columns: IndexMap<String, Vec<Bound<'py, PyAny>>> = IndexMap::with_capacity(n_keys);
+
+    for (col_idx, key) in key_order.iter().enumerate() {
+        let mut col: Vec<Bound<'py, PyAny>> = column_slots[col_idx]
+            .drain(..)
+            .map(|maybe_v| maybe_v.unwrap_or_else(|| py.None().into_bound(py)))
+            .collect();
+        let any_list = any_list_per_col[col_idx];
         // `handle_key_collision(True)` produces a list-valued cell only for rows
         // where a collision actually occurred that row; other rows for the same
         // key stay scalar. A column mixing list and scalar values is rejected by
@@ -2367,7 +2434,7 @@ fn reconstruct_pandas_normalise(
     py: Python<'_>,
     cols: &NormaliseColumns<'_>,
 ) -> PyResult<Py<PyAny>> {
-    let pandas = py.import("pandas")?;
+    let pandas = cached_import(py, &PANDAS_MODULE, "pandas")?;
     let data = PyDict::new(py);
     for (key, values) in &cols.columns {
         data.set_item(key, PyList::new(py, values.iter().cloned())?)?;
@@ -2383,7 +2450,7 @@ fn reconstruct_polars_normalise(
     py: Python<'_>,
     cols: &NormaliseColumns<'_>,
 ) -> PyResult<Py<PyAny>> {
-    let polars = py.import("polars")?;
+    let polars = cached_import(py, &POLARS_MODULE, "polars")?;
     let data = PyDict::new(py);
     for (key, values) in &cols.columns {
         data.set_item(key, PyList::new(py, values.iter().cloned())?)?;
@@ -2399,7 +2466,7 @@ fn reconstruct_pyarrow_normalise(
     py: Python<'_>,
     cols: &NormaliseColumns<'_>,
 ) -> PyResult<Py<PyAny>> {
-    let pyarrow = py.import("pyarrow")?;
+    let pyarrow = cached_import(py, &PYARROW_MODULE, "pyarrow")?;
     let data = PyDict::new(py);
     for (key, values) in &cols.columns {
         data.set_item(key, PyList::new(py, values.iter().cloned())?)?;
@@ -2542,7 +2609,7 @@ fn reconstruct_pyspark_normalise(
     spark: &Bound<'_, PyAny>,
     cols: &NormaliseColumns<'_>,
 ) -> PyResult<Py<PyAny>> {
-    let types_mod = py.import("pyspark.sql.types")?;
+    let types_mod = cached_import(py, &PYSPARK_TYPES_MODULE, "pyspark.sql.types")?;
 
     if cols.columns.is_empty() {
         let empty_schema = types_mod.getattr("StructType")?.call0()?;
@@ -2551,7 +2618,7 @@ fn reconstruct_pyspark_normalise(
         return Ok(df.unbind());
     }
 
-    py.import("pandas").map_err(|_| {
+    cached_import(py, &PANDAS_MODULE, "pandas").map_err(|_| {
         JsonToolsError::new_err(
             "Reconstructing a PySpark DataFrame (via execute() or \
              normalise(target=\"pyspark\")) requires pandas to be installed -- it's \

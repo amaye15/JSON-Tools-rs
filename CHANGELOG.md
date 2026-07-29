@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.16] - 2026-07-30
+
+### Performance
+- **`execute(..., normalise=True, target=...)` and PySpark `execute(spark_df)` are
+  13-18% faster for large/wide results**, e.g. a 754-row, 4,042-column case (matching
+  issue #31's own reported scale). Found via a dedicated codebase audit after issues
+  #30-33 added a large amount of DataFrame-reconstruction machinery
+  (`union_and_columnarize`/`reconstruct_*_normalise` in `src/python.rs`) without a
+  performance pass, which also had zero benchmark coverage (the existing Criterion
+  suite only exercises the pure-Rust core). Two fixes, both benefiting all four
+  DataFrame targets since they share this code path:
+  - `union_and_columnarize` rewritten from an O(rows &times; columns) `PyDict.get_item`
+    hash lookup (re-scanning every row for every union'd key -- ~3 million individual
+    PyO3 dict lookups for the 754x4,042 case) to a single forward pass that scatters
+    each row's own `dict.items()` into pre-sized column slots, using a Rust-side
+    `IndexSet` index lookup instead of a Python-level hash lookup per cell.
+  - `pandas`/`polars`/`pyarrow`/`pyspark.sql`/`pyspark.sql.types` module imports
+    across this reconstruction code (previously re-imported on every call, including
+    up to 4 redundant imports of the *same* module within one `execute(spark_df)`
+    call) are now cached via `PyOnceLock`, mirroring the existing `JSON_CALLABLES`
+    caching idiom already used for `orjson`/stdlib `json`.
+  - Verified via an interleaved A/B (git worktree at the prior commit, alternating
+    fresh-process runs, medians over 6 rounds) against the real Python API, not an
+    isolated probe -- consistent with this project's own established measurement
+    practice. New `python/benchmarks/bench_normalise.py` harness added for future
+    before/after comparisons on this code path.
+
 ## [0.9.15] - 2026-07-29
 
 ### Fixed
