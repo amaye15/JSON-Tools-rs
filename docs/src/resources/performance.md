@@ -18,6 +18,7 @@ JSON Tools RS achieves ~2,000+ ops/ms through multiple optimization layers.
 | **Stack-Allocated Integer Formatting** | Custom `IntBuf` formatter for array-index keys (replaced the `itoa` crate) |
 | **mimalloc** | Optional high-performance allocator (`features = ["mimalloc"]`, ~14-28% measured on allocation-heavy paths) |
 | **orjson** (Python) | Bundled dependency -- replaces the stdlib `json` module for dict/DataFrame-row (de)serialization, with a per-call stdlib fallback for inputs it can't handle (e.g. integers beyond 64-bit range) |
+| **Zero-Copy Arrow** (Python) | `pyo3-arrow` reads an embedded JSON-string column directly from a Polars `DataFrame`/PyArrow `Table`'s Arrow buffer instead of round-tripping through the DataFrame's native JSON writer -- ~41-48% faster `execute()` end-to-end for that case; plain pandas/PySpark unaffected |
 | **UTF-8 byte[] JNI Marshaling** (JVM) | Native calls cross the JNI boundary as `byte[]` instead of `String`, avoiding UTF-16 <-> modified-UTF-8 conversion |
 
 ## Benchmark Results

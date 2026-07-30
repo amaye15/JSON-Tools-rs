@@ -6,7 +6,7 @@ Thank you for your interest in contributing! This guide covers the development w
 
 ### Prerequisites
 
-- **Rust**: 1.80+ (the MSRV). Install via [rustup](https://rustup.rs/).
+- **Rust**: 1.85+ (the MSRV). Install via [rustup](https://rustup.rs/).
 - **Python**: 3.9+ (for Python bindings development).
 - **maturin**: For building Python wheels (`pip install maturin`).
 - **JDK 17+ and Maven**: for JVM (Java/Spark) bindings development (see [jvm/](jvm/)).

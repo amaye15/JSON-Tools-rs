@@ -5364,6 +5364,142 @@ class TestPySparkMixedTypeListColumnFallback:
         assert rows == {(100, 200), (300,)}
 
 
+class TestJsonStringColumnZeroCopyArrow:
+    """Polars `DataFrame`/PyArrow `Table` input routes JSON-string-column
+    detection/splicing through zero-copy Arrow buffer access instead of the
+    escape-then-unescape round trip through the DataFrame's native JSON
+    writer (2026-07-30 serialization/DataFrame-latency round; see
+    detect_and_extract_json_columns_zerocopy's doc comment in src/python.rs
+    for the measured ~8.7x/~28x win). These tests target behavior specific
+    to that path -- column-order preservation when the target column isn't
+    last, multiple target columns, nulls, multi-chunk arrays, and the
+    fallback/warning path -- that the more general TestJsonStringColumn
+    Expansion tests above don't exercise directly."""
+
+    @pytest.fixture(autouse=True)
+    def setup(self):
+        try:
+            import polars as pl
+
+            self.pl = pl
+            self.has_polars = True
+        except ImportError:
+            self.has_polars = False
+
+        try:
+            import pyarrow as pa
+
+            self.pa = pa
+            self.has_pyarrow = True
+        except ImportError:
+            self.has_pyarrow = False
+
+    def test_polars_column_order_preserved_when_target_not_last(self):
+        if not self.has_polars:
+            pytest.skip("polars not installed")
+        tools = json_tools_rs.JSONTools().flatten()
+        df = self.pl.DataFrame({"id": [1], "blob": ['{"a": 1, "b": 2}'], "name": ["x"]})
+        result = tools.execute(df)
+        assert result.columns == ["id", "blob.a", "blob.b", "name"]
+
+    def test_pyarrow_column_order_preserved_when_target_not_last(self):
+        if not self.has_pyarrow:
+            pytest.skip("pyarrow not installed")
+        tools = json_tools_rs.JSONTools().flatten()
+        table = self.pa.table({"id": [1], "blob": ['{"a": 1, "b": 2}'], "name": ["x"]})
+        result = tools.execute(table)
+        assert result.column_names == ["id", "blob.a", "blob.b", "name"]
+
+    def test_polars_multiple_target_columns(self):
+        if not self.has_polars:
+            pytest.skip("polars not installed")
+        tools = json_tools_rs.JSONTools().flatten()
+        df = self.pl.DataFrame(
+            {"id": [1], "blob1": ['{"a": 1}'], "blob2": ['{"b": 2}']}
+        )
+        result = tools.execute(df)
+        assert result.columns == ["id", "blob1.a", "blob2.b"]
+        assert result["blob1.a"].to_list() == [1]
+        assert result["blob2.b"].to_list() == [2]
+
+    def test_polars_multi_chunk_column_extracts_correctly(self):
+        """A Series built from vstack (not rechunked) has multiple physical
+        Arrow chunks -- the zero-copy extraction must iterate all of them,
+        not just the first."""
+        if not self.has_polars:
+            pytest.skip("polars not installed")
+        tools = json_tools_rs.JSONTools().flatten()
+        df1 = self.pl.DataFrame({"id": [1, 2], "blob": ['{"a": 1}', '{"a": 2}']})
+        df2 = self.pl.DataFrame({"id": [3, 4], "blob": ['{"a": 3}', '{"a": 4}']})
+        df = df1.vstack(df2)
+        assert df["blob"].n_chunks() > 1  # sanity: genuinely multi-chunk
+        result = tools.execute(df)
+        assert result["blob.a"].to_list() == [1, 2, 3, 4]
+
+    def test_polars_row_beyond_sample_window_falls_back_with_warning(self):
+        """The column is detected from a 20-row sample; a non-JSON value
+        outside that window must fall back to its original string (properly
+        escaped) and emit the same aggregated warning the text-based path
+        emits for this case."""
+        if not self.has_polars:
+            pytest.skip("polars not installed")
+        tools = json_tools_rs.JSONTools().flatten()
+        blobs = [f'{{"a": {i}}}' for i in range(24)] + ["not json"]
+        df = self.pl.DataFrame({"id": list(range(25)), "blob": blobs})
+        with pytest.warns(UserWarning, match="blob"):
+            result = tools.execute(df)
+        row24 = result.filter(self.pl.col("id") == 24)
+        assert row24["blob"][0] == "not json"
+        assert row24["blob.a"][0] is None
+
+    def test_polars_fallback_value_escaping_roundtrips(self):
+        """A fallback (not-actually-JSON) value containing quotes/backslashes/
+        newlines must round-trip exactly, not get corrupted by the manual
+        re-escaping this path does instead of relying on the native writer."""
+        if not self.has_polars:
+            pytest.skip("polars not installed")
+        tools = json_tools_rs.JSONTools().flatten()
+        tricky = 'not "json" with \\ and \n newline'
+        blobs = [f'{{"a": {i}}}' for i in range(24)] + [tricky]
+        df = self.pl.DataFrame({"id": list(range(25)), "blob": blobs})
+        with pytest.warns(UserWarning, match="blob"):
+            result = tools.execute(df)
+        row24 = result.filter(self.pl.col("id") == 24)
+        assert row24["blob"][0] == tricky
+
+    def test_polars_null_in_target_column(self):
+        if not self.has_polars:
+            pytest.skip("polars not installed")
+        tools = json_tools_rs.JSONTools().flatten()
+        df = self.pl.DataFrame({"id": [1, 2], "blob": ['{"a": 1}', None]})
+        result = tools.execute(df)
+        row1 = result.filter(self.pl.col("id") == 1)
+        row2 = result.filter(self.pl.col("id") == 2)
+        assert row1["blob.a"][0] == 1
+        assert row2["blob.a"][0] is None
+
+    def test_polars_no_target_columns_uses_plain_path(self):
+        """No JSON-string columns present -- must produce the exact same
+        result as the plain (non-zero-copy) path, not error or misbehave."""
+        if not self.has_polars:
+            pytest.skip("polars not installed")
+        tools = json_tools_rs.JSONTools().flatten()
+        df = self.pl.DataFrame({"id": [1, 2], "name": ["a", "b"]})
+        result = tools.execute(df)
+        assert result.columns == ["id", "name"]
+        assert result["name"].to_list() == ["a", "b"]
+
+    def test_polars_empty_dataframe(self):
+        if not self.has_polars:
+            pytest.skip("polars not installed")
+        tools = json_tools_rs.JSONTools().flatten()
+        df = self.pl.DataFrame(
+            {"id": [], "blob": []}, schema={"id": self.pl.Int64, "blob": self.pl.Utf8}
+        )
+        result = tools.execute(df)
+        assert result.shape[0] == 0
+
+
 class TestJsonStringColumnSpliceScale:
     """Larger-scale correctness coverage for the RawValue-based splice_row
     redesign (github.com/amaye15/JSON-Tools-rs/issues/31 performance fix) --

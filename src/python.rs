@@ -23,6 +23,11 @@ use std::sync::Mutex;
 use indexmap::{IndexMap, IndexSet};
 
 #[cfg(feature = "python")]
+use arrow_array::{Array, LargeStringArray, StringArray, StringViewArray};
+#[cfg(feature = "python")]
+use pyo3_arrow::PyChunkedArray;
+
+#[cfg(feature = "python")]
 use crate::flatten::write_json_escaped_key;
 use crate::{JSONTools, JsonOutput};
 
@@ -890,6 +895,252 @@ fn expand_json_string_columns(py: Python<'_>, rows: Vec<String>) -> PyResult<Vec
     for row in rows {
         let spliced = splice_row(&row, &target_keys, &mut failure_counts);
         out.push(spliced.unwrap_or(row));
+    }
+
+    if !failure_counts.is_empty() {
+        let warnings = py.import("warnings")?;
+        for (key, count) in &failure_counts {
+            warnings.call_method1(
+                "warn",
+                (format!(
+                    "JSON-string column expansion: {count} row(s) in column \"{key}\" looked \
+                     like JSON in a sample but failed to parse and were left as their \
+                     original string value",
+                ),),
+            )?;
+        }
+    }
+
+    Ok(out)
+}
+
+/// Column names, in schema order, for a Polars `DataFrame` or PyArrow `Table`/
+/// `RecordBatch`. Only called for those two types -- see
+/// `detect_and_extract_json_columns_zerocopy`'s doc comment for why they're
+/// singled out.
+#[cfg(feature = "python")]
+fn dataframe_column_names(df: &Bound<'_, PyAny>, df_type: DataFrameType) -> PyResult<Vec<String>> {
+    match df_type {
+        DataFrameType::Polars => df.getattr("columns")?.extract(),
+        DataFrameType::PyArrow => df.getattr("column_names")?.extract(),
+        _ => unreachable!("only called for Polars/PyArrow -- see caller"),
+    }
+}
+
+/// Get a single column as a Python object (a polars `Series` or PyArrow
+/// `ChunkedArray`) -- both implement the Arrow PyCapsule interface, so
+/// `.extract::<PyChunkedArray>()` on the result converts it zero-copy.
+#[cfg(feature = "python")]
+fn dataframe_get_column<'py>(
+    df: &Bound<'py, PyAny>,
+    df_type: DataFrameType,
+    name: &str,
+) -> PyResult<Bound<'py, PyAny>> {
+    match df_type {
+        DataFrameType::Polars => df.get_item(name),
+        DataFrameType::PyArrow => df.call_method1("column", (name,)),
+        _ => unreachable!("only called for Polars/PyArrow -- see caller"),
+    }
+}
+
+/// Drop the given columns from a Polars `DataFrame` or PyArrow `Table`,
+/// returning a new (lighter) object -- used to keep the native-writer call in
+/// `dataframe_to_json_strings` cheap by excluding columns already extracted
+/// via zero-copy (see `detect_and_extract_json_columns_zerocopy`'s doc
+/// comment: escaping a large embedded JSON blob is the dominant cost of that
+/// writer call, confirmed empirically -- dropping the column first, not just
+/// ignoring its output, is what actually avoids paying for it).
+#[cfg(feature = "python")]
+fn dataframe_drop_columns<'py>(
+    df: &Bound<'py, PyAny>,
+    df_type: DataFrameType,
+    cols: &[String],
+) -> PyResult<Bound<'py, PyAny>> {
+    match df_type {
+        DataFrameType::Polars => df.call_method1("drop", (cols.to_vec(),)),
+        DataFrameType::PyArrow => df.call_method1("drop_columns", (cols.to_vec(),)),
+        _ => unreachable!("only called for Polars/PyArrow -- see caller"),
+    }
+}
+
+/// Extract every value of an Arrow-backed string column via the Arrow
+/// PyCapsule interface (zero-copy: no serialization, no Python-level
+/// per-cell iteration) -- `None` per cell for a null, `Some(text)` otherwise.
+/// Returns `Ok(None)` (not an error) if `col` isn't string-typed -- callers
+/// use this to skip non-string columns, which can never hold embedded JSON
+/// text (a dict/struct-typed column is already handled directly by the
+/// flatten engine; a numeric/bool/nested-list column can't hold JSON text at
+/// all).
+#[cfg(feature = "python")]
+fn extract_arrow_string_values(col: &Bound<'_, PyAny>) -> PyResult<Option<Vec<Option<String>>>> {
+    let Ok(chunked) = col.extract::<PyChunkedArray>() else {
+        return Ok(None);
+    };
+    let mut out = Vec::new();
+    for chunk in chunked.chunks() {
+        if let Some(arr) = chunk.as_any().downcast_ref::<StringArray>() {
+            for i in 0..arr.len() {
+                out.push(arr.is_valid(i).then(|| arr.value(i).to_string()));
+            }
+        } else if let Some(arr) = chunk.as_any().downcast_ref::<LargeStringArray>() {
+            for i in 0..arr.len() {
+                out.push(arr.is_valid(i).then(|| arr.value(i).to_string()));
+            }
+        } else if let Some(arr) = chunk.as_any().downcast_ref::<StringViewArray>() {
+            for i in 0..arr.len() {
+                out.push(arr.is_valid(i).then(|| arr.value(i).to_string()));
+            }
+        } else {
+            return Ok(None); // not a string array (int/float/bool/struct/...)
+        }
+    }
+    Ok(Some(out))
+}
+
+/// Check whether a leaf value's text is itself a JSON object or array --
+/// shared detection rule between the text-based detector (`detect_json_
+/// string_columns`) and this zero-copy one, so "does this column hold
+/// embedded JSON" means the exact same thing regardless of which path found
+/// it.
+#[cfg(feature = "python")]
+fn is_json_object_or_array_text(text: &str) -> bool {
+    serde_json::from_str::<&serde_json::value::RawValue>(text).is_ok()
+        && matches!(text.as_bytes().first(), Some(b'{') | Some(b'['))
+}
+
+/// Arrow-native twin of `detect_json_string_columns` + the column-extraction
+/// half of `splice_row`, for Polars `DataFrame`/PyArrow `Table` input
+/// specifically. Those two libraries expose their string columns through the
+/// Arrow PyCapsule interface, so a column already holding embedded JSON text
+/// (github.com/amaye15/JSON-Tools-rs/issues/30) can be read directly via
+/// `pyo3-arrow` instead of round-tripping through the DataFrame's own native
+/// JSON writer -- which would first *escape* that text into a quoted string
+/// value (`dataframe_to_json_strings`), only for `splice_row` to immediately
+/// *unescape* it back out. Measured directly (interleaved, isolated probe,
+/// 2026-07-30): reading the column zero-copy is ~8.7x (polars)/~28x
+/// (pyarrow) faster than that round trip for a realistic embedded payload,
+/// and confirmed separately that the escaping step -- not fixed per-row
+/// overhead -- is what dominates the native writer's cost (dropping the
+/// column before calling it cut that call's own time ~44x).
+///
+/// Returns `None` for any other `DataFrameType` (pandas isn't Arrow-backed
+/// by default; PySpark bridges through pandas already; this optimization
+/// doesn't apply there). Returns `Some` with an empty target-column list
+/// when the type *is* Polars/PyArrow but sampling found no embedded-JSON
+/// columns -- callers should still fall back to the plain
+/// `dataframe_to_json_strings` path in that case, since there's nothing to
+/// splice.
+#[cfg(feature = "python")]
+#[allow(clippy::type_complexity)]
+fn detect_and_extract_json_columns_zerocopy(
+    df: &Bound<'_, PyAny>,
+    df_type: DataFrameType,
+) -> PyResult<
+    Option<(
+        Vec<String>,
+        IndexMap<String, Vec<Option<String>>>,
+        Vec<String>,
+    )>,
+> {
+    if !matches!(df_type, DataFrameType::Polars | DataFrameType::PyArrow) {
+        return Ok(None);
+    }
+
+    let column_order = dataframe_column_names(df, df_type)?;
+    let mut target_cols = Vec::new();
+    let mut target_values: IndexMap<String, Vec<Option<String>>> = IndexMap::new();
+
+    for name in &column_order {
+        let col = dataframe_get_column(df, df_type, name)?;
+        let Some(values) = extract_arrow_string_values(&col)? else {
+            continue; // not a string column at all -- can't hold embedded JSON
+        };
+
+        let sample_size = values.len().min(JSON_COLUMN_DETECTION_SAMPLE_SIZE);
+        let mut sampled_any = false;
+        let mut all_sampled_are_json = true;
+        for value in values.iter().take(sample_size).flatten() {
+            sampled_any = true;
+            if !is_json_object_or_array_text(value) {
+                all_sampled_are_json = false;
+                break;
+            }
+        }
+
+        if sampled_any && all_sampled_are_json {
+            target_cols.push(name.clone());
+            target_values.insert(name.clone(), values);
+        }
+    }
+
+    Ok(Some((target_cols, target_values, column_order)))
+}
+
+/// Rebuild each row's JSON object from two sources: `base_rows` (the native-
+/// writer output for every column *except* `target_cols`, already valid
+/// JSON text per row) and `target_values` (the zero-copy-extracted raw text
+/// for `target_cols`, one `Vec` per column, indexed by row). Iterates
+/// `column_order` -- the DataFrame's *original* schema order, captured
+/// before any columns were dropped -- so the spliced-in columns land back in
+/// their original position rather than at the end, matching what the text-
+/// based `splice_row` path already guarantees (the "not alphabetized"
+/// column-order tests from issue #31 apply here too). A target value that
+/// isn't itself valid JSON object/array text (rare -- the column passed
+/// sampling but this particular row didn't) falls back to a plain escaped
+/// string literal via the same `write_json_escaped_key` used for keys, and
+/// counts toward the same aggregated warning `expand_json_string_columns`
+/// already emits for this case.
+#[cfg(feature = "python")]
+fn splice_zerocopy_columns(
+    py: Python<'_>,
+    base_rows: Vec<String>,
+    column_order: &[String],
+    target_cols: &[String],
+    target_values: &IndexMap<String, Vec<Option<String>>>,
+) -> PyResult<Vec<String>> {
+    let target_set: IndexSet<&str> = target_cols.iter().map(String::as_str).collect();
+    let mut failure_counts: IndexMap<String, usize> = IndexMap::new();
+    let mut out = Vec::with_capacity(base_rows.len());
+
+    for (row_idx, base_row) in base_rows.iter().enumerate() {
+        let base_fields: IndexMap<String, &serde_json::value::RawValue> =
+            serde_json::from_str(base_row).map_err(|e| {
+                JsonToolsError::new_err(format!("Failed to parse intermediate row {row_idx}: {e}"))
+            })?;
+
+        let mut row_out = String::with_capacity(base_row.len() + 64);
+        row_out.push('{');
+        let mut first = true;
+        for key in column_order {
+            if !first {
+                row_out.push(',');
+            }
+            first = false;
+            row_out.push('"');
+            write_json_escaped_key(&mut row_out, key);
+            row_out.push_str("\":");
+
+            if target_set.contains(key.as_str()) {
+                match target_values.get(key).and_then(|col| col.get(row_idx)) {
+                    Some(Some(text)) if is_json_object_or_array_text(text) => {
+                        row_out.push_str(text);
+                    }
+                    Some(Some(text)) => {
+                        row_out.push('"');
+                        write_json_escaped_key(&mut row_out, text);
+                        row_out.push('"');
+                        *failure_counts.entry(key.clone()).or_insert(0) += 1;
+                    }
+                    _ => row_out.push_str("null"),
+                }
+            } else if let Some(raw) = base_fields.get(key) {
+                row_out.push_str(raw.get());
+            } else {
+                row_out.push_str("null");
+            }
+        }
+        row_out.push('}');
+        out.push(row_out);
     }
 
     if !failure_counts.is_empty() {
@@ -2693,22 +2944,52 @@ impl PyJSONTools {
         df_type: DataFrameType,
     ) -> PyResult<Py<PyAny>> {
         let py = df.py();
+        let is_flatten_mode = lock_config(&self.inner)?.is_flatten_mode();
 
         // Step 1: Convert DataFrame directly to per-row JSON strings (native
         // to_json/write_ndjson where available -- see `dataframe_to_json_strings`'s
-        // doc comment)
-        let mut json_strings = dataframe_to_json_strings(df, df_type)?;
-
-        // Step 1.5: In flatten mode only, auto-expand any column holding JSON
-        // *strings* (not already dicts/structs) the same way a dict-typed column
-        // already expands -- see `expand_json_string_columns`'s doc comment
-        // (github.com/amaye15/JSON-Tools-rs/issues/30). Gated on flatten mode
-        // specifically: `dataframe_to_json_strings`'s own contract is "native
-        // per-row JSON text, unmodified," so `.normal()`/`.unflatten()` DataFrame
-        // processing is intentionally untouched by this.
-        if lock_config(&self.inner)?.is_flatten_mode() {
-            json_strings = expand_json_string_columns(py, json_strings)?;
-        }
+        // doc comment), then in flatten mode only, auto-expand any column
+        // holding JSON *strings* (not already dicts/structs) the same way a
+        // dict-typed column already expands (github.com/amaye15/
+        // JSON-Tools-rs/issues/30). `.normal()`/`.unflatten()` DataFrame
+        // processing is intentionally untouched by any of this.
+        //
+        // For Polars/PyArrow input, `detect_and_extract_json_columns_zerocopy`
+        // finds embedded-JSON-string columns directly via Arrow zero-copy
+        // access and, if it finds any, takes a different route: those columns
+        // are dropped before the native writer runs (avoiding the writer
+        // having to escape their -- often large -- content at all) and
+        // spliced back in from the zero-copy values afterward. See that
+        // function's doc comment for the measured win and why this is
+        // scoped to just those two DataFrame types.
+        let json_strings = if is_flatten_mode {
+            match detect_and_extract_json_columns_zerocopy(df, df_type)? {
+                Some((target_cols, target_values, column_order)) if !target_cols.is_empty() => {
+                    let df_reduced = dataframe_drop_columns(df, df_type, &target_cols)?;
+                    let base_rows = dataframe_to_json_strings(&df_reduced, df_type)?;
+                    splice_zerocopy_columns(
+                        py,
+                        base_rows,
+                        &column_order,
+                        &target_cols,
+                        &target_values,
+                    )?
+                }
+                Some(_) => {
+                    // Polars/PyArrow input, but sampling found no embedded-JSON
+                    // columns -- nothing to splice, use the plain path.
+                    dataframe_to_json_strings(df, df_type)?
+                }
+                None => {
+                    // pandas/PySpark/generic: not Arrow-backed by default, use
+                    // the existing text-based detect-then-splice path.
+                    let rows = dataframe_to_json_strings(df, df_type)?;
+                    expand_json_string_columns(py, rows)?
+                }
+            }
+        } else {
+            dataframe_to_json_strings(df, df_type)?
+        };
 
         // Step 2: Process through existing pipeline (releases GIL)
         let result = py

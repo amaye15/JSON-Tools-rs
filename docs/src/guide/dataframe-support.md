@@ -160,6 +160,17 @@ for free too).
   were affected -- so this stays visible instead of silently leaving that row's
   data in a different shape than the rest of the column.
 
+> **Polars/PyArrow: zero-copy detection and extraction.** For these two libraries
+> specifically, detecting and reading a JSON-string column happens via `pyo3-arrow`'s
+> direct Arrow buffer access rather than through the DataFrame's own JSON writer --
+> ~41-48% faster `execute()` end-to-end for a table with a large embedded payload,
+> since the writer no longer has to *escape* that content only for it to be
+> immediately *unescaped* again. Behavior is identical either way (same detection
+> rules, same column ordering, same fallback/warning for a row that doesn't actually
+> parse); this only changes how the data gets read. Plain pandas isn't Arrow-backed
+> by default and PySpark bridges through pandas already, so both keep using the
+> text-based path described above.
+
 ## Normalise: Always Get a Wide DataFrame
 
 `.execute()` normally mirrors the input's own type (str→str, dict→dict, DataFrame→

@@ -17,9 +17,18 @@ env:
 
 jobs:
   # Rust-side correctness/lint for the jvm feature is already covered by rust-ci.yml's
-  # `lint` job (`cargo clippy --all-features`, which includes `jvm`) and `msrv` job
-  # confirmed separately to be 1.80-compatible with `--features jvm` -- no need to
-  # duplicate that here.
+  # `lint` job (`cargo clippy --all-features`, which includes `jvm`, on the `stable`
+  # toolchain) -- no need to duplicate that here. NOTE: rust-ci.yml's `msrv` job only
+  # checks `--features test-assets-performance`, not `jvm` -- it does NOT actually
+  # cover this feature despite an earlier version of this comment implying otherwise.
+  # Confirmed directly (2026-07-30, `cargo +1.85.0 check --features jvm`) that `jni`
+  # 0.22.4 does NOT build under the exact 1.85 MSRV toolchain (`*mut _jobject:
+  # Default` not satisfied, jni's own `EnvOutcome::resolve` bound) -- a pre-existing
+  # gap, unrelated to that day's MSRV bump (confirmed present at the prior commit's
+  # Cargo.lock too), left unfixed here as out of scope for the change that surfaced
+  # it. `--features jvm` alone builds fine on any newer stable toolchain (e.g. what
+  # the `lint` job and native-build jobs below actually use), so this only matters
+  # for someone specifically targeting the MSRV floor with the jvm feature enabled.
 
   native-build:
     name: Build native lib (${{ matrix.target }})

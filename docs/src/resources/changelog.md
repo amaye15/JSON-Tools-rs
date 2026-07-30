@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## v0.9.19 (2026-07-30)
+
+### Changed
+- **MSRV raised from 1.80 to 1.85** -- required for current `pyo3-arrow` releases (see Performance below). Affects every source (`cargo add`) consumer.
+
+### Performance
+- **`execute()` on a Polars `DataFrame`/PyArrow `Table` with an embedded JSON-string column is ~41-48% faster end-to-end.** Detection/extraction of such columns now uses `pyo3-arrow`'s zero-copy Arrow buffer access instead of round-tripping through the DataFrame's native JSON writer (escape, then immediately unescape). Column ordering is preserved exactly as before. Scoped to Polars/PyArrow -- plain pandas and PySpark are unaffected, still using the existing path.
+
+See the repository's [CHANGELOG.md](https://github.com/amaye15/json-tools-rs/blob/master/CHANGELOG.md) for the full, itemized list.
+
 ## v0.9.18 (2026-07-30)
 
 ### Performance

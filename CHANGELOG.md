@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.19] - 2026-07-30
+
+### Changed
+- **MSRV raised from 1.80 to 1.85.** Required to use current `pyo3-arrow`
+  releases (see Performance below); the only MSRV-1.80-compatible
+  `pyo3-arrow` version was 0.8.0, ~11 releases behind and not worth pinning
+  to indefinitely for a fast-moving crate. Affects every consumer building
+  from source (`cargo add`), not just the `python` feature.
+
+### Performance
+- **`execute()` on a Polars `DataFrame`/PyArrow `Table` with an embedded
+  JSON-string column is ~41-48% faster end-to-end.** Detection/extraction of
+  such columns now goes through `pyo3-arrow`'s zero-copy Arrow buffer access
+  instead of round-tripping through the DataFrame's native JSON writer,
+  which previously had to *escape* the embedded content into a quoted
+  string (only for the existing splice step to immediately *unescape* it
+  back out). The target column is dropped from the DataFrame before the
+  native writer runs (confirmed empirically that escaping the embedded
+  content, not fixed per-row overhead, dominates that writer's cost --
+  dropping the column cut its own time ~44x in isolation) and the
+  zero-copy-extracted values are spliced back into their *original* schema
+  position afterward, so column ordering matches the existing text-based
+  path's "not alphabetized" guarantee. Verified via interleaved A/B (git
+  worktree, 6 rounds): isolated column extraction ~8.7x (polars)/~28x
+  (pyarrow) faster; real end-to-end `execute()` ~41.3%/~47.5% faster for a
+  754-row-scale table with a large embedded payload. Scoped to Polars/
+  PyArrow specifically -- plain pandas isn't Arrow-backed by default, and
+  PySpark already bridges through pandas, so both keep using the existing
+  text-based detection/splice path unchanged. New `TestJsonStringColumn
+  ZeroCopyArrow` test class covers column-order preservation, multiple
+  target columns, multi-chunk Arrow arrays, nulls, and the fallback/warning
+  path for a value that samples as JSON-like but isn't for one row.
+
 ## [0.9.18] - 2026-07-30
 
 ### Performance
