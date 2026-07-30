@@ -13,6 +13,11 @@ allow = [
     "Zlib",
     "Unicode-DFS-2016",
     "Unicode-3.0",
+    # tiny-keccak (transitive via ahash <- arrow-array/arrow-cast <- pyo3-arrow,
+    # added 2026-07-30 for the zero-copy Arrow DataFrame extraction feature) uses
+    # this license -- a permissive public-domain-equivalent license, not a
+    # licensing concern, just missing from this allow-list.
+    "CC0-1.0",
 ]
 confidence-threshold = 0.8
 
