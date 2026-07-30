@@ -426,8 +426,15 @@
 //! ```
 //!
 
-// Use mimalloc for ~5-10% performance improvement on allocation-heavy workloads.
-// Only enabled when the mimalloc feature is active (default for Rust, excluded for Python).
+// Use mimalloc for a real, measured improvement on allocation-heavy workloads --
+// interleaved bench_quick comparison (2026-07-30, macOS aarch64, 4 rounds): ~28%
+// faster for normal-mode transforms, ~14% faster for unflatten and batch-parallel
+// flatten (previously undocumented beyond a generic "~5-10%" estimate; not yet
+// measured on other platforms). Only enabled when the mimalloc feature is active
+// -- opt-in for `cargo add` consumers who build from source; deliberately NOT
+// enabled for published Python wheels or JVM jars, where an earlier attempt hit
+// real cross-compilation breakage (aarch64/ppc64le manylinux, musllinux) when
+// bundled with a since-reverted PGO effort -- see CHANGELOG.md.
 #[cfg(feature = "mimalloc")]
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;

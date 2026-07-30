@@ -1357,22 +1357,29 @@ fn resolve_and_write<K: Deref<Target = str>>(
         return write_entries_simple(&entries);
     }
 
-    // Build collision map — use FxHashMap<String, SmallVec<[usize; 1]>>
-    // Move keys out of entries to avoid cloning
+    // Build collision map. `ordered` holds each unique key's first-occurrence
+    // index plus every occurrence's index, in first-seen order; `key_positions`
+    // maps a key to its slot in `ordered` (not its indices directly), so the
+    // output loop below can read a key's indices straight out of `ordered`
+    // instead of doing a second hashmap lookup per unique key for something
+    // this loop already computed (previously `&key_indices[key]`, a second
+    // lookup right after this same loop just inserted that exact entry).
     let n = entries.len();
-    let mut key_indices: FxHashMap<&str, SmallVec<[usize; 1]>> =
+    let mut key_positions: FxHashMap<&str, usize> =
         FxHashMap::with_capacity_and_hasher(n, Default::default());
-    let mut ordered_keys: Vec<usize> = Vec::with_capacity(n); // indices of first occurrence
+    let mut ordered: Vec<(usize, SmallVec<[usize; 1]>)> = Vec::with_capacity(n);
 
     for (i, entry) in entries.iter().enumerate() {
         let key: &str = &entry.key;
-        key_indices
-            .entry(key)
-            .and_modify(|indices| indices.push(i))
-            .or_insert_with(|| {
-                ordered_keys.push(i);
-                SmallVec::from_elem(i, 1)
-            });
+        match key_positions.entry(key) {
+            std::collections::hash_map::Entry::Occupied(e) => {
+                ordered[*e.get()].1.push(i);
+            }
+            std::collections::hash_map::Entry::Vacant(e) => {
+                e.insert(ordered.len());
+                ordered.push((i, SmallVec::from_elem(i, 1)));
+            }
+        }
     }
 
     // Estimate output size
@@ -1387,16 +1394,16 @@ fn resolve_and_write<K: Deref<Target = str>>(
                 }
         })
         .sum::<usize>()
-        + ordered_keys.len().saturating_sub(1) // commas between entries
+        + ordered.len().saturating_sub(1) // commas between entries
         + 2; // {}
 
     let mut output = String::with_capacity(output_cap);
     output.push('{');
     let mut first = true;
 
-    for &first_idx in &ordered_keys {
+    for (first_idx, indices) in &ordered {
+        let first_idx = *first_idx;
         let key: &str = &entries[first_idx].key;
-        let indices = &key_indices[key];
 
         if !first {
             output.push(',');

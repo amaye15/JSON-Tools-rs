@@ -326,7 +326,7 @@ print(f"Processing took {elapsed:.3f}s")
 
 ### mimalloc (Rust-only)
 
-The `mimalloc` global allocator is an optional feature that provides a 5-10% performance improvement. Enable it with `features = ["mimalloc"]` in your `Cargo.toml`. It is **not included in Python builds** because PyO3 manages memory through Python's allocator.
+The `mimalloc` global allocator is an optional feature that provides a measured ~14-28% performance improvement on allocation-heavy paths (normal-mode transforms, unflatten, batch-parallel flatten -- macOS aarch64). Enable it with `features = ["mimalloc"]` in your `Cargo.toml`. It is **not included in Python or JVM builds** -- PyO3 manages memory through Python's allocator, and an earlier attempt to bundle mimalloc into published wheels/jars hit real cross-compilation breakage on several platforms and was reverted; this feature is for `cargo add`/source consumers who opt in themselves.
 
 ### sonic-rs (64-bit only)
 

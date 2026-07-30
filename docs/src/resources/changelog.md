@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## v0.9.17 (2026-07-30)
+
+### Performance
+- **Core `flatten()`/`unflatten()` collision-handling paths ~5-8% faster** for documents that trigger key transforms/collision detection -- eliminated a redundant second hashmap lookup per unique key in both `flatten.rs` and `unflatten.rs`. The remaining non-`normalise` DataFrame/Series reconstruction functions now use the same `PyOnceLock` import caching added in 0.9.16. `mimalloc`'s doc comment updated to real measured numbers (~14-28%, previously an unverified "~5-10%") plus new CI coverage; still not used for published wheels/jars.
+
+See the repository's [CHANGELOG.md](https://github.com/amaye15/json-tools-rs/blob/master/CHANGELOG.md) for the full, itemized list.
+
 ## v0.9.16 (2026-07-30)
 
 ### Performance

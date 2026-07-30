@@ -95,6 +95,13 @@ jobs:
         run: cargo test --locked --verbose
       - name: Run doctests
         run: cargo test --locked --doc --verbose
+      - name: Run tests (mimalloc feature)
+        # mimalloc is an opt-in Cargo feature for cargo-add/source consumers (not
+        # used for published Python wheels/JVM jars -- see src/lib.rs's doc comment
+        # on the #[global_allocator] static). --all-features (lint job) compiles it
+        # alongside python/jvm but never actually runs it; this is the only CI
+        # coverage that exercises the real global-allocator swap at runtime.
+        run: cargo test --locked --features mimalloc --verbose
       - name: Run examples
         run: |
           cargo run --locked --example basic_usage

@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.17] - 2026-07-30
+
+### Performance
+- **Core `flatten()` collision-handling path (key replacement/lowercase/
+  collision detection) is ~5-8% faster** for documents that trigger it.
+  `resolve_and_write` (`src/flatten.rs`) built a key→indices map, then
+  re-looked-up each key a second time in the output loop right after having
+  just inserted it -- restructured to carry each key's indices alongside its
+  first-seen position directly, eliminating the redundant second hashmap
+  lookup. Verified via interleaved A/B (git worktree at the prior commit, 5
+  rounds) against `bench_quick`'s `all_transforms`/`regex_replacements`
+  scenarios.
+- The equivalent double lookup in `unflatten.rs`'s `handle_entry_collisions`
+  was fixed the same way. A first attempt also removed the separate
+  `has_duplicate_keys` pre-check entirely (reasoning that `handle_entry_
+  collisions`'s own no-collisions fast path made it redundant) -- measurement
+  caught that this was actually a ~2-4% *regression* for the dominant
+  real-world case (no explicit collision handling, no actual duplicate
+  keys): the pre-check's plain `FxHashMap<&str, ()>` is cheaper to populate
+  than `handle_entry_collisions`'s richer `FxHashMap<&str, SmallVec<[usize;
+  1]>>`, so paying for the richer map unconditionally lost more than it
+  saved. Reverted that part and kept only the double-lookup fix, which has
+  no such trade-off.
+- `execute(pandas_df)`/`execute(polars_df)`/`execute(pyarrow_df)` and their
+  `Series` equivalents (`src/python.rs`) now use the same `PyOnceLock`
+  module-import caching added for the `normalise`/PySpark path in 0.9.16 --
+  these older, non-`normalise` reconstruction functions had the identical
+  uncached-`py.import()`-per-call gap.
+- `mimalloc`'s doc comment updated from a generic "~5-10%" estimate to
+  measured numbers (~14-28% faster on allocation-heavy paths, macOS
+  aarch64) after actually benchmarking the previously-untested opt-in
+  feature; a new CI step runs the test suite with it enabled so the feature
+  doesn't silently bit-rot. Still deliberately not used for published Python
+  wheels or JVM jars -- an earlier attempt to bundle it there (alongside a
+  since-reverted PGO effort) hit real cross-compilation breakage on
+  aarch64/ppc64le manylinux and musllinux; this is only the pure-Rust
+  opt-in Cargo feature for `cargo add` consumers who enable it themselves.
+
 ## [0.9.16] - 2026-07-30
 
 ### Performance

@@ -161,7 +161,20 @@ pub(crate) fn process_single_json_for_unflatten(
     // Phase 2: Extract flat entries with inline transforms
     let mut entries = extract_flat_entries(input, &tape, config)?;
 
-    // Phase 3: Collision handling
+    // Phase 3: Collision handling. `has_duplicate_keys` stays as a cheap
+    // pre-check gating the common case: measured directly (interleaved
+    // before/after, bench_quick), unconditionally calling
+    // `handle_entry_collisions` instead -- reasoning that its own
+    // no-collisions fast path made a separate pre-check redundant -- was a
+    // ~2-4% *regression* for the dominant real-world case (no collision
+    // handling configured, no actual duplicate keys): `handle_entry_collisions`
+    // always builds a `FxHashMap<&str, SmallVec<[usize; 1]>>`, per-entry
+    // costlier to populate than `has_duplicate_keys`'s plain
+    // `FxHashMap<&str, ()>`, so paying for it unconditionally lost more in the
+    // common case than it saved in the rare "duplicates present without
+    // collision handling configured" case where the old code built both maps.
+    // `handle_entry_collisions` itself still got fixed (see its doc comment)
+    // to remove an unrelated, unconditionally-wasteful double lookup.
     if config.collision.has_collision_handling() || has_duplicate_keys(&entries) {
         entries = handle_entry_collisions(entries, config.collision.has_collision_handling());
     }
@@ -362,7 +375,11 @@ fn advance_past_value(tape: &[TapeEntry], idx: usize) -> usize {
 // Collision Handling
 // ================================================================================================
 
-/// Check if any duplicate keys exist (fast path to skip collision handling).
+/// Check if any duplicate keys exist (fast path to skip collision handling
+/// entirely for the dominant real-world case: no explicit collision-handling
+/// config and no actual duplicate keys). Deliberately kept as a separate,
+/// cheaper pre-check rather than folded into `handle_entry_collisions` --
+/// see that function's doc comment for the measured reason why.
 #[inline]
 fn has_duplicate_keys(entries: &[(CompactString, ValueRef<'_>)]) -> bool {
     if entries.len() <= 1 {
@@ -385,34 +402,42 @@ fn handle_entry_collisions<'a>(
 ) -> Vec<(CompactString, ValueRef<'a>)> {
     let n = entries.len();
 
-    // First pass: build index map using borrowed keys (avoids cloning every key)
-    let mut key_indices: FxHashMap<&str, SmallVec<[usize; 1]>> =
+    // First pass: build index map using borrowed keys (avoids cloning every key).
+    // `ordered` holds each unique key's first-occurrence index plus every
+    // occurrence's index, in first-seen order; `key_positions` maps a key to
+    // its slot in `ordered` (not its indices directly) so the output pass
+    // below can read the indices straight out of `ordered` instead of doing
+    // a second hashmap lookup per unique key for something this pass already
+    // computed.
+    let mut key_positions: FxHashMap<&str, usize> =
         FxHashMap::with_capacity_and_hasher(n, Default::default());
-    let mut ordered_keys: Vec<usize> = Vec::with_capacity(n);
+    let mut ordered: Vec<(usize, SmallVec<[usize; 1]>)> = Vec::with_capacity(n);
 
     for (i, (key, _)) in entries.iter().enumerate() {
-        key_indices
-            .entry(key.as_str())
-            .and_modify(|v| v.push(i))
-            .or_insert_with(|| {
-                ordered_keys.push(i);
-                SmallVec::from_elem(i, 1)
-            });
+        match key_positions.entry(key.as_str()) {
+            std::collections::hash_map::Entry::Occupied(e) => {
+                ordered[*e.get()].1.push(i);
+            }
+            std::collections::hash_map::Entry::Vacant(e) => {
+                e.insert(ordered.len());
+                ordered.push((i, SmallVec::from_elem(i, 1)));
+            }
+        }
     }
 
     // Fast path: no collisions
-    if ordered_keys.len() == entries.len() {
+    if ordered.len() == entries.len() {
         return entries;
     }
 
-    // Single pass: iterate ordered_keys, consume from key_indices, build result directly.
+    // Single pass: iterate `ordered`, build result directly from the indices
+    // already computed above (no re-lookup needed).
     // Uses a consumed bitset instead of Vec<Option<T>> to avoid wrapping overhead.
     let mut consumed = vec![false; n];
-    let mut result = Vec::with_capacity(ordered_keys.len());
+    let mut result = Vec::with_capacity(ordered.len());
 
-    for &first_idx in &ordered_keys {
-        let key = entries[first_idx].0.as_str();
-        let indices = key_indices.remove(key).unwrap_or_default();
+    for (first_idx, indices) in &ordered {
+        let first_idx = *first_idx;
 
         if indices.len() == 1 {
             consumed[first_idx] = true;
@@ -456,7 +481,7 @@ fn handle_entry_collisions<'a>(
             let last_idx = *indices
                 .last()
                 .expect("collision indices non-empty: at least one index per key");
-            for &idx in &indices {
+            for &idx in indices {
                 consumed[idx] = true;
             }
             result.push((last_idx, None)); // None means use value from entries[last_idx]

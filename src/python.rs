@@ -1891,7 +1891,7 @@ fn reconstruct_pandas_df(py: Python, records: Vec<Py<PyAny>>) -> PyResult<Py<PyA
     // Convert to Python list once — O(1) refcount clone instead of O(N) item clones
     let py_list = records.into_pyobject(py)?.into_any().unbind();
 
-    match py.import("pandas") {
+    match cached_import(py, &PANDAS_MODULE, "pandas") {
         Ok(pandas) => match pandas.call_method1("DataFrame", (py_list.clone_ref(py),)) {
             Ok(df) => Ok(df.unbind()),
             Err(_) => Ok(py_list),
@@ -1906,7 +1906,7 @@ fn reconstruct_polars_df(py: Python, records: Vec<Py<PyAny>>) -> PyResult<Py<PyA
     // Convert to Python list once — O(1) refcount clone instead of O(N) item clones
     let py_list = records.into_pyobject(py)?.into_any().unbind();
 
-    match py.import("polars") {
+    match cached_import(py, &POLARS_MODULE, "polars") {
         Ok(polars) => match polars.call_method1("DataFrame", (py_list.clone_ref(py),)) {
             Ok(df) => Ok(df.unbind()),
             Err(_) => Ok(py_list),
@@ -1921,7 +1921,7 @@ fn reconstruct_pyarrow_table(py: Python, records: Vec<Py<PyAny>>) -> PyResult<Py
     // Convert to Python list once — O(1) refcount clone instead of O(N) item clones
     let py_list = records.into_pyobject(py)?.into_any().unbind();
 
-    match py.import("pyarrow") {
+    match cached_import(py, &PYARROW_MODULE, "pyarrow") {
         Ok(pyarrow) => {
             let table_class = pyarrow.getattr("Table")?;
             match table_class.call_method1("from_pylist", (py_list.clone_ref(py),)) {
@@ -1965,7 +1965,7 @@ fn reconstruct_pandas_series(py: Python, items: Vec<Py<PyAny>>) -> PyResult<Py<P
     // Convert to Python list once — O(1) refcount clone instead of O(N) item clones
     let py_list = items.into_pyobject(py)?.into_any().unbind();
 
-    match py.import("pandas") {
+    match cached_import(py, &PANDAS_MODULE, "pandas") {
         Ok(pandas) => match pandas.call_method1("Series", (py_list.clone_ref(py),)) {
             Ok(series) => Ok(series.unbind()),
             Err(_) => Ok(py_list),
@@ -1980,7 +1980,7 @@ fn reconstruct_polars_series(py: Python, items: Vec<Py<PyAny>>) -> PyResult<Py<P
     // Convert to Python list once — O(1) refcount clone instead of O(N) item clones
     let py_list = items.into_pyobject(py)?.into_any().unbind();
 
-    match py.import("polars") {
+    match cached_import(py, &POLARS_MODULE, "polars") {
         Ok(polars) => match polars.call_method1("Series", (py_list.clone_ref(py),)) {
             Ok(series) => Ok(series.unbind()),
             Err(_) => Ok(py_list),
@@ -1995,7 +1995,7 @@ fn reconstruct_pyarrow_array(py: Python, items: Vec<Py<PyAny>>) -> PyResult<Py<P
     // Convert to Python list once — O(1) refcount clone instead of O(N) item clones
     let py_list = items.into_pyobject(py)?.into_any().unbind();
 
-    match py.import("pyarrow") {
+    match cached_import(py, &PYARROW_MODULE, "pyarrow") {
         Ok(pyarrow) => match pyarrow.call_method1("array", (py_list.clone_ref(py),)) {
             Ok(array) => Ok(array.unbind()),
             Err(_) => Ok(py_list),
