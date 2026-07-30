@@ -1,6 +1,6 @@
 [package]
 name = "json-tools-rs"
-version = "0.9.16"
+version = "0.9.17"
 edition = "2021"
 rust-version = "1.80"
 description = "A high-performance Rust library for advanced JSON manipulation with SIMD-accelerated parsing, Rayon parallelism, and Python bindings with DataFrame/Series support"
@@ -61,7 +61,7 @@ compact_str = "0.10"
 bumpalo = { version = "3.20", features = ["collections"] }
 jni = { version = "0.22", optional = true }  # JNI bindings for JVM (Java/Scala/Spark) integration
 chrono = { version = "0.4.44", default-features = false, features = ["std", "clock"] }
-mimalloc = { version = "0.1.48", default-features = false, optional = true }  # High-performance allocator (~5-10% speedup)
+mimalloc = { version = "0.1.48", default-features = false, optional = true }  # High-performance allocator (~14-28% measured, see src/lib.rs)
 rayon = "1.12.0"  # Persistent work-stealing thread pool: avoids per-call OS thread spawn cost of std::thread::scope
 # O(1) lookup + insertion order, for unflatten's object tree (no per-node sort needed).
 # Pinned <2.12: indexmap 2.12.0 raised its own rust-version to 1.82, and 2.14.0 requires
@@ -93,7 +93,7 @@ default = []  # Python bindings are opt-in via --features python
 # flatten/unflatten operations are meant for.
 python = ["pyo3"]
 jvm = ["dep:jni"]  # JVM (Java/Scala/Spark) bindings via JNI (opt-in)
-mimalloc = ["dep:mimalloc"]  # High-performance allocator (~5-10% speedup)
+mimalloc = ["dep:mimalloc"]  # High-performance allocator (~14-28% measured, see src/lib.rs)
 
 test-assets-performance = []
 

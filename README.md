@@ -349,7 +349,7 @@ v0.9.2, ships automatically on tagged releases):
 <dependency>
   <groupId>io.github.amaye15</groupId>
   <artifactId>json-tools-rs-spark</artifactId>
-  <version>0.9.16</version>
+  <version>0.9.17</version>
 </dependency>
 ```
 
@@ -434,7 +434,11 @@ Dual-licensed under either [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), a
 
 ## Changelog
 
-### v0.9.16 (Current)
+### v0.9.17 (Current)
+
+* **Performance**: core `flatten()`/`unflatten()` collision-handling paths ~5-8% faster (removed a redundant second hashmap lookup per unique key); the remaining non-`normalise` DataFrame/Series reconstruction functions now share the `PyOnceLock` import caching added in 0.9.16; `mimalloc`'s doc comment updated to real measured numbers (~14-28%, previously an unverified "~5-10%") plus new CI coverage.
+
+### v0.9.16
 
 * **Performance**: `execute(..., normalise=True, target=...)` and PySpark `execute(spark_df)` are 13-18% faster for large/wide results (e.g. 754 rows x 4,042 columns). `union_and_columnarize` rewritten from an O(rows x columns) `PyDict` hash-lookup pattern to a single forward pass, plus `PyOnceLock`-cached pandas/polars/pyarrow/pyspark module imports across the reconstruction path. Verified via interleaved A/B against the real Python API.
 
