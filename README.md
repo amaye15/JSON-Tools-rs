@@ -349,7 +349,7 @@ v0.9.2, ships automatically on tagged releases):
 <dependency>
   <groupId>io.github.amaye15</groupId>
   <artifactId>json-tools-rs-spark</artifactId>
-  <version>0.9.18</version>
+  <version>0.9.19</version>
 </dependency>
 ```
 
@@ -434,7 +434,12 @@ Dual-licensed under either [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), a
 
 ## Changelog
 
-### v0.9.18 (Current)
+### v0.9.19 (Current)
+
+* **Changed**: MSRV raised from 1.80 to 1.85, required for current `pyo3-arrow` releases (see below). Affects every source (`cargo add`) consumer.
+* **Performance**: `execute()` on a Polars `DataFrame`/PyArrow `Table` with an embedded JSON-string column is ~41-48% faster end-to-end -- detection/extraction now uses `pyo3-arrow`'s zero-copy Arrow buffer access instead of round-tripping through the DataFrame's native JSON writer (escape, then immediately unescape). Column ordering is preserved exactly as before. Scoped to Polars/PyArrow; plain pandas and PySpark are unaffected.
+
+### v0.9.18
 
 * **Performance**: `execute()` on a PyArrow `Table`/`RecordBatch` is ~2x faster -- extraction now bridges through pandas's native JSON writer (using `types_mapper=pd.ArrowDtype` to avoid a real integer-with-nulls-to-float corruption bug caught while building this fix) instead of `to_pylist()` + per-item conversion. `splice_row`'s per-key escaping now reuses the crate's existing zero-allocation key writer instead of `serde_json::to_string`; a real cleanup, though measured end-to-end impact was within noise at realistic scale.
 
