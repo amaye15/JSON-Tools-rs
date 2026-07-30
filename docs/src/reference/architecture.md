@@ -20,7 +20,6 @@ src/
 ├── unflatten.rs      Tape-based unflattening with SIMD separator detection
 ├── builder.rs        Public JSONTools builder API and execute()
 ├── python.rs         Python bindings via PyO3
-├── jvm.rs            JVM bindings via JNI (Java/Spark UDFs, see jvm/)
 ├── tests.rs          Unit tests
 └── main.rs           CLI examples
 ```
@@ -111,19 +110,6 @@ PyO3-based Python bindings with:
 - Perfect type preservation (input type = output type)
 - Native DataFrame/Series support (Pandas, Polars, PyArrow, PySpark)
 - GIL release during compute-intensive operations
-
-### `jvm` -- JVM Bindings
-
-JNI-based Java bindings (see [`jvm/`](https://github.com/amaye15/json-tools-rs/tree/master/jvm)
-for the Maven project, and the [JVM API reference](./jvm-api.md) for the Java-side
-API), primarily for use as Apache Spark UDFs:
-- A single-JSON-config-blob handoff from a pure-Java fluent builder (`JsonTools`) to
-  an immutable, `Send + Sync` boxed `JSONTools` handle -- no mutex needed, unlike the
-  Python bindings' `Mutex<JSONTools>` (which exists there only to support Python's
-  step-by-step builder mutation)
-- Two Spark usage tiers: a row UDF (`FlattenUDF`/`UnflattenUDF`) and a batched
-  `mapPartitions` transform (`BatchTransform`) that reuses the existing rayon-parallel
-  batch `execute(Vec<String>)` path
 
 ## Processing Pipeline
 

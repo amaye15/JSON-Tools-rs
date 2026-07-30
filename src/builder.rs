@@ -880,8 +880,7 @@ impl JSONTools {
     /// Serializes this configuration to a JSON blob that
     /// `config_json::build_tools` can reconstruct an equivalent `JSONTools`
     /// from -- the mechanism behind `PyJSONTools`'s pickle support
-    /// (`__reduce__`/`from_config_json` in `python.rs`) and the Rust-side
-    /// counterpart to JNI's `JsonTools.toConfigJson()` (Java-side).
+    /// (`__reduce__`/`from_config_json` in `python.rs`).
     ///
     /// Every field is populated (not just ones a caller explicitly
     /// customized): the round trip only needs to reproduce the *resolved*

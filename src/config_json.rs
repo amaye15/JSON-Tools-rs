@@ -1,15 +1,11 @@
 //! Wire format for transporting a `JSONTools` configuration as a JSON blob,
-//! shared by every binding that needs a `JSONTools` to cross a serialization
-//! boundary: JNI (`jvm.rs`'s `nativeCreate`, built from Java's `JsonTools.
-//! toConfigJson()`) and Python (`python.rs`'s pickle support and, for a
-//! genuinely distributed PySpark path, a `mapInPandas` partition function --
-//! see `PyJSONTools::to_config_json`/`from_config_json`).
+//! used to cross a serialization boundary from Python (`python.rs`'s pickle
+//! support and, for a genuinely distributed PySpark path, a `mapInPandas`
+//! partition function -- see `PyJSONTools::to_config_json`/`from_config_json`).
 //!
-//! Deliberately NOT feature-gated: unlike `jvm`/`python`, which are only
-//! compiled when their respective binding feature is enabled, this module is
-//! always compiled so either binding can depend on it independently (a
-//! Python-only build has no access to anything inside `#[cfg(feature =
-//! "jvm")] mod jvm;`, and vice versa).
+//! Deliberately NOT feature-gated: unlike `python`, which is only compiled
+//! when the `python` binding feature is enabled, this module is always
+//! compiled so it has no dependency on that feature being active.
 
 use serde::{Deserialize, Serialize};
 

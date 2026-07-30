@@ -7,7 +7,6 @@
 - [Installation](./getting-started/installation.md)
 - [Quick Start (Rust)](./getting-started/quickstart-rust.md)
 - [Quick Start (Python)](./getting-started/quickstart-python.md)
-- [Quick Start (JVM / Spark)](./getting-started/quickstart-jvm.md)
 
 # User Guide
 
@@ -25,7 +24,6 @@
 
 - [Rust API](./reference/rust-api.md)
 - [Python API](./reference/python-api.md)
-- [JVM API](./reference/jvm-api.md)
 - [Architecture](./reference/architecture.md)
 - [Error Codes](./reference/error-codes.md)
 

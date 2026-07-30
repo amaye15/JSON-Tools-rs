@@ -1,10 +1,9 @@
 # JSON Tools RS
 
-A high-performance Rust library for advanced JSON manipulation with SIMD-accelerated parsing, Rayon-based parallelism, and native Python and JVM bindings with DataFrame/Series and Spark UDF support.
+A high-performance Rust library for advanced JSON manipulation with SIMD-accelerated parsing, Rayon-based parallelism, and native Python bindings with DataFrame/Series support.
 
 [![Crates.io](https://img.shields.io/crates/v/json-tools-rs.svg)](https://crates.io/crates/json-tools-rs)
 [![PyPI](https://img.shields.io/pypi/v/json-tools-rs.svg)](https://pypi.org/project/json-tools-rs/)
-[![Maven Central](https://img.shields.io/maven-central/v/io.github.amaye15/json-tools-rs-spark.svg)](https://central.sonatype.com/artifact/io.github.amaye15/json-tools-rs-spark)
 [![Documentation](https://docs.rs/json-tools-rs/badge.svg)](https://docs.rs/json-tools-rs)
 [![Book](https://img.shields.io/badge/book-GitHub%20Pages-blue)](https://amaye15.github.io/JSON-Tools-rs/)
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](https://github.com/amaye15/JSON-Tools-rs/blob/master/LICENSE-MIT)
@@ -17,7 +16,7 @@ JSON Tools RS is designed for developers who need to:
 - **Clean and normalize** JSON data from external APIs or user input
 - **Process large batches** of JSON documents efficiently
 - **Maintain type safety** with perfect roundtrip support (flatten -> unflatten -> original)
-- **Work with Rust, Python, or the JVM (Java/Spark)** using the same consistent API
+- **Work with both Rust and Python** using the same consistent API
 
 ## Key Features
 
@@ -34,7 +33,6 @@ JSON Tools RS is designed for developers who need to:
 - **Batch Processing** -- Single or batch JSON, dicts, lists, DataFrames, and Series
 - **Python Bindings** -- Full Python support with perfect type preservation
 - **DataFrame/Series Support** -- Pandas, Polars, PyArrow, and PySpark
-- **JVM Bindings** -- Java/Spark UDFs (row and batched `mapPartitions` tiers) for Databricks Jobs/notebooks and other Spark workloads on classic compute
 - **Modular Architecture** -- 10 focused modules for maintainability with zero-overhead abstraction
 
 ## Quick Example

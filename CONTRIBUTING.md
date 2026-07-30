@@ -9,7 +9,6 @@ Thank you for your interest in contributing! This guide covers the development w
 - **Rust**: 1.85+ (the MSRV). Install via [rustup](https://rustup.rs/).
 - **Python**: 3.9+ (for Python bindings development).
 - **maturin**: For building Python wheels (`pip install maturin`).
-- **JDK 17+ and Maven**: for JVM (Java/Spark) bindings development (see [jvm/](jvm/)).
 
 ### Building
 
@@ -22,10 +21,6 @@ maturin develop --features python
 
 # Build in release mode
 cargo build --release
-
-# Build the JVM (Java/Spark) native library -- see jvm/README.md for the full
-# build/test workflow, including copying the native lib into Maven's resources tree
-cargo build --release --features jvm
 ```
 
 ### Running Tests
@@ -42,9 +37,6 @@ cargo run --example test_type_conversion
 
 # Python tests (after maturin develop)
 pytest python/tests/tests.py -v
-
-# JVM tests (after cargo build --release --features jvm; see jvm/README.md)
-cd jvm && mvn test
 ```
 
 ### Running Benchmarks
@@ -147,27 +139,23 @@ samply load /tmp/profile.json
 
 ## Release Process
 
-Pushing a version tag (`git tag vX.Y.Z && git push origin vX.Y.Z`) triggers three
-publishes at once, all gated to a tag ref:
+Pushing a version tag (`git tag vX.Y.Z && git push origin vX.Y.Z`) triggers two
+publishes at once, both gated to a tag ref:
 
 - **crates.io** (`maturin-ci.yml`'s `release` job, `cargo publish`)
 - **PyPI** (same job, `maturin-action` upload)
-- **Maven Central** (`jvm-ci.yml`'s `release` job, GPG-signed via Sonatype's Central
-  Portal -- see [`jvm/pom.xml`](jvm/pom.xml)'s `release` profile)
 
-**Before tagging**, bump the version in all three places and make sure they match --
+**Before tagging**, bump the version in both places and make sure they match --
 CI enforces this and will fail the build otherwise:
 
 - `Cargo.toml`'s `[package] version`
 - `python/json_tools_rs/__init__.py`'s `__version__` (checked in `rust-ci.yml`'s
   `lint` job)
-- `jvm/pom.xml`'s `<version>` (checked in `jvm-ci.yml`'s `package` job, which also
-  gates the `release` job)
 
 A GitHub Release with generated notes is created separately by `release.yml`
-(also tag-triggered). Both crates.io and Maven Central publishes are **permanent**
-(a version can be yanked/deprecated but not deleted) -- both release jobs (and, for
-`maturin-ci.yml`, the individual publish steps within it) are gated on `github.ref`
+(also tag-triggered). The crates.io publish is **permanent**
+(a version can be yanked/deprecated but not deleted) -- the release job (and, for
+`maturin-ci.yml`, the individual publish steps within it) is gated on `github.ref`
 starting with `refs/tags/`, so a publish only ever happens against a tag ref: an
 ordinary tag push, or a manual `workflow_dispatch` run explicitly targeting a tag.
 Dispatching either workflow against a branch does not publish anything.

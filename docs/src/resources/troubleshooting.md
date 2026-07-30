@@ -157,7 +157,7 @@ except jt.JsonToolsError as e:
 
 **Message:** `[E007] Input validation failed: ...`
 
-**Cause:** Raised by the Rust core itself (not the Python/JVM binding layer) for a handful of specific conditions:
+**Cause:** Raised by the Rust core itself (not the Python binding layer) for a handful of specific conditions:
 - Empty JSON input (an empty or all-whitespace string passed to `.flatten()` -- `.unflatten()` treats this as `{}` instead, not an error)
 - Input exceeding the 4 GiB size limit
 - An array index during `.unflatten()` that exceeds `max_array_index()` (e.g. a flattened key like `"items.999999999"`)
@@ -326,7 +326,7 @@ print(f"Processing took {elapsed:.3f}s")
 
 ### mimalloc (Rust-only)
 
-The `mimalloc` global allocator is an optional feature that provides a measured ~14-28% performance improvement on allocation-heavy paths (normal-mode transforms, unflatten, batch-parallel flatten -- macOS aarch64). Enable it with `features = ["mimalloc"]` in your `Cargo.toml`. It is **not included in Python or JVM builds** -- PyO3 manages memory through Python's allocator, and an earlier attempt to bundle mimalloc into published wheels/jars hit real cross-compilation breakage on several platforms and was reverted; this feature is for `cargo add`/source consumers who opt in themselves.
+The `mimalloc` global allocator is an optional feature that provides a measured ~14-28% performance improvement on allocation-heavy paths (normal-mode transforms, unflatten, batch-parallel flatten -- macOS aarch64). Enable it with `features = ["mimalloc"]` in your `Cargo.toml`. It is **not included in Python builds** -- PyO3 manages memory through Python's allocator, and an earlier attempt to bundle mimalloc into published wheels hit real cross-compilation breakage on several platforms and was reverted; this feature is for `cargo add`/source consumers who opt in themselves.
 
 ### sonic-rs (64-bit only)
 

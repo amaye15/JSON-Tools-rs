@@ -9,9 +9,7 @@ The Python bindings natively support DataFrame and Series objects from popular d
 > *inside* a Databricks Lakeflow Declarative Pipeline, where this is the only
 > supported approach -- see [Setting Up on Databricks](./databricks-setup.md)), wrap
 > the Python bindings in a `pandas_udf` instead, so each executor runs its own share
-> of the work. The [JVM / Spark bindings](../getting-started/quickstart-jvm.md) are a
-> separate, JVM-native alternative for Databricks Jobs/notebooks on classic compute
-> (not usable inside a pipeline at all -- see that page for why).
+> of the work.
 
 ## Supported Libraries
 

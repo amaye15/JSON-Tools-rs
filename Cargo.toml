@@ -9,15 +9,14 @@ repository = "https://github.com/amaye15/json-tools-rs"
 keywords = ["json", "flatten", "manipulation", "simd"]
 categories = ["data-structures", "parsing"]
 readme = "README.md"
-# Only Rust-relevant files -- jvm/ (Java/Maven), python/ (Python bindings source),
-# docs/ (mdBook source), and tooling config are separate ecosystems/audiences that
-# don't belong in the published crate archive every `cargo build` consumer downloads.
+# Only Rust-relevant files -- python/ (Python bindings source), docs/ (mdBook
+# source), and tooling config are separate ecosystems/audiences that don't
+# belong in the published crate archive every `cargo build` consumer downloads.
 exclude = [
     ".claude/",
     ".github/",
     ".pre-commit-config.yaml",
     "docs/",
-    "jvm/",
     "python/",
     "scripts/",
     "book.toml",
@@ -38,7 +37,7 @@ path = "src/main.rs"
 [dependencies]
 regex = "1.12.3"
 # JSON parsing: sonic-rs on 64-bit (fastest), simd-json on 32-bit (fallback)
-serde = { version = "1.0.228", features = ["rc", "derive"] }  # rc: Arc<T> serialization; derive: jvm feature's JvmConfig
+serde = { version = "1.0.228", features = ["rc", "derive"] }  # rc: Arc<T> serialization; derive: config_json.rs's wire format (Python pickle support)
 serde_json = { version = "1.0.149", features = ["preserve_order", "raw_value"] }  # preserve_order: JSON-string-column splicing (python.rs) needs row key order intact, not alphabetized -- backed by indexmap, already a direct dependency below. raw_value: RawValue lets that same splice avoid building a full Value tree for a large embedded payload (issue #31 perf fix)
 pyo3 = { version = "0.29.0", features = ["extension-module"], optional = true }
 # Zero-copy access to Arrow-backed DataFrame columns (polars, pyarrow) via the Arrow
@@ -92,7 +91,6 @@ compact_str = "0.10"
 # deep-nested-path collection. `collections` feature provides `bumpalo::collections::
 # String`, needed for in-place lowercasing/replacement before the final arena commit.
 bumpalo = { version = "3.20", features = ["collections"] }
-jni = { version = "0.22", optional = true }  # JNI bindings for JVM (Java/Scala/Spark) integration
 chrono = { version = "0.4.44", default-features = false, features = ["std", "clock"] }
 mimalloc = { version = "0.1.48", default-features = false, optional = true }  # High-performance allocator (~14-28% measured, see src/lib.rs)
 rayon = "1.12.0"  # Persistent work-stealing thread pool: avoids per-call OS thread spawn cost of std::thread::scope
@@ -131,7 +129,6 @@ default = []  # Python bindings are opt-in via --features python
 # PyObject<->Value traversal for the nested/batch data this library's own
 # flatten/unflatten operations are meant for.
 python = ["pyo3", "pyo3-arrow", "arrow-array", "comfy-table"]
-jvm = ["dep:jni"]  # JVM (Java/Scala/Spark) bindings via JNI (opt-in)
 mimalloc = ["dep:mimalloc"]  # High-performance allocator (~14-28% measured, see src/lib.rs)
 
 test-assets-performance = []

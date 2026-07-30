@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## v0.9.20 (2026-07-30)
+
+### Removed (BREAKING)
+- **The JVM/Java/Scala binding has been removed entirely** -- `jvm/`, `src/jvm.rs`, the `jni` dependency/`jvm` Cargo feature, and the JVM CI workflow are all gone, and the `io.github.amaye15:json-tools-rs-spark` Maven Central artifact will not receive new versions (`0.9.19` remains available there). The Rust core and Python bindings are unaffected. Databricks/Spark users should switch to the Python bindings wrapped in a `pandas_udf` -- see [Setting Up on Databricks](../guide/databricks-setup.md).
+
+See the repository's [CHANGELOG.md](https://github.com/amaye15/json-tools-rs/blob/master/CHANGELOG.md) for the full, itemized list.
+
 ## v0.9.19 (2026-07-30)
 
 ### Changed

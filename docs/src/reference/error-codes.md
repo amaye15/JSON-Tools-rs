@@ -46,23 +46,6 @@ except jt.JsonToolsError as e:
 
 The Python bindings prepend their own context (e.g. `"Failed to process JSON string: "`) before the underlying Rust message, so the `[E00x]` code is embedded in `str(e)` but not necessarily its first characters -- match it as a substring (`"[E001]" in str(e)`), not a prefix.
 
-## JVM Error Handling
-
-```java
-import io.github.amaye15.jsontoolsrs.JsonTools;
-import io.github.amaye15.jsontoolsrs.JsonToolsHandle;
-import io.github.amaye15.jsontoolsrs.JsonToolsException;
-
-try (JsonToolsHandle tools = JsonTools.builder().flatten().build()) {
-    String result = tools.execute("not valid json");
-} catch (JsonToolsException e) {
-    System.err.println(e.getMessage());
-    // [E001] JSON parsing failed: ...
-}
-```
-
-`JsonToolsException` (an unchecked `RuntimeException`) carries the Rust error's `Display` text as its message, unmodified -- unlike the Python bindings, the JVM side adds no extra prefix, so `[E00x]` is at the very start of `getMessage()`. See the [JVM API reference](./jvm-api.md#error-handling) for details.
-
 ## Common Errors
 
 ### E005: No mode set

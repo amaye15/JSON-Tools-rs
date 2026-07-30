@@ -1,10 +1,9 @@
 # JSON Tools RS
 
-A high-performance Rust library for advanced JSON manipulation with SIMD-accelerated parsing, providing unified flattening and unflattening operations through a clean builder pattern API. Ships with Rust, Python, and JVM (Java/Spark) bindings.
+A high-performance Rust library for advanced JSON manipulation with SIMD-accelerated parsing, providing unified flattening and unflattening operations through a clean builder pattern API. Ships with Rust and Python bindings.
 
 [![PyPI](https://img.shields.io/pypi/v/json-tools-rs.svg)](https://pypi.org/project/json-tools-rs/)
 [![Crates.io](https://img.shields.io/crates/v/json-tools-rs.svg)](https://crates.io/crates/json-tools-rs)
-[![Maven Central](https://img.shields.io/maven-central/v/io.github.amaye15/json-tools-rs-spark.svg)](https://central.sonatype.com/artifact/io.github.amaye15/json-tools-rs-spark)
 [![Documentation](https://docs.rs/json-tools-rs/badge.svg)](https://docs.rs/json-tools-rs)
 [![Book](https://img.shields.io/badge/book-GitHub%20Pages-blue)](https://amaye15.github.io/JSON-Tools-rs/)
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](LICENSE-MIT)
@@ -36,7 +35,6 @@ Unlike simple JSON parsers, JSON Tools RS provides a complete toolkit for JSON t
 - 📦 **Batch Processing**: Process single JSON or batches; Python also supports dicts and lists of dicts
 - 🐍 **Python Bindings**: Full Python support with perfect type preservation (input type = output type)
 - 📊 **DataFrame/Series Support**: Native support for Pandas, Polars, PyArrow, and PySpark DataFrames and Series in Python
-- ☕ **JVM Bindings**: Java/Spark UDFs (row and batched `mapPartitions` tiers) for Databricks Jobs/notebooks on classic compute and other Spark workloads -- see [`jvm/README.md`](jvm/README.md)
 
 ## Table of Contents
 
@@ -45,7 +43,6 @@ Unlike simple JSON parsers, JSON Tools RS provides a complete toolkit for JSON t
 - [Quick Start](#quick-start)
   - [Rust Examples](#rust---unified-jsontools-api)
   - [Python Examples](#python---unified-jsontools-api)
-  - [JVM / Spark Examples](#jvm--spark)
   - [Runnable Examples](#runnable-examples)
 - [Quick Reference](#quick-reference)
 - [Installation](#installation)
@@ -206,47 +203,18 @@ df = jt.JSONTools().flatten().execute(
 )
 ```
 
-### JVM / Spark
-
-JNI-based Java bindings, mirroring the same `JSONTools` builder, for use as Apache
-Spark UDFs -- a simple row UDF and a higher-throughput batched `mapPartitions`
-transform. Built for Databricks Jobs/notebooks on classic compute and other Spark
-workloads (**not** usable inside a Databricks Lakeflow Declarative Pipeline --
-Databricks doesn't permit JVM libraries on pipeline compute at all; use the Python
-bindings above, wrapped in a `pandas_udf`, for that case instead).
-
-```java
-import io.github.amaye15.jsontoolsrs.JsonTools;
-import io.github.amaye15.jsontoolsrs.JsonToolsHandle;
-
-try (JsonToolsHandle tools = JsonTools.builder()
-        .flatten()
-        .separator("::")
-        .keyReplacement("r'^admin_'", "")
-        .removeNulls(true)
-        .build()) {
-    String result = tools.execute("{\"admin_name\": \"Jane\", \"age\": null}");
-    // {"name":"Jane"}
-}
-```
-
-See [`jvm/README.md`](jvm/README.md) for the Spark UDF API and
-[Setting Up on Databricks](https://amaye15.github.io/JSON-Tools-rs/guide/databricks-setup.html)
-for the full deployment walkthrough (both this and the pandas_udf path).
-
 ### Runnable Examples
 
-Every builder feature has a standalone, runnable example in all three languages,
+Every builder feature has a standalone, runnable example in both languages,
 plus curated multi-feature pipelines (not an exhaustive combinatorial sweep --
 the builder has ~10 independent toggles -- but realistic groupings commonly used
 together, and one "kitchen sink" pipeline exercising nearly everything at once).
-All three language versions use matching inputs and produce matching output.
+Both language versions use matching inputs and produce matching output.
 
 | | Individual features | Curated combinations |
 | --- | --- | --- |
 | Rust | [`examples/feature_by_feature.rs`](examples/feature_by_feature.rs) | [`examples/feature_combinations.rs`](examples/feature_combinations.rs) |
 | Python | [`python/examples/feature_by_feature.py`](python/examples/feature_by_feature.py) | [`python/examples/feature_combinations.py`](python/examples/feature_combinations.py) |
-| Java | [`jvm/examples/.../FeatureByFeature.java`](jvm/examples/io/github/amaye15/jsontoolsrs/examples/FeatureByFeature.java) | [`jvm/examples/.../FeatureCombinations.java`](jvm/examples/io/github/amaye15/jsontoolsrs/examples/FeatureCombinations.java) |
 
 ```bash
 # Rust
@@ -256,11 +224,6 @@ cargo run --example feature_combinations
 # Python
 python3 python/examples/feature_by_feature.py
 python3 python/examples/feature_combinations.py
-
-# Java (compiles examples/ as an extra source root, kept out of the packaged jar)
-cd jvm
-mvn -P examples compile exec:java -Dexec.mainClass=io.github.amaye15.jsontoolsrs.examples.FeatureByFeature
-mvn -P examples compile exec:java -Dexec.mainClass=io.github.amaye15.jsontoolsrs.examples.FeatureCombinations
 ```
 
 There are also narrative walkthroughs for a quicker first read:
@@ -340,23 +303,6 @@ cargo add json-tools-rs
 pip install json-tools-rs
 ```
 
-### JVM / Spark
-
-Published to Maven Central as `io.github.amaye15:json-tools-rs-spark` (live since
-v0.9.2, ships automatically on tagged releases):
-
-```xml
-<dependency>
-  <groupId>io.github.amaye15</groupId>
-  <artifactId>json-tools-rs-spark</artifactId>
-  <version>0.9.19</version>
-</dependency>
-```
-
-Or build from source (`cargo build --release --features jvm && cd jvm && mvn
-package`), or download the jar from a `jvm-ci.yml` CI run. See
-[`jvm/README.md`](jvm/README.md) for details.
-
 ## Architecture
 
 The codebase is organized into focused, single-responsibility modules:
@@ -375,7 +321,6 @@ src/
 ├── unflatten.rs      Unflattening with SIMD separator detection
 ├── builder.rs        Public JSONTools builder API and execute() entry point
 ├── python.rs         Python bindings via PyO3
-├── jvm.rs            JVM bindings via JNI (Java/Spark UDFs, see jvm/)
 ├── tests.rs          Unit tests
 └── main.rs           CLI examples
 ```

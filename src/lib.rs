@@ -432,7 +432,7 @@
 // flatten (previously undocumented beyond a generic "~5-10%" estimate; not yet
 // measured on other platforms). Only enabled when the mimalloc feature is active
 // -- opt-in for `cargo add` consumers who build from source; deliberately NOT
-// enabled for published Python wheels or JVM jars, where an earlier attempt hit
+// enabled for published Python wheels, where an earlier attempt hit
 // real cross-compilation breakage (aarch64/ppc64le manylinux, musllinux) when
 // bundled with a since-reverted PGO effort -- see CHANGELOG.md.
 #[cfg(feature = "mimalloc")]
@@ -458,9 +458,6 @@ pub(crate) mod unflatten;
 
 #[cfg(feature = "python")]
 mod python;
-
-#[cfg(feature = "jvm")]
-mod jvm;
 
 #[cfg(test)]
 mod tests;

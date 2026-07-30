@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.20] - 2026-07-30
+
+### Removed (BREAKING)
+- **The JVM/Java/Scala binding has been removed entirely.** `jvm/` (the Maven
+  project: Java source, tests, examples, `pom.xml`), `src/jvm.rs` (the JNI
+  shim over the Rust core), the `jni` dependency and `jvm` Cargo feature, and
+  `.github/workflows/jvm-ci.yml` (the native-lib build matrix, Maven test
+  job, fat-jar packaging, and Maven Central release job) are all gone. The
+  published `io.github.amaye15:json-tools-rs-spark` Maven Central artifact
+  will no longer receive new versions -- `0.9.19` remains available there
+  but will not be updated; existing consumers should pin to it if they still
+  need the jar. Nothing else changes: the Rust core (`cargo add
+  json-tools-rs`) and Python bindings (`pip install json-tools-rs`) are
+  unaffected and continue to be published as before. Databricks/Spark users
+  of the JVM bindings should switch to the Python bindings wrapped in a
+  `pandas_udf`, per the existing [Setting Up on
+  Databricks](https://amaye15.github.io/JSON-Tools-rs/guide/databricks-setup.html)
+  guide, which already documents that path.
+
 ## [0.9.19] - 2026-07-30
 
 ### Changed
