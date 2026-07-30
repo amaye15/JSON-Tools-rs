@@ -349,7 +349,7 @@ v0.9.2, ships automatically on tagged releases):
 <dependency>
   <groupId>io.github.amaye15</groupId>
   <artifactId>json-tools-rs-spark</artifactId>
-  <version>0.9.17</version>
+  <version>0.9.18</version>
 </dependency>
 ```
 
@@ -434,7 +434,11 @@ Dual-licensed under either [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), a
 
 ## Changelog
 
-### v0.9.17 (Current)
+### v0.9.18 (Current)
+
+* **Performance**: `execute()` on a PyArrow `Table`/`RecordBatch` is ~2x faster -- extraction now bridges through pandas's native JSON writer (using `types_mapper=pd.ArrowDtype` to avoid a real integer-with-nulls-to-float corruption bug caught while building this fix) instead of `to_pylist()` + per-item conversion. `splice_row`'s per-key escaping now reuses the crate's existing zero-allocation key writer instead of `serde_json::to_string`; a real cleanup, though measured end-to-end impact was within noise at realistic scale.
+
+### v0.9.17
 
 * **Performance**: core `flatten()`/`unflatten()` collision-handling paths ~5-8% faster (removed a redundant second hashmap lookup per unique key); the remaining non-`normalise` DataFrame/Series reconstruction functions now share the `PyOnceLock` import caching added in 0.9.16; `mimalloc`'s doc comment updated to real measured numbers (~14-28%, previously an unverified "~5-10%") plus new CI coverage.
 
