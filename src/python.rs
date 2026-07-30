@@ -23,6 +23,7 @@ use std::sync::Mutex;
 use indexmap::{IndexMap, IndexSet};
 
 #[cfg(feature = "python")]
+use crate::flatten::write_json_escaped_key;
 use crate::{JSONTools, JsonOutput};
 
 #[cfg(feature = "python")]
@@ -613,10 +614,15 @@ fn split_ndjson(text: &str) -> Vec<String> {
 /// (one dict per row, each field touched via the DataFrame library's own
 /// Python-level iteration) before any conversion to JSON even starts, while
 /// the native JSON writers go straight from the DataFrame's internal
-/// columnar storage to bytes. PyArrow has no equivalent native JSON writer,
-/// so it still goes through `to_pylist()` + per-item conversion (still
-/// faster than the old `depythonize`-based path -- see `py_dumps`'s doc
-/// comment for why).
+/// columnar storage to bytes. PyArrow has no native JSON writer of its own,
+/// but bridges through pandas's when pandas is importable (measured ~2x
+/// faster than `to_pylist()` + per-item conversion for a realistic table --
+/// the same insight already applied to the PySpark arm below, which bridges
+/// through pandas for the identical reason) -- see the `PyArrow` arm's own
+/// comment for why that bridge must use `types_mapper=pd.ArrowDtype`, not
+/// plain `to_pandas()`. Falls back to `to_pylist()` + per-item conversion
+/// when pandas isn't installed (still faster than the old `depythonize`-
+/// based path -- see `py_dumps`'s doc comment for why).
 #[cfg(feature = "python")]
 fn dataframe_to_json_strings(
     df: &Bound<'_, PyAny>,
@@ -639,6 +645,31 @@ fn dataframe_to_json_strings(
         }
 
         DataFrameType::PyArrow => {
+            if let Ok(pandas) = cached_import(py, &PANDAS_MODULE, "pandas") {
+                // `types_mapper=pd.ArrowDtype` is not optional polish here: plain
+                // `to_pandas()` (no types_mapper) silently corrupts an integer
+                // column that contains any null into float64 (pandas' legacy
+                // dtype has no integer null sentinel), e.g. `[1, 2, None, 4]`
+                // becoming `[1.0, 2.0, None, 4.0]` -- confirmed by direct
+                // comparison against the pre-bridge to_pylist()-based output,
+                // not hypothetical. `ArrowDtype` keeps the column
+                // Arrow-native (real nullable ints), sidestepping the
+                // coercion entirely, and measured no slower (in fact
+                // marginally faster) than the plain bridge. Requires pandas
+                // >=1.5 (2022) for `pd.ArrowDtype`; older pandas raises
+                // AttributeError here and falls through to the plain bridge,
+                // then to `to_pylist()` if that fails too.
+                if let Ok(arrow_dtype) = pandas.getattr("ArrowDtype") {
+                    let kwargs = pyo3::types::PyDict::new(py);
+                    kwargs.set_item("types_mapper", arrow_dtype)?;
+                    if let Ok(pandas_df) = df.call_method("to_pandas", (), Some(&kwargs)) {
+                        return dataframe_to_json_strings(&pandas_df, DataFrameType::Pandas);
+                    }
+                }
+                if let Ok(pandas_df) = df.call_method0("to_pandas") {
+                    return dataframe_to_json_strings(&pandas_df, DataFrameType::Pandas);
+                }
+            }
             let records = df.call_method0("to_pylist")?;
             let list = records.cast::<pyo3::types::PyList>()?;
             pylist_to_json_strings(py, list)
@@ -806,15 +837,24 @@ fn splice_row(
     }
 
     // Pass 2: reconstruct the row, splicing `substitutions` for detected keys
-    // and copying every other field's exact source bytes verbatim.
+    // and copying every other field's exact source bytes verbatim. Key
+    // escaping reuses `write_json_escaped_key` (flatten.rs) instead of
+    // `serde_json::to_string(key)` -- the latter allocates a fresh
+    // `Vec::with_capacity(128)` per key (via serde_json's `Serializer`/
+    // `Formatter`/`io::Write` machinery) just to produce a quoted string
+    // literal, for every field of every row this function touches.
+    // `write_json_escaped_key` writes straight into `out` with zero
+    // allocation on the common no-escaping-needed path -- the same function
+    // already proven in this exact role at flatten.rs:1469/unflatten.rs:1059.
     let mut out = String::with_capacity(row.len() + 64);
     out.push('{');
     for (i, (key, raw)) in fields.iter().enumerate() {
         if i > 0 {
             out.push(',');
         }
-        out.push_str(&serde_json::to_string(key).ok()?);
-        out.push(':');
+        out.push('"');
+        write_json_escaped_key(&mut out, key);
+        out.push_str("\":");
         match substitutions.get(key.as_str()) {
             Some(inner) => out.push_str(inner),
             None => out.push_str(raw.get()),

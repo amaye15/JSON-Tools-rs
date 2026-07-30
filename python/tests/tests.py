@@ -3257,6 +3257,29 @@ class TestDataFrameAndSeriesSupport:
             assert len(result) == 2
             assert "user.name" in result[0]
 
+    def test_pyarrow_table_nullable_int_column_stays_int(self):
+        """execute()'s PyArrow extraction bridges through pandas for speed
+        (github.com/amaye15/JSON-Tools-rs/issues -- serialization perf round,
+        2026-07-30). Plain `to_pandas()` (no types_mapper) silently corrupts
+        an integer column containing any null into float64, since pandas'
+        legacy dtype has no integer null sentinel -- confirmed by direct
+        comparison against the pre-bridge output before fixing with
+        `types_mapper=pd.ArrowDtype`. This pins that fix: an int column with
+        a null must come back as real integers (with the null preserved),
+        never floats."""
+        if not self.has_pyarrow:
+            pytest.skip("pyarrow not installed")
+
+        tools = json_tools_rs.JSONTools().flatten()
+        table = self.pa.table({"id": [1, 2, None, 4], "name": ["a", "b", "c", "d"]})
+        result = tools.execute(table)
+
+        if isinstance(result, self.pa.Table):
+            ids = result.column("id").to_pylist()
+        else:
+            ids = [row["id"] for row in result]
+        assert ids == [1, 2, None, 4], f"integer column corrupted to floats: {ids}"
+
     def test_pyarrow_table_unflatten(self):
         """Test PyArrow Table unflattening"""
         if not self.has_pyarrow:

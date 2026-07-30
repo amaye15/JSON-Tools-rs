@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.18] - 2026-07-30
+
+### Performance
+- **`execute()` on a PyArrow `Table`/`RecordBatch` is ~2x faster.** Extraction
+  now bridges through pandas's native `to_json()` writer (`dataframe_to_json_
+  strings`, `src/python.rs`) instead of `to_pylist()` + per-item conversion,
+  mirroring the same bridge already used for PySpark extraction and the
+  documented ~2-3x win pandas/polars already get from their own native
+  writers. **Correctness note, not just an optimization detail:** the first
+  version of this fix used plain `to_pandas()`, which silently corrupts an
+  integer column containing any null into `float64` (pandas' legacy dtype
+  has no integer-null sentinel) -- caught via direct before/after comparison,
+  not assumed. Fixed with `types_mapper=pd.ArrowDtype` (pandas >=1.5),
+  which keeps the bridge Arrow-native and measured no slower; falls back to
+  plain `to_pandas()` then to the original `to_pylist()` path on older
+  pandas or if pandas isn't installed. Verified via interleaved A/B (git
+  worktree, 6 rounds): ~53% faster for a realistic 5,000-row/20-column
+  table. New regression test pins the integer-nullability fix.
+- `splice_row`'s per-key JSON escaping (`src/python.rs`) now reuses the
+  existing zero-allocation `write_json_escaped_key` (`src/flatten.rs`,
+  already proven in two other call sites) instead of allocating a fresh
+  `String` per key via `serde_json::to_string`. A real, always-correct
+  cleanup with no downside -- but measured honestly: at realistic scale
+  (754 rows x 4,042 keys) the end-to-end difference was within noise
+  (~0.2%), since the per-key allocation this removes is small relative to
+  the row's own parsing/copying cost at that scale. Kept for code quality
+  and the cases where it does matter more (many small rows), not claimed as
+  a measurable win.
+
 ## [0.9.17] - 2026-07-30
 
 ### Performance

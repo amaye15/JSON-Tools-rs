@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## v0.9.18 (2026-07-30)
+
+### Performance
+- **`execute()` on a PyArrow `Table`/`RecordBatch` is ~2x faster** -- extraction now bridges through pandas's native JSON writer (using `types_mapper=pd.ArrowDtype` to avoid a real integer-with-nulls-to-float corruption bug caught while building this fix) instead of `to_pylist()` + per-item conversion. `splice_row`'s per-key escaping now reuses the crate's existing zero-allocation key writer instead of `serde_json::to_string`; a real cleanup, though measured end-to-end impact was within noise at realistic scale.
+
+See the repository's [CHANGELOG.md](https://github.com/amaye15/json-tools-rs/blob/master/CHANGELOG.md) for the full, itemized list.
+
 ## v0.9.17 (2026-07-30)
 
 ### Performance
