@@ -5061,7 +5061,10 @@ class TestNormaliseArrowNative:
         if not self.has_polars:
             pytest.skip("polars not installed")
         tools = json_tools_rs.JSONTools().flatten().convert_dates(True)
-        data = [{"id": 1, "when": "2024-01-15"}, {"id": 2, "when": "2024-01-15T10:30:00Z"}]
+        data = [
+            {"id": 1, "when": "2024-01-15"},
+            {"id": 2, "when": "2024-01-15T10:30:00Z"},
+        ]
         df = tools.execute(data, normalise=True, target="polars")
         assert df.schema["when"] == self.pl.Datetime(time_unit="us", time_zone="UTC")
         values = df["when"].to_list()
@@ -5795,7 +5798,9 @@ class TestJsonStringColumnZeroCopyArrow:
         if not self.has_polars:
             pytest.skip("polars not installed")
         tools = json_tools_rs.JSONTools().flatten()
-        df = self.pl.DataFrame({"id": [1], "blob": ['{"aws": {"region": "us-east-1"}}']})
+        df = self.pl.DataFrame(
+            {"id": [1], "blob": ['{"aws": {"region": "us-east-1"}}']}
+        )
         result = tools.execute(df)
         assert result.columns == ["id", "aws.region"]
         assert result["aws.region"].to_list() == ["us-east-1"]
