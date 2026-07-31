@@ -665,6 +665,15 @@ fn build_unflatten_tree<'a>(
     let mut root: ObjectMap<'a> =
         ObjectMap::with_capacity_and_hasher(entries.len(), Default::default());
 
+    // Reused across every entry below instead of allocating fresh per call:
+    // `set_nested_value_recursive` always truncates it back to length 0 on
+    // unwind (both the `Ok` and `Err` paths flow through the same truncate,
+    // see its own tail), so it's guaranteed empty at the start of each
+    // iteration -- the same "collapse N allocations into ~O(1)" pattern this
+    // file already applies to `find_separator_offsets`/`ObjectMap` sizing
+    // above, just not previously extended to this buffer.
+    let mut path_buffer = String::new();
+
     for ((key, value), offsets) in entries.into_iter().zip(offsets_per_entry.iter()) {
         set_nested_value(
             &mut root,
@@ -673,6 +682,7 @@ fn build_unflatten_tree<'a>(
             value,
             separator,
             &path_types,
+            &mut path_buffer,
             max_array_index,
         )?;
     }
@@ -680,7 +690,10 @@ fn build_unflatten_tree<'a>(
     Ok(UnflatNode::Object(root))
 }
 
-/// Entry point for recursively setting a value at a nested path.
+/// Entry point for recursively setting a value at a nested path. `path_buffer`
+/// is caller-owned and reused across entries (see `build_unflatten_tree`) --
+/// guaranteed empty on entry.
+#[allow(clippy::too_many_arguments)]
 fn set_nested_value<'a>(
     result: &mut ObjectMap<'a>,
     key_path: &str,
@@ -688,6 +701,7 @@ fn set_nested_value<'a>(
     value: ValueRef<'a>,
     separator: &str,
     path_types: &FxHashMap<CompactString, bool>,
+    path_buffer: &mut String,
     max_array_index: usize,
 ) -> Result<(), JsonToolsError> {
     if offsets.is_empty() {
@@ -709,7 +723,6 @@ fn set_nested_value<'a>(
     }
     parts.push(&key_path[start..]);
 
-    let mut path_buffer = String::with_capacity(key_path.len());
     set_nested_value_recursive(
         result,
         &parts,
@@ -717,7 +730,7 @@ fn set_nested_value<'a>(
         value,
         separator,
         path_types,
-        &mut path_buffer,
+        path_buffer,
         max_array_index,
     )
 }

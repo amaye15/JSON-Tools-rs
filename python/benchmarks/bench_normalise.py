@@ -86,6 +86,47 @@ def make_date_data(n_rows: int, n_cols: int) -> list:
     return [make_row_with_dates(i, n_cols) for i in range(n_rows)]
 
 
+# ("name", rows, n_groups, n_variants). Each of the n_groups columns
+# collapses n_variants same-named-after-replacement keys into one
+# List<Utf8> cell -- the handle_key_collision(True) shape this engine's
+# real Arrow List<T> support (vs. the old stringify-any-list shortcut,
+# issue #35) is specifically for. Also the scenario that exercises the
+# fix that stopped parsing each list cell's JSON array text twice (once
+# to classify its element kind, once again to build).
+COLLISION_SCENARIOS = [
+    ("collision_medium", 600, 300, 8),
+]
+
+
+def make_collision_row(i: int, n_groups: int, n_variants: int) -> dict:
+    row = {}
+    for g in range(n_groups):
+        for v in range(n_variants):
+            row[f"Prefix{v}_field{g}"] = f"val_{i}_{g}_{v}"
+    return row
+
+
+def make_collision_data(n_rows: int, n_groups: int, n_variants: int) -> list:
+    return [make_collision_row(i, n_groups, n_variants) for i in range(n_rows)]
+
+
+def time_once_collision(data: list, target: str) -> float:
+    tools = (
+        jt.JSONTools()
+        .flatten()
+        .key_replacement(r"r'Prefix\d+_'", "")
+        .handle_key_collision(True)
+    )
+    start = time.perf_counter()
+    tools.execute(data, normalise=True, target=target)
+    return time.perf_counter() - start
+
+
+def bench_collision(data: list, target: str, repeats: int) -> float:
+    times = [time_once_collision(data, target) for _ in range(repeats)]
+    return statistics.median(times)
+
+
 def time_once(data: list, target: str, convert_dates: bool = False) -> float:
     tools = jt.JSONTools().flatten()
     if convert_dates:
@@ -176,6 +217,12 @@ def main() -> None:
         for target in available_targets:
             t = bench(data, target, args.repeats, convert_dates=True)
             rows_out.append((name, n_rows, n_cols, target, t))
+
+    for name, n_rows, n_groups, n_variants in COLLISION_SCENARIOS:
+        data = make_collision_data(n_rows, n_groups, n_variants)
+        for target in available_targets:
+            t = bench_collision(data, target, args.repeats)
+            rows_out.append((name, n_rows, n_groups, target, t))
 
     if args.csv:
         print("scenario,rows,cols,target,median_seconds")

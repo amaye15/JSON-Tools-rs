@@ -3088,28 +3088,42 @@ impl ColumnBuilder {
                     b.append_value(stringify_raw(text.expect("checked non-null above")));
                 }
             }
-            ColumnBuilder::ListBool(b) => append_list_row(b, text, |inner, t| match t {
+            ColumnBuilder::ListBool(_)
+            | ColumnBuilder::ListInt64(_)
+            | ColumnBuilder::ListFloat64(_)
+            | ColumnBuilder::ListUtf8(_) => {
+                unreachable!("list columns are appended via append_list_cell, not append_row")
+            }
+        }
+    }
+
+    /// Append one row's pre-parsed list cell (see `ListCell`'s doc comment
+    /// for why this takes an already-parsed cell rather than raw text).
+    fn append_list_cell(&mut self, cell: &ListCell<'_>) {
+        match self {
+            ColumnBuilder::ListBool(b) => append_list_row(b, cell, |inner, t| match t {
                 Some(t) => inner.append_value(t == "true"),
                 None => inner.append_null(),
             }),
-            ColumnBuilder::ListInt64(b) => append_list_row(b, text, |inner, t| match t {
+            ColumnBuilder::ListInt64(b) => append_list_row(b, cell, |inner, t| match t {
                 Some(t) => inner.append_value(
                     t.parse::<i64>()
                         .expect("Pass 1 classified this column's list elements Int64"),
                 ),
                 None => inner.append_null(),
             }),
-            ColumnBuilder::ListFloat64(b) => append_list_row(b, text, |inner, t| match t {
+            ColumnBuilder::ListFloat64(b) => append_list_row(b, cell, |inner, t| match t {
                 Some(t) => inner.append_value(
                     t.parse::<f64>()
                         .expect("Pass 1 classified this column's list elements Float64"),
                 ),
                 None => inner.append_null(),
             }),
-            ColumnBuilder::ListUtf8(b) => append_list_row(b, text, |inner, t| match t {
+            ColumnBuilder::ListUtf8(b) => append_list_row(b, cell, |inner, t| match t {
                 Some(t) => inner.append_value(stringify_raw(t)),
                 None => inner.append_null(),
             }),
+            _ => unreachable!("append_list_cell only called for List* ColumnBuilder variants"),
         }
     }
 
@@ -3129,28 +3143,44 @@ impl ColumnBuilder {
     }
 }
 
+/// A list column's cell, pre-parsed exactly once during the classification
+/// scan in `build_normalise_table` and reused here during the build scan --
+/// the array text used to be parsed twice (once to classify element kinds,
+/// once again to build), a real, measured cost for `handle_key_collision(True)`'s
+/// own headline scenario (many rows, each a JSON array). Caching the parse
+/// result for one column at a time (freed once that column's `ArrayRef` is
+/// built) avoids the second `serde_json::from_str` + `Vec` allocation per
+/// cell without changing memory scaling (bounded by that single column's row
+/// count either way).
+#[cfg(feature = "python")]
+enum ListCell<'a> {
+    /// Key entirely absent from this row (union null-fill).
+    Absent,
+    /// Key present but explicitly JSON `null`.
+    Null,
+    /// A genuine JSON array, already split into its top-level elements.
+    Elems(Vec<&'a serde_json::value::RawValue>),
+    /// A scalar cell in a list-typed column: wraps into a single-element
+    /// list, same as `union_and_columnarize`'s existing rule.
+    Scalar(&'a str),
+}
+
 /// Shared per-row append logic for every `List*` `ColumnBuilder` variant --
 /// `append_elem` does the one type-specific thing (parse this element's text
 /// into the inner builder's own value type, or append a null when given
-/// `None`); everything else (null cell vs. present list, iterating a genuine
-/// JSON array vs. wrapping a lone scalar into a single-element list --
-/// `union_and_columnarize`'s existing rule, ported unchanged) is identical
-/// across all four element types.
+/// `None`); everything else (null cell vs. present list vs. wrapped scalar)
+/// is identical across all four element types. Takes an already-parsed
+/// `ListCell` (see its doc comment) rather than raw text, so this never
+/// re-parses a JSON array that the classification pass already parsed.
 #[cfg(feature = "python")]
 fn append_list_row<T: ArrayBuilder>(
     list_builder: &mut ListBuilder<T>,
-    text: Option<&str>,
+    cell: &ListCell<'_>,
     mut append_elem: impl FnMut(&mut T, Option<&str>),
 ) {
-    let Some(text) = text else {
-        list_builder.append(false);
-        return;
-    };
-    match text.as_bytes().first() {
-        Some(b'n') => list_builder.append(false), // null
-        Some(b'[') => {
-            let elems: Vec<&serde_json::value::RawValue> =
-                serde_json::from_str(text).unwrap_or_default();
+    match cell {
+        ListCell::Absent | ListCell::Null => list_builder.append(false),
+        ListCell::Elems(elems) => {
             for elem in elems {
                 let elem_text = elem.get();
                 if elem_text.as_bytes().first() == Some(&b'n') {
@@ -3161,9 +3191,7 @@ fn append_list_row<T: ArrayBuilder>(
             }
             list_builder.append(true);
         }
-        _ => {
-            // A scalar cell in a list-typed column: wrap into a single-element
-            // list, same as `union_and_columnarize`'s existing behavior.
+        ListCell::Scalar(text) => {
             append_elem(list_builder.values(), Some(text));
             list_builder.append(true);
         }
@@ -3255,60 +3283,75 @@ fn build_normalise_table<'py>(
         }
     }
 
-    // Pass 1b: per column, aggregate kind flags (scalar interpretation, or --
-    // for a list-valued column -- element kind across every list cell's
+    // Pass 1b+2, per column: aggregate kind flags (scalar interpretation, or
+    // -- for a list-valued column -- element kind across every list cell's
     // elements plus every to-be-wrapped scalar cell's own kind, matching
-    // `union_and_columnarize`'s wrap-then-classify order) and decide this
-    // column's `ColumnPlan`.
-    let mut plans: Vec<ColumnPlan> = Vec::with_capacity(n_keys);
-    for col_idx in 0..n_keys {
-        let is_list_col = any_list_per_col[col_idx];
-        let mut flags = KindFlags::default();
-        for cell in &column_slots[col_idx] {
-            let Some(raw) = cell else { continue };
-            let text = raw.get();
-            if is_list_col {
-                // Date detection never applies to list elements (see
-                // ColumnPlan's doc comment) -- always `dates_enabled: false`
-                // here regardless of the caller's own setting.
-                match text.as_bytes().first() {
-                    Some(b'[') => {
-                        let elems: Vec<&serde_json::value::RawValue> =
-                            serde_json::from_str(text).unwrap_or_default();
-                        for elem in elems {
-                            if let Some(k) = raw_scalar_kind(elem.get(), false) {
-                                flags.merge(k);
-                            }
-                        }
-                    }
-                    _ => {
-                        if let Some(k) = raw_scalar_kind(text, false) {
-                            flags.merge(k);
-                        }
-                    }
-                }
-            } else if let Some(k) = raw_scalar_kind(text, dates_enabled) {
-                flags.merge(k);
-            }
-        }
-        let kind = flags.resolve();
-        plans.push(if is_list_col {
-            ColumnPlan::List(kind)
-        } else {
-            ColumnPlan::Scalar(kind)
-        });
-    }
-
-    // Pass 2: build each column's real Arrow array.
+    // `union_and_columnarize`'s wrap-then-classify order), decide this
+    // column's `ColumnPlan`, then build its real Arrow array. A list
+    // column's cells are parsed exactly once each (cached as `ListCell` --
+    // see its doc comment) and reused for the build step below instead of
+    // re-parsing the same JSON array text a second time; a scalar column's
+    // classification is cheap enough (no parse/allocation, just a byte-shape
+    // check) that a second pass over its own already-borrowed `&RawValue`
+    // cells costs nothing extra worth caching for.
     let mut fields: Vec<Field> = Vec::with_capacity(n_keys);
     let mut arrays: Vec<ArrayRef> = Vec::with_capacity(n_keys);
     for (col_idx, key) in key_order.iter().enumerate() {
-        let mut builder = ColumnBuilder::new(plans[col_idx], n_rows);
-        fields.push(builder.arrow_field(key));
-        for cell in &column_slots[col_idx] {
-            builder.append_row(*cell);
+        if any_list_per_col[col_idx] {
+            let mut flags = KindFlags::default();
+            let mut cached: Vec<ListCell<'_>> = Vec::with_capacity(n_rows);
+            for cell in &column_slots[col_idx] {
+                let parsed = match cell {
+                    None => ListCell::Absent,
+                    Some(raw) => {
+                        let text = raw.get();
+                        // Date detection never applies to list elements (see
+                        // ColumnPlan's doc comment) -- always `false` here
+                        // regardless of the caller's own setting.
+                        match text.as_bytes().first() {
+                            Some(b'n') => ListCell::Null,
+                            Some(b'[') => {
+                                let elems: Vec<&serde_json::value::RawValue> =
+                                    serde_json::from_str(text).unwrap_or_default();
+                                for elem in &elems {
+                                    if let Some(k) = raw_scalar_kind(elem.get(), false) {
+                                        flags.merge(k);
+                                    }
+                                }
+                                ListCell::Elems(elems)
+                            }
+                            _ => {
+                                if let Some(k) = raw_scalar_kind(text, false) {
+                                    flags.merge(k);
+                                }
+                                ListCell::Scalar(text)
+                            }
+                        }
+                    }
+                };
+                cached.push(parsed);
+            }
+            let mut builder = ColumnBuilder::new(ColumnPlan::List(flags.resolve()), n_rows);
+            fields.push(builder.arrow_field(key));
+            for cell in &cached {
+                builder.append_list_cell(cell);
+            }
+            arrays.push(builder.finish());
+        } else {
+            let mut flags = KindFlags::default();
+            for cell in &column_slots[col_idx] {
+                let Some(raw) = cell else { continue };
+                if let Some(k) = raw_scalar_kind(raw.get(), dates_enabled) {
+                    flags.merge(k);
+                }
+            }
+            let mut builder = ColumnBuilder::new(ColumnPlan::Scalar(flags.resolve()), n_rows);
+            fields.push(builder.arrow_field(key));
+            for cell in &column_slots[col_idx] {
+                builder.append_row(*cell);
+            }
+            arrays.push(builder.finish());
         }
-        arrays.push(builder.finish());
     }
 
     let schema = Arc::new(Schema::new(fields));

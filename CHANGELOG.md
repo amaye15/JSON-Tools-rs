@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Performance
+Follow-up round after v0.9.20, driven by profiling (`samply`/macOS `sample`
+against the Criterion stress suite) plus a targeted code audit of the core
+engine and the new Arrow-native `normalise()` reconstruction path. Three
+fixes, each verified via interleaved A/B (fresh subprocess per run, git
+worktree at the prior commit, multiple rounds):
+- **Date/datetime normalization output no longer re-parses a `chrono` format
+  string per value.** `.convert_dates(True)`/`.auto_convert_types(True)`'s
+  normalized-date/datetime output (`src/convert.rs`) used
+  `DateTime::format("%Y-%m-%dT%H:%M:%SZ").to_string()`, which re-interprets
+  the format string via `chrono`'s `StrftimeItems` engine on every call --
+  the same avoidable cost this file's own date *parsing* already worked
+  around with hand-rolled formatting. Replaced with a direct integer
+  `format!` of the same fixed shape. **~10.6% faster** for date-heavy
+  `convert_dates(True)` workloads.
+- **`unflatten()` no longer allocates a fresh path buffer per flattened
+  key.** `set_nested_value` (`src/unflatten.rs`) allocated a new `String`
+  on every call (once per top-level flattened entry); the buffer is
+  guaranteed empty again by the time each call returns (truncated back on
+  unwind), so it's hoisted to `build_unflatten_tree` and reused across all
+  entries in a document instead. **~3.8% faster** for wide flattened
+  documents.
+- **`normalise=True`'s Arrow-native reconstruction no longer parses a
+  list-valued column's JSON array text twice.** `build_normalise_table`
+  (`src/python.rs`) parsed each list cell's array once to classify its
+  element kind and a second time to build the `List<T>` array. The
+  classification pass now caches the parsed elements (`ListCell`) and the
+  build pass reuses them. This is exactly `handle_key_collision(True)`'s
+  own headline scenario (issue #35's real `List<T>` support). **~5-6%
+  faster** for a collision-heavy scenario (300 columns, 8-element lists,
+  600 rows) across all three non-PySpark targets; new
+  `collision_medium` scenario added to `python/benchmarks/bench_normalise.py`
+  to keep this covered going forward.
+
 ## [0.9.20] - 2026-07-31
 
 ### Changed (BREAKING)

@@ -4,7 +4,7 @@
 //! and null into their native JSON types. Handles locale-aware number formats
 //! (EU comma decimals, accounting negatives) with SIMD-accelerated cleaning.
 
-use chrono::{DateTime, Datelike, NaiveDate, NaiveDateTime, Utc};
+use chrono::{DateTime, Datelike, NaiveDate, NaiveDateTime, Timelike, Utc};
 use memchr::{memchr, memchr2, memchr3, memchr_iter};
 use smallvec::SmallVec;
 use std::borrow::Cow;
@@ -513,6 +513,28 @@ fn digits_to_u32(bytes: &[u8]) -> u32 {
         .fold(0u32, |acc, &b| acc * 10 + (b - b'0') as u32)
 }
 
+/// Format a UTC datetime as this crate's fixed normalized-datetime shape
+/// (`YYYY-MM-DDTHH:MM:SSZ`) without going through `DateTime::format` --
+/// chrono's generic formatter re-interprets the strftime-style format string
+/// (via `StrftimeItems`) on every call, the same avoidable cost
+/// `try_parse_compact_date` below already documents for the parse direction.
+/// Every normalized-datetime output in this file uses this exact fixed
+/// shape (never fractional seconds -- `%S` truncates them, matched here by
+/// reading whole-second fields only), so a plain integer-formatted
+/// `format!` is a direct, correct replacement, not an approximation.
+#[inline]
+fn format_utc_datetime_z(dt: DateTime<Utc>) -> String {
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
+        dt.year(),
+        dt.month(),
+        dt.day(),
+        dt.hour(),
+        dt.minute(),
+        dt.second()
+    )
+}
+
 /// Parse compact date format: YYYYMMDD
 ///
 /// Hand-rolled instead of `NaiveDate::parse_from_str(s, "%Y%m%d")`: chrono's generic
@@ -546,7 +568,7 @@ fn try_parse_compact_datetime(s: &str) -> Option<String> {
     if len == 16 && bytes[15] == b'Z' {
         if let Ok(naive) = NaiveDateTime::parse_from_str(&s[..15], "%Y%m%dT%H%M%S") {
             let utc = naive.and_utc();
-            return Some(utc.format("%Y-%m-%dT%H:%M:%SZ").to_string());
+            return Some(format_utc_datetime_z(utc));
         }
     }
 
@@ -583,7 +605,7 @@ fn try_parse_compact_datetime(s: &str) -> Option<String> {
 
         if let Ok(dt) = DateTime::parse_from_rfc3339(&iso_str) {
             let utc: DateTime<Utc> = dt.into();
-            return Some(utc.format("%Y-%m-%dT%H:%M:%SZ").to_string());
+            return Some(format_utc_datetime_z(utc));
         }
     }
 
@@ -591,7 +613,7 @@ fn try_parse_compact_datetime(s: &str) -> Option<String> {
     if len == 15 {
         if let Ok(naive) = NaiveDateTime::parse_from_str(s, "%Y%m%dT%H%M%S") {
             let utc = naive.and_utc();
-            return Some(utc.format("%Y-%m-%dT%H:%M:%SZ").to_string());
+            return Some(format_utc_datetime_z(utc));
         }
     }
 
@@ -631,7 +653,7 @@ fn try_parse_week_date(s: &str) -> Option<String> {
 
     for fmt in &formats {
         if let Ok(d) = NaiveDate::parse_from_str(s, fmt) {
-            return Some(d.format("%Y-%m-%d").to_string());
+            return Some(format!("{:04}-{:02}-{:02}", d.year(), d.month(), d.day()));
         }
     }
     None
@@ -698,7 +720,7 @@ fn try_parse_standard_date(s: &str, sep: u8) -> Option<String> {
     // Try RFC3339 first (handles timezone)
     if let Ok(dt) = DateTime::parse_from_rfc3339(&normalized) {
         let utc: DateTime<Utc> = dt.into();
-        return Some(utc.format("%Y-%m-%dT%H:%M:%SZ").to_string());
+        return Some(format_utc_datetime_z(utc));
     }
 
     // Try parsing with various timezone offset formats
@@ -721,7 +743,7 @@ fn try_parse_standard_date(s: &str, sep: u8) -> Option<String> {
         if let Ok(naive_dt) = NaiveDateTime::parse_from_str(time_part, fmt) {
             // Always output as UTC (Z suffix)
             let utc_dt = naive_dt.and_utc();
-            return Some(utc_dt.format("%Y-%m-%dT%H:%M:%SZ").to_string());
+            return Some(format_utc_datetime_z(utc_dt));
         }
     }
 
@@ -754,7 +776,7 @@ fn try_parse_with_offset_variants(s: &str) -> Option<String> {
                 let full = format!("{}{}", time_part, normalized_offset);
                 if let Ok(dt) = DateTime::parse_from_rfc3339(&full) {
                     let utc: DateTime<Utc> = dt.into();
-                    return Some(utc.format("%Y-%m-%dT%H:%M:%SZ").to_string());
+                    return Some(format_utc_datetime_z(utc));
                 }
             }
         }

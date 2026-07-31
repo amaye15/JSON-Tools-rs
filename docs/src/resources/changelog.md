@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Performance
+Profiling-driven follow-up round after v0.9.20 (`samply`/macOS `sample` against the Criterion stress suite, plus a targeted audit of the Arrow-native `normalise()` path). Three fixes, each verified via interleaved A/B:
+- **Date/datetime normalization output no longer re-parses a `chrono` format string per value** (`src/convert.rs`) -- hand-rolled formatting replaces `DateTime::format()`. **~10.6% faster** for date-heavy `convert_dates(True)` workloads.
+- **`unflatten()` no longer allocates a fresh path buffer per flattened key** (`src/unflatten.rs`) -- one buffer reused across a document instead of one per entry. **~3.8% faster** for wide flattened documents.
+- **`normalise=True`'s Arrow-native reconstruction no longer parses a list-valued column's JSON array text twice** (`src/python.rs`) -- exactly `handle_key_collision(True)`'s own headline scenario. **~5-6% faster** for a collision-heavy scenario.
+
+See the repository's [CHANGELOG.md](https://github.com/amaye15/json-tools-rs/blob/master/CHANGELOG.md) for the full, itemized list.
+
 ## v0.9.20 (2026-07-31)
 
 ### Changed (BREAKING)
