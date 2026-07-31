@@ -1112,10 +1112,9 @@ fn splice_zerocopy_columns(
     let mut out = Vec::with_capacity(base_rows.len());
 
     for (row_idx, base_row) in base_rows.iter().enumerate() {
-        let base_fields: IndexMap<String, &serde_json::value::RawValue> =
-            serde_json::from_str(base_row).map_err(|e| {
-                JsonToolsError::new_err(format!("Failed to parse intermediate row {row_idx}: {e}"))
-            })?;
+        let base_fields = parse_object_fields_indexed(base_row).ok_or_else(|| {
+            JsonToolsError::new_err(format!("Failed to parse intermediate row {row_idx}"))
+        })?;
 
         let mut row_out = String::with_capacity(base_row.len() + 64);
         row_out.push('{');
@@ -1142,7 +1141,7 @@ fn splice_zerocopy_columns(
                     }
                     _ => row_out.push_str("null"),
                 }
-            } else if let Some(raw) = base_fields.get(key) {
+            } else if let Some(raw) = base_fields.get(key.as_str()) {
                 row_out.push_str(raw.get());
             } else {
                 row_out.push_str("null");
@@ -3288,19 +3287,49 @@ fn build_normalise_table<'py>(
     dates_enabled: bool,
 ) -> PyResult<(Bound<'py, PyAny>, Arc<Schema>)> {
     let n_rows = processed.len();
-    let mut rows: Vec<IndexMap<String, &serde_json::value::RawValue>> = Vec::with_capacity(n_rows);
+    let mut rows: Vec<IndexMap<std::borrow::Cow<'_, str>, &serde_json::value::RawValue>> =
+        Vec::with_capacity(n_rows);
     let mut key_order: IndexSet<String> = IndexSet::new();
 
     for (idx, json_str) in processed.iter().enumerate() {
-        let fields: IndexMap<String, &serde_json::value::RawValue> = serde_json::from_str(json_str)
-            .map_err(|e| {
-                JsonToolsError::new_err(format!(
-                    "normalise=True requires every flattened row to be a JSON object; \
-                     row {idx} failed to parse as one: {e}"
-                ))
-            })?;
+        // Zero-copy borrowed-key parse first (correct whenever no key needs
+        // JSON-unescaping, the overwhelmingly common case for flattened
+        // dotted-path keys); falls back to owned keys, with the original
+        // detailed parse error, only when that fails. Real-world `normalise`
+        // input is typically many rows sharing (almost) the same column set
+        // (the whole point of a wide DataFrame), so `key_order` -- unlike
+        // each row's own field map -- still needs owned `String`s, but only
+        // the *first* row to introduce a given key should pay for one: the
+        // `contains` check below skips the allocation entirely for every
+        // row that repeats an already-seen key, rather than unconditionally
+        // cloning (and immediately discarding) a fresh String per key on
+        // every single row -- a real, measured cost at issue #31's own
+        // scale (754 rows x 4,042 columns is ~3M wasted clones otherwise).
+        let fields: IndexMap<std::borrow::Cow<'_, str>, &serde_json::value::RawValue> =
+            if let Ok(fields) =
+                serde_json::from_str::<IndexMap<&str, &serde_json::value::RawValue>>(json_str)
+            {
+                fields
+                    .into_iter()
+                    .map(|(k, v)| (std::borrow::Cow::Borrowed(k), v))
+                    .collect()
+            } else {
+                let owned: IndexMap<String, &serde_json::value::RawValue> =
+                    serde_json::from_str(json_str).map_err(|e| {
+                        JsonToolsError::new_err(format!(
+                            "normalise=True requires every flattened row to be a JSON object; \
+                             row {idx} failed to parse as one: {e}"
+                        ))
+                    })?;
+                owned
+                    .into_iter()
+                    .map(|(k, v)| (std::borrow::Cow::Owned(k), v))
+                    .collect()
+            };
         for key in fields.keys() {
-            key_order.insert(key.clone());
+            if !key_order.contains(key.as_ref()) {
+                key_order.insert(key.to_string());
+            }
         }
         rows.push(fields);
     }
@@ -3329,7 +3358,7 @@ fn build_normalise_table<'py>(
 
     for (row_idx, row) in rows.iter().enumerate() {
         for (key, raw) in row {
-            let Some(col_idx) = key_order.get_index_of(key.as_str()) else {
+            let Some(col_idx) = key_order.get_index_of(key.as_ref()) else {
                 continue; // unreachable: key_order was built from these same rows above
             };
             if raw.get().as_bytes().first() == Some(&b'[') {

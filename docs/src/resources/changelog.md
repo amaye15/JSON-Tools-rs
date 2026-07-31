@@ -10,6 +10,8 @@ Profiling-driven follow-up round after v0.9.20 (`samply`/macOS `sample` against 
 
 Second round, focused on batch processing and DataFrame conversion. Batch processing's core parallel dispatch was profiled directly and found already optimal (no fix needed); batching Python-side JSON parse calls was tested and found to make no difference (correctly abandoned before shipping). The real cost, found via `cProfile`: DataFrame extraction re-allocated an owned `String` per JSON object key on every row. `unnest_object_valued_columns` and `splice_row` now try a zero-copy key parse first, falling back to owned keys only when a key needs unescaping. **~6-9% faster per call** for un-nesting (a quarter of a realistic `execute(df)` call), **~8.9% faster end to end** for embedded-JSON-string-column DataFrames.
 
+Third round, same focus: found the same "owned key per row" pattern one level up in `build_normalise_table`, with a second cost stacked on top -- `key_order.insert(key.clone())` ran for every key of every row, even ones already seen (at issue #31's scale, 754 rows x 4,042 columns, ~3 million wasted clones). Now a `contains` check first means a key only allocates once, the first time it's actually new. **~13.0% faster** for the issue #31-scale scenario, the largest single win of these three rounds. The same key-parse fix applied to `splice_zerocopy_columns` for consistency, measured as noise-level (not claimed as a win) since that path already minimizes what it re-parses per row by design.
+
 See the repository's [CHANGELOG.md](https://github.com/amaye15/json-tools-rs/blob/master/CHANGELOG.md) for the full, itemized list.
 
 ## v0.9.20 (2026-07-31)

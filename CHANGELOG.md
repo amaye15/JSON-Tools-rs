@@ -71,6 +71,36 @@ investigation of a full `execute(df)` call found the real remaining cost:
   #30/#31) measured **~8.9% faster end to end** for a JSON-string-column
   DataFrame (4/4 interleaved rounds).
 
+Third round, continuing the same batch-processing/DataFrame-conversion
+focus. Found the same "owned key per row" pattern one level up, with a
+second, compounding cost on top of it:
+- **`normalise=True`'s row-union pass no longer clones every key of every
+  row into `key_order`, even when that key was already seen.**
+  `build_normalise_table` (`src/python.rs`) parsed each row into an
+  `IndexMap<String, &RawValue>` (the same per-key allocation fixed
+  elsewhere this round) *and* unconditionally called `key_order.insert(key
+  .clone())` for every key of every row to build the cross-row column
+  union -- for the realistic case of many rows sharing (almost) the same
+  column set, every row after the first was cloning (and immediately
+  discarding) keys already present in `key_order`. At issue #31's own
+  reported scale (754 rows x 4,042 columns) that's on the order of 3
+  million wasted clones. Now: a zero-copy borrowed-key parse (falling back
+  to owned keys, with the original detailed parse error, only when a key
+  needs unescaping), and `key_order` only allocates a key the first time
+  it's actually new (a cheap `contains` check first). **~13.0% faster**
+  for the issue #31-scale scenario (754 rows x 4,042 columns), consistent
+  across 4/4 interleaved rounds -- the largest single win of these three
+  rounds.
+- **`splice_zerocopy_columns`** (the polars/pyarrow zero-copy embedded-
+  JSON-string-column path, `src/python.rs`) updated to the same
+  zero-copy-key parse for consistency and code reuse; measured as noise-
+  level (~0.2%, not a reportable win) for the scenario tested, since this
+  path already minimizes the JSON re-parsed per row by design (the
+  JSON-string target column is dropped before the native writer runs, so
+  what's re-parsed here is typically small regardless of the DataFrame's
+  real width) -- included for consistency, not claimed as a performance
+  win.
+
 ## [0.9.20] - 2026-07-31
 
 ### Changed (BREAKING)
