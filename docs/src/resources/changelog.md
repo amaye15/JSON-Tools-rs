@@ -8,6 +8,8 @@ Profiling-driven follow-up round after v0.9.20 (`samply`/macOS `sample` against 
 - **`unflatten()` no longer allocates a fresh path buffer per flattened key** (`src/unflatten.rs`) -- one buffer reused across a document instead of one per entry. **~3.8% faster** for wide flattened documents.
 - **`normalise=True`'s Arrow-native reconstruction no longer parses a list-valued column's JSON array text twice** (`src/python.rs`) -- exactly `handle_key_collision(True)`'s own headline scenario. **~5-6% faster** for a collision-heavy scenario.
 
+Second round, focused on batch processing and DataFrame conversion. Batch processing's core parallel dispatch was profiled directly and found already optimal (no fix needed); batching Python-side JSON parse calls was tested and found to make no difference (correctly abandoned before shipping). The real cost, found via `cProfile`: DataFrame extraction re-allocated an owned `String` per JSON object key on every row. `unnest_object_valued_columns` and `splice_row` now try a zero-copy key parse first, falling back to owned keys only when a key needs unescaping. **~6-9% faster per call** for un-nesting (a quarter of a realistic `execute(df)` call), **~8.9% faster end to end** for embedded-JSON-string-column DataFrames.
+
 See the repository's [CHANGELOG.md](https://github.com/amaye15/json-tools-rs/blob/master/CHANGELOG.md) for the full, itemized list.
 
 ## v0.9.20 (2026-07-31)

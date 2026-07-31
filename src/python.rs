@@ -811,7 +811,7 @@ fn splice_row(
     target_keys: &[String],
     failure_counts: &mut IndexMap<String, usize>,
 ) -> Option<String> {
-    let fields: IndexMap<String, &serde_json::value::RawValue> = serde_json::from_str(row).ok()?;
+    let fields = parse_object_fields_indexed(row)?;
 
     // Pass 1: decide which target keys actually need splicing, without yet
     // committing to a reconstruction -- preserves the fast path for a row
@@ -869,7 +869,7 @@ fn splice_row(
         out.push('"');
         write_json_escaped_key(&mut out, key);
         out.push_str("\":");
-        match substitutions.get(key.as_str()) {
+        match substitutions.get(key.as_ref()) {
             Some(inner) => out.push_str(inner),
             None => out.push_str(raw.get()),
         }
@@ -1200,16 +1200,73 @@ fn splice_zerocopy_columns(
 /// and reusing it (rather than inventing a second policy here) is the
 /// explicit, confirmed choice for this feature.
 ///
+/// Parse a JSON object's top-level fields, preferring zero-copy borrowed
+/// keys -- called once per row (and again per unnested column) on every
+/// flatten-mode DataFrame row, so an owned `String` per key was a real,
+/// measured cost (~1.4us/call end to end, ~24% of a realistic `execute(df)`
+/// call -- most of it this exact allocation). DataFrame column names /
+/// nested object keys essentially never contain characters needing JSON
+/// escaping, so the borrowed-key parse succeeds in the overwhelmingly
+/// common case; falls back to owned keys only when a key genuinely needs
+/// unescaping -- always correct, never silently treats a row as having
+/// nothing to unnest just because one key happened to need escaping.
+#[cfg(feature = "python")]
+fn parse_object_fields(
+    text: &str,
+) -> Option<Vec<(std::borrow::Cow<'_, str>, &serde_json::value::RawValue)>> {
+    if let Ok(fields) = serde_json::from_str::<IndexMap<&str, &serde_json::value::RawValue>>(text) {
+        return Some(
+            fields
+                .into_iter()
+                .map(|(k, v)| (std::borrow::Cow::Borrowed(k), v))
+                .collect(),
+        );
+    }
+    let fields: IndexMap<String, &serde_json::value::RawValue> = serde_json::from_str(text).ok()?;
+    Some(
+        fields
+            .into_iter()
+            .map(|(k, v)| (std::borrow::Cow::Owned(k), v))
+            .collect(),
+    )
+}
+
+/// Same borrowed-key-preferring parse as [`parse_object_fields`], but into an
+/// `IndexMap` instead of a `Vec` -- for callers (like `splice_row`) that need
+/// indexed/hashed key lookups, not just iteration, so a `Vec`'s O(n) lookup
+/// isn't an acceptable trade for large-column-count rows (e.g. issue #31's
+/// 4,042-column case).
+#[cfg(feature = "python")]
+fn parse_object_fields_indexed(
+    text: &str,
+) -> Option<IndexMap<std::borrow::Cow<'_, str>, &serde_json::value::RawValue>> {
+    if let Ok(fields) = serde_json::from_str::<IndexMap<&str, &serde_json::value::RawValue>>(text) {
+        return Some(
+            fields
+                .into_iter()
+                .map(|(k, v)| (std::borrow::Cow::Borrowed(k), v))
+                .collect(),
+        );
+    }
+    let fields: IndexMap<String, &serde_json::value::RawValue> = serde_json::from_str(text).ok()?;
+    Some(
+        fields
+            .into_iter()
+            .map(|(k, v)| (std::borrow::Cow::Owned(k), v))
+            .collect(),
+    )
+}
+
 /// Returns `None` (row unchanged, zero-copy) when no top-level field is
 /// object-valued -- the common case for a DataFrame with no embedded/struct
 /// columns at all.
 #[cfg(feature = "python")]
 fn unnest_object_valued_columns(row: &str) -> Option<String> {
-    let fields: IndexMap<String, &serde_json::value::RawValue> = serde_json::from_str(row).ok()?;
+    let fields = parse_object_fields(row)?;
 
     if !fields
-        .values()
-        .any(|raw| raw.get().as_bytes().first() == Some(&b'{'))
+        .iter()
+        .any(|(_, raw)| raw.get().as_bytes().first() == Some(&b'{'))
     {
         return None;
     }
@@ -1221,11 +1278,10 @@ fn unnest_object_valued_columns(row: &str) -> Option<String> {
         let text = raw.get();
         if text.as_bytes().first() == Some(&b'{') {
             // RawValue already guarantees `text` is well-formed JSON, so a
-            // leading `{` guarantees this inner parse succeeds -- structurally
-            // impossible to fail here.
-            if let Ok(inner_fields) =
-                serde_json::from_str::<IndexMap<String, &serde_json::value::RawValue>>(text)
-            {
+            // leading `{` guarantees `parse_object_fields` succeeds --
+            // structurally impossible to fail here (its own owned-key
+            // fallback always succeeds for well-formed JSON).
+            if let Some(inner_fields) = parse_object_fields(text) {
                 for (inner_key, inner_raw) in &inner_fields {
                     if !first {
                         out.push(',');

@@ -41,6 +41,36 @@ worktree at the prior commit, multiple rounds):
   `collision_medium` scenario added to `python/benchmarks/bench_normalise.py`
   to keep this covered going forward.
 
+Second round, focused specifically on batch processing and DataFrame
+conversion per user request. Profiled the core parallel batch dispatch
+(`process_batch` in `src/builder.rs`) directly and found it already using
+established best practice (rayon's persistent thread pool, single-pass
+allocation, no redundant work) -- no viable fix found there. Separately
+verified, via direct isolated timing, that batching Python-side JSON parse
+calls (`orjson.loads` on a joined array vs. one call per row) makes no
+measurable difference -- object-construction cost dominates over per-call
+overhead, so that avenue (which looked "obviously correct" by reasoning)
+was correctly abandoned before touching any code. `cProfile`-driven
+investigation of a full `execute(df)` call found the real remaining cost:
+- **DataFrame extraction no longer allocates an owned `String` per JSON
+  object key when un-nesting or splicing embedded object/string columns.**
+  `unnest_object_valued_columns` and `splice_row` (`src/python.rs`) both ran
+  on every row of a flatten-mode DataFrame conversion, each parsing that
+  row's JSON object into an `IndexMap<String, &RawValue>` -- one heap
+  allocation per key just to check shape or look up a handful of target
+  keys, never needing ownership. Both now try a zero-copy
+  `IndexMap<&str, &RawValue>` parse first (correct whenever no key needs
+  JSON-unescaping, the overwhelmingly common case for DataFrame column
+  names), falling back to owned keys only when that fails -- never a
+  behavior change, only an allocation avoided in the common case.
+  `unnest_object_valued_columns` alone measured ~1.4us/call, roughly a
+  quarter of a realistic `execute(df)` call's total time (confirmed via a
+  direct isolated timing harness, not just profiler inference); the fix
+  measured **~6-9% faster per call** (6/6 interleaved rounds in the same
+  direction). `splice_row` (the embedded-JSON-string-column path, issues
+  #30/#31) measured **~8.9% faster end to end** for a JSON-string-column
+  DataFrame (4/4 interleaved rounds).
+
 ## [0.9.20] - 2026-07-31
 
 ### Changed (BREAKING)
