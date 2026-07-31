@@ -3118,9 +3118,9 @@ class TestDataFrameAndSeriesSupport:
         # Result should be pandas DataFrame (or list if pandas not in reconstruct)
         if isinstance(result, self.pd.DataFrame):
             assert len(result) == 2
-            assert "user.name" in result.columns
-            assert "user.age" in result.columns
-            assert result["user.name"].tolist() == ["Alice", "Bob"]
+            assert "name" in result.columns
+            assert "age" in result.columns
+            assert result["name"].tolist() == ["Alice", "Bob"]
         else:
             # Fallback to list
             assert isinstance(result, list)
@@ -3250,12 +3250,12 @@ class TestDataFrameAndSeriesSupport:
             assert len(result) == 2
             # Check that columns were flattened
             column_names = result.column_names
-            assert "user.name" in column_names or "user" in column_names
+            assert "name" in column_names or "user" in column_names
         else:
             # Fallback to list
             assert isinstance(result, list)
             assert len(result) == 2
-            assert "user.name" in result[0]
+            assert "name" in result[0]
 
     def test_pyarrow_table_nullable_int_column_stays_int(self):
         """execute()'s PyArrow extraction bridges through pandas for speed
@@ -3617,7 +3617,12 @@ class TestDataFrameAndSeriesSupport:
     # =========================================================================
 
     def test_pandas_dataframe_roundtrip(self):
-        """Test pandas DataFrame roundtrip: flatten then unflatten"""
+        """execute()'s flatten step drops the source column name as a prefix
+        (github.com/amaye15/JSON-Tools-rs/issues -- "don't keep the original
+        column name", 2026-07-31), so this is no longer a *structural*
+        roundtrip: "user" is genuinely gone, not recoverable by unflatten().
+        This now just pins that flatten -> unflatten composes without
+        crashing and that the (now-flat) data survives intact."""
         if not self.has_pandas:
             pytest.skip("pandas not installed")
 
@@ -3642,11 +3647,12 @@ class TestDataFrameAndSeriesSupport:
             result_dicts = result
 
         assert len(result_dicts) == 2
-        assert result_dicts[0]["user"]["name"] == "Alice"
-        assert result_dicts[1]["user"]["name"] == "Bob"
+        assert result_dicts[0]["name"] == "Alice"
+        assert result_dicts[1]["name"] == "Bob"
 
     def test_pyarrow_table_roundtrip(self):
-        """Test PyArrow Table roundtrip: flatten then unflatten"""
+        """No longer a structural roundtrip -- see
+        test_pandas_dataframe_roundtrip's docstring."""
         if not self.has_pyarrow:
             pytest.skip("pyarrow not installed")
 
@@ -3671,10 +3677,11 @@ class TestDataFrameAndSeriesSupport:
             result_dicts = result
 
         assert len(result_dicts) == 2
-        assert result_dicts[0]["user"]["name"] == "Alice"
+        assert result_dicts[0]["name"] == "Alice"
 
     def test_polars_dataframe_roundtrip(self):
-        """Test polars DataFrame roundtrip: flatten then unflatten"""
+        """No longer a structural roundtrip -- see
+        test_pandas_dataframe_roundtrip's docstring."""
         if not self.has_polars:
             pytest.skip("polars not installed")
 
@@ -3699,7 +3706,7 @@ class TestDataFrameAndSeriesSupport:
             result_dicts = result
 
         assert len(result_dicts) == 2
-        assert result_dicts[0]["user"]["name"] == "Alice"
+        assert result_dicts[0]["name"] == "Alice"
 
     # =========================================================================
     # Null/None Value Handling
@@ -4071,10 +4078,10 @@ class TestDataFrameAndSeriesSupport:
         assert len(result_polars) == 2
         assert len(result_pyarrow) == 2
 
-        # All should have flattened keys
-        assert "user.name" in result_pandas[0]
-        assert "user.name" in result_polars[0]
-        assert "user.name" in result_pyarrow[0]
+        # All should have flattened keys (bare, no column-name prefix)
+        assert "name" in result_pandas[0]
+        assert "name" in result_polars[0]
+        assert "name" in result_pyarrow[0]
 
 
 class TestErrorHandlingExtended:
@@ -4547,8 +4554,8 @@ class TestNormalise:
         # ("could not auto-detect a target") instead of reaching the row check
         # this test actually exercises -- caught by a CI job that has none of
         # those optional libraries installed (maturin-ci.yml's wheel-test step).
-        if not self.has_pandas:
-            pytest.skip("pandas not installed")
+        if not (self.has_pandas and self.has_pyarrow):
+            pytest.skip("pandas and pyarrow not installed")
         tools = json_tools_rs.JSONTools().flatten()
         with pytest.raises(json_tools_rs.JsonToolsError, match="row 0"):
             tools.execute(['"just a string"'], normalise=True, target="pandas")
@@ -4558,8 +4565,8 @@ class TestNormalise:
     # =========================================================================
 
     def test_pandas_dict_input_one_row(self):
-        if not self.has_pandas:
-            pytest.skip("pandas not installed")
+        if not (self.has_pandas and self.has_pyarrow):
+            pytest.skip("pandas and pyarrow not installed")
         tools = json_tools_rs.JSONTools().flatten()
         df = tools.execute(
             {"user": {"name": "Alice", "age": 30}}, normalise=True, target="pandas"
@@ -4570,22 +4577,22 @@ class TestNormalise:
         assert df.iloc[0]["user.age"] == 30
 
     def test_pandas_str_input_one_row(self):
-        if not self.has_pandas:
-            pytest.skip("pandas not installed")
+        if not (self.has_pandas and self.has_pyarrow):
+            pytest.skip("pandas and pyarrow not installed")
         tools = json_tools_rs.JSONTools().flatten()
         df = tools.execute('{"a": 1}', normalise=True, target="pandas")
         assert df.shape == (1, 1)
 
     def test_pandas_list_str_input_n_rows(self):
-        if not self.has_pandas:
-            pytest.skip("pandas not installed")
+        if not (self.has_pandas and self.has_pyarrow):
+            pytest.skip("pandas and pyarrow not installed")
         tools = json_tools_rs.JSONTools().flatten()
         df = tools.execute(['{"a": 1}', '{"a": 2}'], normalise=True, target="pandas")
         assert df.shape == (2, 1)
 
     def test_pandas_heterogeneous_keys_union_and_null_fill(self):
-        if not self.has_pandas:
-            pytest.skip("pandas not installed")
+        if not (self.has_pandas and self.has_pyarrow):
+            pytest.skip("pandas and pyarrow not installed")
         tools = json_tools_rs.JSONTools().flatten()
         data = [{"a": 1, "b": {"x": "hi"}}, {"a": 2, "c": True}]
         df = tools.execute(data, normalise=True, target="pandas")
@@ -4600,23 +4607,23 @@ class TestNormalise:
         assert self.pd.isna(df.iloc[1]["b.x"])
 
     def test_pandas_empty_list_zero_rows_no_error(self):
-        if not self.has_pandas:
-            pytest.skip("pandas not installed")
+        if not (self.has_pandas and self.has_pyarrow):
+            pytest.skip("pandas and pyarrow not installed")
         tools = json_tools_rs.JSONTools().flatten()
         df = tools.execute([], normalise=True, target="pandas")
         assert df.shape == (0, 0)
 
     def test_pandas_all_none_column_does_not_crash(self):
-        if not self.has_pandas:
-            pytest.skip("pandas not installed")
+        if not (self.has_pandas and self.has_pyarrow):
+            pytest.skip("pandas and pyarrow not installed")
         tools = json_tools_rs.JSONTools().flatten()
         data = [{"a": 1, "b": None}, {"a": 2, "b": None}]
         df = tools.execute(data, normalise=True, target="pandas")
         assert df["b"].isna().all()
 
     def test_pandas_key_collision_mixed_list_scalar_columns(self):
-        if not self.has_pandas:
-            pytest.skip("pandas not installed")
+        if not (self.has_pandas and self.has_pyarrow):
+            pytest.skip("pandas and pyarrow not installed")
         tools = (
             json_tools_rs.JSONTools()
             .flatten()
@@ -4656,11 +4663,13 @@ class TestNormalise:
         tools = json_tools_rs.JSONTools().flatten()
         data = [{"a": 1, "b": None}, {"a": 2, "b": None}]
         df = tools.execute(data, normalise=True, target="polars")
-        # polars's own harmless default for an all-None column (Null dtype) --
-        # no explicit typing needed/attempted here, unlike the pyspark target,
-        # which has a real reason to force an explicit schema (see
-        # reconstruct_pyspark_normalise's doc comment).
-        assert df["b"].dtype == self.pl.Null
+        # The Arrow-native reconstruction engine (github.com/amaye15/
+        # JSON-Tools-rs/issues/35) builds one explicit Arrow schema shared by
+        # every target -- an all-null column resolves to Utf8 uniformly
+        # (matching pyspark's own already-established StringType default),
+        # not each target's own previously-independent native null
+        # representation (polars Null / pyarrow null / pandas object).
+        assert df["b"].dtype == self.pl.String
         assert df["b"].is_null().all()
 
     def test_polars_key_collision_mixed_list_scalar_columns(self):
@@ -4704,11 +4713,11 @@ class TestNormalise:
         tools = json_tools_rs.JSONTools().flatten()
         data = [{"a": 1, "b": None}, {"a": 2, "b": None}]
         table = tools.execute(data, normalise=True, target="pyarrow")
-        # pyarrow's own harmless default for an all-None column (null type) --
-        # no explicit typing needed/attempted here; see the polars test above
-        # and reconstruct_pyspark_normalise's doc comment for why pyspark
-        # alone needs a real, explicit-schema fix instead.
-        assert table.schema.field("b").type == self.pa.null()
+        # See test_polars_all_none_column_does_not_crash's comment -- the
+        # Arrow-native engine resolves an all-null column to Utf8 uniformly
+        # across every target now, not pyarrow's own previously-independent
+        # null-type default.
+        assert table.schema.field("b").type == self.pa.string()
         assert table.column("b").null_count == 2
 
     def test_pyarrow_key_collision_mixed_list_scalar_columns(self):
@@ -4748,8 +4757,8 @@ class TestNormalise:
         assert isinstance(out, self.pl.DataFrame)
 
     def test_auto_detect_target_priority_pandas_first_for_bare_json(self):
-        if not self.has_pandas:
-            pytest.skip("pandas not installed")
+        if not (self.has_pandas and self.has_pyarrow):
+            pytest.skip("pandas and pyarrow not installed")
         tools = json_tools_rs.JSONTools().flatten()
         out = tools.execute({"a": 1}, normalise=True)
         assert isinstance(out, self.pd.DataFrame)
@@ -4831,6 +4840,324 @@ class TestNormalise:
             )
 
 
+class TestNormaliseArrowNative:
+    """normalise=True's reconstruction is Arrow-native (github.com/amaye15/
+    JSON-Tools-rs/issues/35): every target is derived from one real Arrow
+    RecordBatch built directly in Rust, replacing the old union_and_
+    columnarize's Bound<PyAny>-boxing approach. These tests cover what's new
+    or changed by that rewrite specifically -- real List<T> typing (not
+    stringified), the pandas ArrowDtype output change, and the new pyarrow
+    dependency for pandas/pyspark targets -- as opposed to TestNormalise
+    above, which covers the feature's general union/null-fill/target-
+    resolution behavior (unaffected by this rewrite)."""
+
+    @pytest.fixture(autouse=True)
+    def setup(self):
+        try:
+            import pandas as pd
+
+            self.pd = pd
+            self.has_pandas = True
+        except ImportError:
+            self.has_pandas = False
+
+        try:
+            import polars as pl
+
+            self.pl = pl
+            self.has_polars = True
+        except ImportError:
+            self.has_polars = False
+
+        try:
+            import pyarrow as pa
+
+            self.pa = pa
+            self.has_pyarrow = True
+        except ImportError:
+            self.has_pyarrow = False
+
+    # =========================================================================
+    # Real List<T> typing (the "no lazy stringify" fix)
+    # =========================================================================
+
+    def test_polars_collision_list_is_real_list_type_not_stringified(self):
+        if not self.has_polars:
+            pytest.skip("polars not installed")
+        tools = (
+            json_tools_rs.JSONTools()
+            .flatten()
+            .key_replacement("first_name", "name")
+            .key_replacement("last_name", "name")
+            .handle_key_collision(True)
+        )
+        data = [{"first_name": "John", "last_name": "Doe"}, {"first_name": "Jane"}]
+        df = tools.execute(data, normalise=True, target="polars")
+        assert df.schema["name"] == self.pl.List(self.pl.String)
+        assert df["name"].to_list() == [["John", "Doe"], ["Jane"]]
+
+    def test_pyarrow_collision_list_is_real_list_type_not_stringified(self):
+        if not self.has_pyarrow:
+            pytest.skip("pyarrow not installed")
+        tools = (
+            json_tools_rs.JSONTools()
+            .flatten()
+            .key_replacement("first_name", "name")
+            .key_replacement("last_name", "name")
+            .handle_key_collision(True)
+        )
+        data = [{"first_name": "John", "last_name": "Doe"}, {"first_name": "Jane"}]
+        table = tools.execute(data, normalise=True, target="pyarrow")
+        assert table.schema.field("name").type == self.pa.list_(self.pa.string())
+        assert table.column("name").to_pylist() == [["John", "Doe"], ["Jane"]]
+
+    def test_pandas_collision_list_is_real_list_type_not_stringified(self):
+        if not (self.has_pandas and self.has_pyarrow):
+            pytest.skip("pandas and pyarrow not installed")
+        tools = (
+            json_tools_rs.JSONTools()
+            .flatten()
+            .key_replacement("first_name", "name")
+            .key_replacement("last_name", "name")
+            .handle_key_collision(True)
+        )
+        data = [{"first_name": "John", "last_name": "Doe"}, {"first_name": "Jane"}]
+        df = tools.execute(data, normalise=True, target="pandas")
+        assert str(df["name"].dtype) == "list<item: string>[pyarrow]"
+        assert list(df["name"].iloc[0]) == ["John", "Doe"]
+
+    def test_polars_int_list_column_is_real_int64_list(self):
+        if not self.has_polars:
+            pytest.skip("polars not installed")
+        tools = (
+            json_tools_rs.JSONTools()
+            .flatten()
+            .key_replacement("a_id", "id")
+            .key_replacement("b_id", "id")
+            .handle_key_collision(True)
+            .auto_convert_types(True)
+        )
+        data = [{"a_id": "100", "b_id": "200"}, {"a_id": "300"}]
+        df = tools.execute(data, normalise=True, target="polars")
+        assert df.schema["id"] == self.pl.List(self.pl.Int64)
+        assert df["id"].to_list() == [[100, 200], [300]]
+
+    def test_polars_collision_list_mixed_element_kinds_stringifies_elements(self):
+        """A single collision list mixing element kinds (each colliding
+        source key auto_convert_types-converted independently) still can't be
+        a uniformly-typed List<T> -- falls back to List<Utf8> with every
+        element stringified, matching the pre-existing (Python-object-level)
+        fallback rule, now verified at the Arrow-type level too."""
+        if not self.has_polars:
+            pytest.skip("polars not installed")
+        tools = (
+            json_tools_rs.JSONTools()
+            .flatten()
+            .key_replacement("a_val", "val")
+            .key_replacement("b_val", "val")
+            .handle_key_collision(True)
+            .auto_convert_types(True)
+        )
+        data = [{"a_val": "100", "b_val": "abc"}]
+        df = tools.execute(data, normalise=True, target="polars")
+        assert df.schema["val"] == self.pl.List(self.pl.String)
+        assert df["val"].to_list() == [["100", "abc"]]
+
+    # =========================================================================
+    # Scalar type fidelity (unchanged rules, verified at the new engine's
+    # Arrow-type level instead of Python's own inferred dtype)
+    # =========================================================================
+
+    def test_polars_mixed_scalar_column_stringifies_whole_column(self):
+        if not self.has_polars:
+            pytest.skip("polars not installed")
+        tools = json_tools_rs.JSONTools().flatten()
+        data = [{"id": 1, "val": 123}, {"id": 2, "val": "abc"}]
+        df = tools.execute(data, normalise=True, target="polars")
+        assert df.schema["val"] == self.pl.String
+        assert df["val"].to_list() == ["123", "abc"]
+
+    def test_polars_int_float_mix_promotes_to_float64_not_string(self):
+        if not self.has_polars:
+            pytest.skip("polars not installed")
+        tools = json_tools_rs.JSONTools().flatten()
+        data = [{"id": 1, "val": 5}, {"id": 2, "val": 5.5}]
+        df = tools.execute(data, normalise=True, target="polars")
+        assert df.schema["val"] == self.pl.Float64
+        assert df["val"].to_list() == [5.0, 5.5]
+
+    def test_polars_large_integer_beyond_i64_downgrades_to_float(self):
+        """An integer too large for i64 is downgraded to Float64 rather than
+        erroring -- an accepted precision tradeoff, not a crash."""
+        if not self.has_polars:
+            pytest.skip("polars not installed")
+        tools = json_tools_rs.JSONTools().flatten()
+        data = [{"id": 1, "big": 99999999999999999999}]
+        df = tools.execute(data, normalise=True, target="polars")
+        assert df.schema["big"] == self.pl.Float64
+
+    def test_polars_bool_column_stays_boolean(self):
+        if not self.has_polars:
+            pytest.skip("polars not installed")
+        tools = json_tools_rs.JSONTools().flatten()
+        data = [{"id": 1, "active": True}, {"id": 2, "active": False}]
+        df = tools.execute(data, normalise=True, target="polars")
+        assert df.schema["active"] == self.pl.Boolean
+
+    # =========================================================================
+    # Date/datetime typing (real Date32/Timestamp, gated on convert_dates())
+    # =========================================================================
+
+    def test_polars_date_column_is_real_date_type(self):
+        if not self.has_polars:
+            pytest.skip("polars not installed")
+        tools = json_tools_rs.JSONTools().flatten().convert_dates(True)
+        data = [{"id": 1, "d": "2024-01-15"}, {"id": 2, "d": "2024-02-20"}]
+        df = tools.execute(data, normalise=True, target="polars")
+        assert df.schema["d"] == self.pl.Date
+        assert df["d"].to_list() == [
+            __import__("datetime").date(2024, 1, 15),
+            __import__("datetime").date(2024, 2, 20),
+        ]
+
+    def test_polars_datetime_column_is_real_timestamp_type_utc(self):
+        if not self.has_polars:
+            pytest.skip("polars not installed")
+        tools = json_tools_rs.JSONTools().flatten().convert_dates(True)
+        data = [
+            {"id": 1, "dt": "2024-01-15T10:30:00Z"},
+            # +05:00 offset -- must convert to the correct UTC instant, not be
+            # taken at face value.
+            {"id": 2, "dt": "2024-02-20T11:00:00+05:00"},
+        ]
+        df = tools.execute(data, normalise=True, target="polars")
+        assert df.schema["dt"] == self.pl.Datetime(time_unit="us", time_zone="UTC")
+        hours = [v.hour for v in df["dt"].to_list()]
+        assert hours == [10, 6]  # 11:00+05:00 -> 06:00 UTC
+
+    def test_pyarrow_date_and_datetime_types(self):
+        if not self.has_pyarrow:
+            pytest.skip("pyarrow not installed")
+        tools = json_tools_rs.JSONTools().flatten().convert_dates(True)
+        data = [{"id": 1, "d": "2024-01-15", "dt": "2024-01-15T10:30:00Z"}]
+        table = tools.execute(data, normalise=True, target="pyarrow")
+        assert table.schema.field("d").type == self.pa.date32()
+        assert table.schema.field("dt").type == self.pa.timestamp("us", tz="UTC")
+
+    def test_pandas_date_and_datetime_types(self):
+        if not (self.has_pandas and self.has_pyarrow):
+            pytest.skip("pandas and pyarrow not installed")
+        tools = json_tools_rs.JSONTools().flatten().convert_dates(True)
+        data = [{"id": 1, "d": "2024-01-15", "dt": "2024-01-15T10:30:00Z"}]
+        df = tools.execute(data, normalise=True, target="pandas")
+        assert str(df["d"].dtype) == "date32[day][pyarrow]"
+        assert str(df["dt"].dtype) == "timestamp[us, tz=UTC][pyarrow]"
+
+    def test_polars_mixed_date_and_datetime_promotes_to_timestamp(self):
+        """A bare date mixed with a genuine datetime in the same column
+        promotes to Timestamp (the date becomes midnight UTC) -- the same
+        "promote the narrower kind" pattern int->float already uses, not a
+        stringify fallback."""
+        if not self.has_polars:
+            pytest.skip("polars not installed")
+        tools = json_tools_rs.JSONTools().flatten().convert_dates(True)
+        data = [{"id": 1, "when": "2024-01-15"}, {"id": 2, "when": "2024-01-15T10:30:00Z"}]
+        df = tools.execute(data, normalise=True, target="polars")
+        assert df.schema["when"] == self.pl.Datetime(time_unit="us", time_zone="UTC")
+        values = df["when"].to_list()
+        assert values[0].hour == 0 and values[0].minute == 0
+        assert values[1].hour == 10 and values[1].minute == 30
+
+    def test_polars_date_mixed_with_plain_string_falls_back_to_utf8(self):
+        """A column mixing a genuine date with an ordinary (non-date) string
+        can't be uniformly typed -- stringifies the whole column, same as any
+        other kind mixing. Pins that date detection never false-positives a
+        column into looking uniformly typeable when it isn't."""
+        if not self.has_polars:
+            pytest.skip("polars not installed")
+        tools = json_tools_rs.JSONTools().flatten().convert_dates(True)
+        data = [{"id": 1, "when": "2024-01-15"}, {"id": 2, "when": "not a date"}]
+        df = tools.execute(data, normalise=True, target="polars")
+        assert df.schema["when"] == self.pl.String
+        assert df["when"].to_list() == ["2024-01-15", "not a date"]
+
+    def test_polars_date_shaped_string_stays_string_without_convert_dates(self):
+        """The core guarantee behind gating this on convert_dates(): with date
+        conversion off, a date-shaped string is never independently
+        reinterpreted -- stays exactly the plain string it always was."""
+        if not self.has_polars:
+            pytest.skip("polars not installed")
+        tools = json_tools_rs.JSONTools().flatten()  # no .convert_dates(True)
+        data = [{"id": 1, "d": "2024-01-15"}]
+        df = tools.execute(data, normalise=True, target="polars")
+        assert df.schema["d"] == self.pl.String
+        assert df["d"].to_list() == ["2024-01-15"]
+
+    # =========================================================================
+    # Literal empty-object leaf (remove_empty_objects=False) -- regression
+    # test for a panic found while auditing this engine's type coverage: `{}`'s
+    # `{` first byte fell through to the number-parsing branch and crashed.
+    # =========================================================================
+
+    def test_polars_literal_empty_object_does_not_panic(self):
+        if not self.has_polars:
+            pytest.skip("polars not installed")
+        tools = json_tools_rs.JSONTools().flatten().remove_empty_objects(False)
+        data = [{"id": 1, "empty": {}}]
+        df = tools.execute(data, normalise=True, target="polars")
+        assert df.schema["empty"] == self.pl.String
+        assert df["empty"].to_list() == ["{}"]
+
+    def test_polars_empty_object_mixed_with_other_values_stringifies_column(self):
+        if not self.has_polars:
+            pytest.skip("polars not installed")
+        tools = json_tools_rs.JSONTools().flatten().remove_empty_objects(False)
+        data = [{"id": 1, "val": {}}, {"id": 2, "val": "hello"}]
+        df = tools.execute(data, normalise=True, target="polars")
+        assert df.schema["val"] == self.pl.String
+        assert df["val"].to_list() == ["{}", "hello"]
+
+    # =========================================================================
+    # pandas ArrowDtype output (intentional breaking dtype change)
+    # =========================================================================
+
+    def test_pandas_output_uses_arrow_dtype(self):
+        if not (self.has_pandas and self.has_pyarrow):
+            pytest.skip("pandas and pyarrow not installed")
+        tools = json_tools_rs.JSONTools().flatten()
+        data = [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}]
+        df = tools.execute(data, normalise=True, target="pandas")
+        assert str(df["id"].dtype) == "int64[pyarrow]"
+        assert str(df["name"].dtype) == "string[pyarrow]"
+
+    # =========================================================================
+    # pyarrow dependency (pandas/pyspark now require it; polars does not)
+    # =========================================================================
+
+    def test_pandas_target_without_pyarrow_gives_clear_error(self):
+        if not self.has_pandas:
+            pytest.skip("pandas not installed")
+        if self.has_pyarrow:
+            pytest.skip("pyarrow is installed in this environment")
+        tools = json_tools_rs.JSONTools().flatten()
+        with pytest.raises(json_tools_rs.JsonToolsError, match="pyarrow"):
+            tools.execute({"a": 1}, normalise=True, target="pandas")
+
+    def test_polars_target_works_without_pyarrow(self):
+        """The one target that must stay usable without pyarrow installed --
+        verified directly (pl.from_arrow accepts the raw pyo3-arrow
+        capsule-protocol object without pyarrow), preserving the same
+        zero-pyarrow-dependency guarantee target="polars" already had."""
+        if not self.has_polars:
+            pytest.skip("polars not installed")
+        if self.has_pyarrow:
+            pytest.skip("pyarrow is installed in this environment")
+        tools = json_tools_rs.JSONTools().flatten()
+        df = tools.execute({"a": 1, "b": "x"}, normalise=True, target="polars")
+        assert isinstance(df, self.pl.DataFrame)
+        assert df["a"].to_list() == [1]
+
+
 class TestJsonStringColumnExpansion:
     """Test auto-expansion of DataFrame columns holding JSON *strings* (not
     already dicts/structs) in .flatten() mode -- see
@@ -4893,8 +5220,8 @@ class TestJsonStringColumnExpansion:
             }
         )
         result = tools.execute(df)
-        assert result.columns.tolist() == ["id", "name", "json_col__a__b"]
-        assert result["json_col__a__b"].tolist() == [1, 2]
+        assert result.columns.tolist() == ["id", "name", "a__b"]
+        assert result["a__b"].tolist() == [1, 2]
 
     def test_polars_json_string_column_expands(self):
         if not self.has_polars:
@@ -4904,7 +5231,7 @@ class TestJsonStringColumnExpansion:
             {"id": [1, 2], "json_col": ['{"a": {"b": 1}}', '{"a": {"b": 2}}']}
         )
         result = tools.execute(df)
-        assert result.columns == ["id", "json_col.a.b"]
+        assert result.columns == ["id", "a.b"]
 
     def test_pyarrow_json_string_column_expands(self):
         if not self.has_pyarrow:
@@ -4914,7 +5241,7 @@ class TestJsonStringColumnExpansion:
             {"id": [1, 2], "json_col": ['{"a": {"b": 1}}', '{"a": {"b": 2}}']}
         )
         result = tools.execute(table)
-        assert result.column_names == ["id", "json_col.a.b"]
+        assert result.column_names == ["id", "a.b"]
 
     # =========================================================================
     # Detection correctness
@@ -4955,9 +5282,9 @@ class TestJsonStringColumnExpansion:
             {"id": [1, 2, 3], "json_col": ['{"a": 1}', None, '{"a": 3}']}
         )
         result = tools.execute(df)
-        assert "json_col.a" in result.columns.tolist()
-        assert result.loc[result["id"] == 1, "json_col.a"].iloc[0] == 1
-        assert result.loc[result["id"] == 3, "json_col.a"].iloc[0] == 3
+        assert "a" in result.columns.tolist()
+        assert result.loc[result["id"] == 1, "a"].iloc[0] == 1
+        assert result.loc[result["id"] == 3, "a"].iloc[0] == 3
 
     def test_json_string_array_column_expands_into_indexed_columns(self):
         """A JSON-string-encoded array expands into indexed sub-columns the
@@ -5003,10 +5330,10 @@ class TestJsonStringColumnExpansion:
         with pytest.warns(UserWarning, match="json_col"):
             result = tools.execute(df)
 
-        assert "json_col.a" in result.columns.tolist()
+        assert "a" in result.columns.tolist()
         bad_row = result.loc[result["id"] == 22]
         assert bad_row["json_col"].iloc[0] == '{"a": broken'
-        assert self.pd.isna(bad_row["json_col.a"].iloc[0])
+        assert self.pd.isna(bad_row["a"].iloc[0])
 
     # =========================================================================
     # Mode scoping (the wiring correction found during planning)
@@ -5046,19 +5373,19 @@ class TestJsonStringColumnExpansion:
             }
         )
         result = tools.execute(df)
-        assert result.columns.tolist() == ["id", "dict_col.x", "json_col.y"]
+        assert result.columns.tolist() == ["id", "x", "y"]
 
     def test_json_string_column_with_normalise(self):
-        if not self.has_pandas:
-            pytest.skip("pandas not installed")
+        if not (self.has_pandas and self.has_pyarrow):
+            pytest.skip("pandas and pyarrow not installed")
         tools = json_tools_rs.JSONTools().flatten()
         data = [
             {"id": 1, "json_col": '{"a": {"b": 1}}'},
             {"id": 2, "json_col": '{"a": {"b": 2}}'},
         ]
         result = tools.execute(self.pd.DataFrame(data), normalise=True, target="pandas")
-        assert "json_col.a.b" in result.columns.tolist()
-        assert result["json_col.a.b"].tolist() == [1, 2]
+        assert "a.b" in result.columns.tolist()
+        assert result["a.b"].tolist() == [1, 2]
 
     def test_pyspark_json_string_column_expands(self):
         """The issue's own reported scenario: a PySpark DataFrame with a JSON
@@ -5080,8 +5407,8 @@ class TestJsonStringColumnExpansion:
         result = tools.execute(spark_df)
         assert isinstance(result, SparkDataFrame)
         rows = {r["id"]: r for r in result.collect()}
-        assert rows[1]["json_col__a__b"] == 1
-        assert rows[2]["json_col__a__b"] == 2
+        assert rows[1]["a__b"] == 1
+        assert rows[2]["a__b"] == 2
 
 
 class TestExecuteDataFrameTypeMatching:
@@ -5187,18 +5514,23 @@ class TestPySparkMixedTypeColumnFallback:
     direct reproduction, with Arrow fallback explicitly disabled and pyarrow
     installed (matching the reporter's Databricks Serverless environment),
     that this previously raised `PySparkTypeError: Exception thrown when
-    converting pandas.Series (object) ... to Arrow Array` -- infer_spark_type
-    picked a schema type from only the column's first value, so a later,
-    differently-typed value in the same column broke Spark's Arrow bridge.
+    converting pandas.Series (object) ... to Arrow Array` -- the old
+    `infer_spark_type` picked a schema type from only the column's first
+    value, so a later, differently-typed value in the same column broke
+    Spark's Arrow bridge. Since the Arrow-native normalise rewrite
+    (github.com/amaye15/JSON-Tools-rs/issues/35), the schema is derived
+    directly from the real Arrow type `arrow_type_to_spark` already built in
+    Rust, rather than re-scanning Python values -- same guarantee, different
+    mechanism; these tests still pin the observable behavior either way.
 
-    These tests deliberately leave Spark's Arrow fallback at its default
-    (enabled) rather than forcing that strict configuration: CI's dedicated
-    pyspark job installs no pyarrow, under which forcing fallback off breaks
-    every createDataFrame call with an unrelated `PACKAGE_NOT_INSTALLED`
-    error before the mixed-type fallback logic is ever reached. The schema/
-    value assertions below hold regardless of which internal path Spark
-    takes, since `reconstruct_pyspark_normalise` always passes an explicit
-    schema either way -- so they still cover the fix's actual behavior.
+    pyarrow is required unconditionally now (Arrow-native normalise needs it
+    to reach a pandas DataFrame at all -- see CI's pyspark job), so these
+    tests no longer need to account for a pyarrow-less environment forcing
+    Spark's non-Arrow fallback path; that scenario is out of scope going
+    forward. The schema/value assertions below hold regardless of which
+    internal path Spark itself takes, since `reconstruct_pyspark_normalise`
+    always passes an explicit schema either way -- so they still cover the
+    fix's actual behavior.
     """
 
     @pytest.fixture(autouse=True)
@@ -5232,7 +5564,10 @@ class TestPySparkMixedTypeColumnFallback:
         )
         result = tools.execute(spark_df)  # must not raise
         assert isinstance(result, SparkDataFrame)
-        col = "json__env__idverification__lastname"
+        # No "json__" prefix: the source column name is never kept, only
+        # nesting within its own content is (github.com/amaye15/
+        # JSON-Tools-rs/issues -- "don't keep the original column name").
+        col = "env__idverification__lastname"
         assert result.schema[col].dataType == T.StringType()
         values = {r[col] for r in result.collect()}
         assert values == {"Smith", "123"}
@@ -5246,11 +5581,11 @@ class TestPySparkMixedTypeColumnFallback:
         spark_df = self.spark.createDataFrame(data)
         tools = json_tools_rs.JSONTools().flatten().auto_convert_types(True)
         result = tools.execute(spark_df)  # must not raise
-        assert result.schema["json.flag"].dataType == T.StringType()
+        assert result.schema["flag"].dataType == T.StringType()
         # "true" was already auto-converted to the Python bool True before the
         # mixed-type fallback stringified the whole column, so it comes back
         # as Python's str(True) == "True", not the original JSON text "true".
-        values = {r["json.flag"] for r in result.collect()}
+        values = {r["flag"] for r in result.collect()}
         assert values == {"maybe", "True"}
 
     def test_int_and_float_mix_promotes_to_double_not_string(self):
@@ -5266,8 +5601,8 @@ class TestPySparkMixedTypeColumnFallback:
         spark_df = self.spark.createDataFrame(data)
         tools = json_tools_rs.JSONTools().flatten().auto_convert_types(True)
         result = tools.execute(spark_df)
-        assert result.schema["json.score"].dataType == T.DoubleType()
-        values = {r["json.score"] for r in result.collect()}
+        assert result.schema["score"].dataType == T.DoubleType()
+        values = {r["score"] for r in result.collect()}
         assert values == {5.0, 5.5}
 
     def test_uniform_bool_column_still_boolean(self):
@@ -5279,7 +5614,7 @@ class TestPySparkMixedTypeColumnFallback:
         spark_df = self.spark.createDataFrame(data)
         tools = json_tools_rs.JSONTools().flatten().auto_convert_types(True)
         result = tools.execute(spark_df)
-        assert result.schema["json.active"].dataType == T.BooleanType()
+        assert result.schema["active"].dataType == T.BooleanType()
 
 
 class TestPySparkMixedTypeListColumnFallback:
@@ -5334,8 +5669,8 @@ class TestPySparkMixedTypeListColumnFallback:
             .auto_convert_types(True)
         )
         result = tools.execute(spark_df)  # must not raise
-        assert result.schema["json.id"].dataType == T.ArrayType(T.StringType())
-        rows = {tuple(r["json.id"]) for r in result.collect()}
+        assert result.schema["id"].dataType == T.ArrayType(T.StringType())
+        rows = {tuple(r["id"]) for r in result.collect()}
         assert rows == {("100", "abc"), ("200",)}
 
     def test_collision_list_with_uniform_int_elements_stays_long_array(self):
@@ -5359,8 +5694,8 @@ class TestPySparkMixedTypeListColumnFallback:
             .auto_convert_types(True)
         )
         result = tools.execute(spark_df)
-        assert result.schema["json.id"].dataType == T.ArrayType(T.LongType())
-        rows = {tuple(r["json.id"]) for r in result.collect()}
+        assert result.schema["id"].dataType == T.ArrayType(T.LongType())
+        rows = {tuple(r["id"]) for r in result.collect()}
         assert rows == {(100, 200), (300,)}
 
 
@@ -5400,7 +5735,7 @@ class TestJsonStringColumnZeroCopyArrow:
         tools = json_tools_rs.JSONTools().flatten()
         df = self.pl.DataFrame({"id": [1], "blob": ['{"a": 1, "b": 2}'], "name": ["x"]})
         result = tools.execute(df)
-        assert result.columns == ["id", "blob.a", "blob.b", "name"]
+        assert result.columns == ["id", "a", "b", "name"]
 
     def test_pyarrow_column_order_preserved_when_target_not_last(self):
         if not self.has_pyarrow:
@@ -5408,7 +5743,7 @@ class TestJsonStringColumnZeroCopyArrow:
         tools = json_tools_rs.JSONTools().flatten()
         table = self.pa.table({"id": [1], "blob": ['{"a": 1, "b": 2}'], "name": ["x"]})
         result = tools.execute(table)
-        assert result.column_names == ["id", "blob.a", "blob.b", "name"]
+        assert result.column_names == ["id", "a", "b", "name"]
 
     def test_polars_multiple_target_columns(self):
         if not self.has_polars:
@@ -5418,9 +5753,63 @@ class TestJsonStringColumnZeroCopyArrow:
             {"id": [1], "blob1": ['{"a": 1}'], "blob2": ['{"b": 2}']}
         )
         result = tools.execute(df)
-        assert result.columns == ["id", "blob1.a", "blob2.b"]
-        assert result["blob1.a"].to_list() == [1]
-        assert result["blob2.b"].to_list() == [2]
+        assert result.columns == ["id", "a", "b"]
+        assert result["a"].to_list() == [1]
+        assert result["b"].to_list() == [2]
+
+    def test_polars_colliding_keys_across_columns_last_wins_by_default(self):
+        """Two embedded columns sharing a field name ("region") is a real
+        possibility once the column-name prefix is dropped -- confirmed
+        design decision (github.com/amaye15/JSON-Tools-rs/issues -- "don't
+        keep the original column name", 2026-07-31) is to reuse whatever
+        .handle_key_collision() is already set to, rather than invent a new
+        policy. Default (False): last value wins, same as any other genuine
+        duplicate key in a JSON object this engine already processes."""
+        if not self.has_polars:
+            pytest.skip("polars not installed")
+        tools = json_tools_rs.JSONTools().flatten()
+        df = self.pl.DataFrame(
+            {"id": [1], "blob1": ['{"region": "us"}'], "blob2": ['{"region": "eu"}']}
+        )
+        result = tools.execute(df)
+        assert result.columns == ["id", "region"]
+        assert result["region"].to_list() == ["eu"]
+
+    def test_polars_colliding_keys_across_columns_collected_when_enabled(self):
+        """Same collision as above, but with handle_key_collision(True): the
+        colliding values collect into an array, matching how this engine
+        already handles any other key collision."""
+        if not self.has_polars:
+            pytest.skip("polars not installed")
+        tools = json_tools_rs.JSONTools().flatten().handle_key_collision(True)
+        df = self.pl.DataFrame(
+            {"id": [1], "blob1": ['{"region": "us"}'], "blob2": ['{"region": "eu"}']}
+        )
+        result = tools.execute(df)
+        assert result.columns == ["id", "region"]
+        assert result["region"].to_list()[0] == ["us", "eu"]
+
+    def test_polars_nested_content_within_column_still_prefixes(self):
+        """Only the column-name level is un-nested; genuine nesting *within*
+        the embedded content still flattens normally."""
+        if not self.has_polars:
+            pytest.skip("polars not installed")
+        tools = json_tools_rs.JSONTools().flatten()
+        df = self.pl.DataFrame({"id": [1], "blob": ['{"aws": {"region": "us-east-1"}}']})
+        result = tools.execute(df)
+        assert result.columns == ["id", "aws.region"]
+        assert result["aws.region"].to_list() == ["us-east-1"]
+
+    def test_polars_array_valued_column_keeps_prefix(self):
+        """Array-valued content is deliberately excluded from un-nesting (a
+        bare numeric column name wouldn't be meaningful) -- stays prefixed
+        with an index, unchanged from before this feature."""
+        if not self.has_polars:
+            pytest.skip("polars not installed")
+        tools = json_tools_rs.JSONTools().flatten()
+        df = self.pl.DataFrame({"id": [1], "tags": ['["python", "rust"]']})
+        result = tools.execute(df)
+        assert result.columns == ["id", "tags.0", "tags.1"]
 
     def test_polars_multi_chunk_column_extracts_correctly(self):
         """A Series built from vstack (not rechunked) has multiple physical
@@ -5434,7 +5823,7 @@ class TestJsonStringColumnZeroCopyArrow:
         df = df1.vstack(df2)
         assert df["blob"].n_chunks() > 1  # sanity: genuinely multi-chunk
         result = tools.execute(df)
-        assert result["blob.a"].to_list() == [1, 2, 3, 4]
+        assert result["a"].to_list() == [1, 2, 3, 4]
 
     def test_polars_row_beyond_sample_window_falls_back_with_warning(self):
         """The column is detected from a 20-row sample; a non-JSON value
@@ -5450,7 +5839,7 @@ class TestJsonStringColumnZeroCopyArrow:
             result = tools.execute(df)
         row24 = result.filter(self.pl.col("id") == 24)
         assert row24["blob"][0] == "not json"
-        assert row24["blob.a"][0] is None
+        assert row24["a"][0] is None
 
     def test_polars_fallback_value_escaping_roundtrips(self):
         """A fallback (not-actually-JSON) value containing quotes/backslashes/
@@ -5475,8 +5864,8 @@ class TestJsonStringColumnZeroCopyArrow:
         result = tools.execute(df)
         row1 = result.filter(self.pl.col("id") == 1)
         row2 = result.filter(self.pl.col("id") == 2)
-        assert row1["blob.a"][0] == 1
-        assert row2["blob.a"][0] is None
+        assert row1["a"][0] == 1
+        assert row2["a"][0] is None
 
     def test_polars_no_target_columns_uses_plain_path(self):
         """No JSON-string columns present -- must produce the exact same
@@ -5529,16 +5918,16 @@ class TestJsonStringColumnSpliceScale:
         result = tools.execute(df)
 
         assert result.shape == (2, n_keys + 1)
-        assert result["json_col.field_0"].iloc[0] == "value_0"
-        assert result["json_col.field_1999"].iloc[1] == "value_1999"
+        assert result["field_0"].iloc[0] == "value_0"
+        assert result["field_1999"].iloc[1] == "value_1999"
         # Column order: id first (first-seen), then the expanded keys in the
         # embedded object's own original key order -- not alphabetized (the
         # exact risk `preserve_order`/the IndexMap-based redesign guards
         # against).
         cols = result.columns.tolist()
         assert cols[0] == "id"
-        assert cols[1] == "json_col.field_0"
-        assert cols[2] == "json_col.field_1"
+        assert cols[1] == "field_0"
+        assert cols[2] == "field_1"
 
     def test_large_embedded_array_expands_correctly(self):
         if not self.has_pandas:
@@ -5581,4 +5970,4 @@ class TestJsonStringColumnSpliceScale:
 
         assert result["name"].iloc[0] == "Alice"
         assert result["score"].iloc[0] == 3.14159265
-        assert result["json_col.field_1499"].iloc[0] == 1499
+        assert result["field_1499"].iloc[0] == 1499

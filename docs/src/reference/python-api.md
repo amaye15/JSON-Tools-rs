@@ -466,9 +466,13 @@ assert isinstance(results, list) and isinstance(results[0], dict)
 `normalise=True` bypasses the input-mirroring table above entirely: regardless of
 `input`'s shape, the result is always a wide DataFrame (one column per flattened
 key) -- a bare `str`/`dict` becomes a 1-row DataFrame. Requires `.flatten()` mode.
-See [DataFrame & Series Support](../guide/dataframe-support.md#normalise-always-get-a-wide-dataframe)
-for the full behavior (key union/null-fill order, target auto-resolution, the
-PySpark path) and examples.
+Reconstruction builds one real Arrow table internally with genuinely typed
+columns (including real `List<T>` for `handle_key_collision(True)`), then derives
+whichever `target` was requested from it -- see [DataFrame & Series
+Support](../guide/dataframe-support.md#normalise-always-get-a-wide-dataframe)'s
+"Arrow-native reconstruction" callout for the full behavior (key union/null-fill
+order, target auto-resolution, the pandas dtype change, the PySpark path) and
+examples.
 
 | Parameter | Type | Description |
 |-----------|------|--------------|
@@ -484,7 +488,9 @@ df = tools.execute([{"a": 1}, {"a": 2}], normalise=True, target="polars")
 
 **Additional raises (when `normalise=True` or `target` is set):** mode is not
 `.flatten()`; `target` is set while `normalise=False`; `target` names an unknown
-or uninstalled library; or (`target="pyspark"`) no active `SparkSession` is found.
+or uninstalled library; `target="pandas"`/`"pyspark"` without `pyarrow` installed
+(both require it internally now -- `target="polars"` does not); or
+(`target="pyspark"`) no active `SparkSession` is found.
 
 #### `.execute_to_output(input)`
 
@@ -583,7 +589,7 @@ JSON Tools RS natively supports Pandas, Polars, PyArrow, and PySpark DataFrames 
 
 ### Pandas DataFrame
 
-Each **row** is serialized to a JSON object (column names become keys) and processed as a whole document -- so flattening finds nested structure in columns holding actual nested Python objects (dicts/lists) directly. In `.flatten()` mode, columns holding pre-serialized JSON-text strings are also detected and expanded the same way (auto-detected, not requiring the column to already be dict/list-typed) -- see [Auto-Expanding JSON-String Columns](../guide/dataframe-support.md#auto-expanding-json-string-columns) for the detection rules. `.unflatten()`/`.normal()` mode leave a JSON-string column's value untouched, as a plain string scalar.
+Each **row** is serialized to a JSON object (column names become keys) and processed as a whole document -- so flattening finds nested structure in columns holding actual nested Python objects (dicts/lists) directly. In `.flatten()` mode, columns holding pre-serialized JSON-text strings are also detected and expanded the same way (auto-detected, not requiring the column to already be dict/list-typed) -- see [Auto-Expanding JSON-String Columns](../guide/dataframe-support.md#auto-expanding-json-string-columns) for the detection rules. The source column's own name is never kept as a prefix in the output -- only nesting *within* the column's own content is (see that same section). `.unflatten()`/`.normal()` mode leave a JSON-string column's value untouched, as a plain string scalar.
 
 ```python
 import pandas as pd
@@ -596,9 +602,10 @@ df = pd.DataFrame({"user": [
 
 tools = jt.JSONTools().flatten().separator(".")
 
-# Each row -> {"user": {"name": ..., "age": ...}} -> flattened
+# Each row -> {"user": {"name": ..., "age": ...}} -> flattened, "user" itself
+# dropped (it's the column name, not part of the payload)
 result_df = tools.execute(df)
-# Returns a DataFrame with flattened columns: "user.name", "user.age"
+# Returns a DataFrame with flattened columns: "name", "age"
 ```
 
 ### Pandas Series
@@ -625,7 +632,7 @@ df = pl.DataFrame({
 })
 
 result_df = jt.JSONTools().flatten().execute(df)
-# result_df columns: ["user.name", "user.age"]
+# result_df columns: ["name", "age"]
 ```
 
 ### Polars Series
@@ -651,7 +658,7 @@ table = pa.table({
 })
 
 result_table = jt.JSONTools().flatten().execute(table)
-# result_table columns: ["user.name", "user.age"]
+# result_table columns: ["name", "age"]
 ```
 
 ### PySpark DataFrame
@@ -676,8 +683,8 @@ print(type(result))  # <class 'pyspark.sql.dataframe.DataFrame'>
 > too, but its exact behavior through `toPandas()`'s non-Arrow fallback path (taken
 > automatically when pyarrow isn't installed) can differ from the Arrow-optimized
 > path in edge cases -- e.g. a `Row`-typed nested field has been observed losing its
-> field *names* on that fallback path (surfacing as positional `user.0`/`user.1`
-> instead of `user.name`/`user.age`), a PySpark `toPandas()` characteristic, not
+> field *names* on that fallback path (surfacing as positional `0`/`1`
+> instead of `name`/`age`), a PySpark `toPandas()` characteristic, not
 > something this library controls. Installing pyarrow avoids the fallback path
 > entirely and is recommended for any nested-struct-heavy workload.
 

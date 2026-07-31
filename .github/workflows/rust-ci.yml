@@ -301,7 +301,7 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
-      - name: Install maturin, pytest, pyspark, and pandas
+      - name: Install maturin, pytest, pyspark, pandas, and pyarrow
         # A dedicated job, not folded into the python-test matrix above: pyspark
         # needs a JDK, is slow to start a session, and historically lags newest
         # CPython support -- bolting it onto a 6-version matrix risks making the
@@ -311,10 +311,20 @@ jobs:
         # intermediate pandas DataFrame internally before handing it to Spark's
         # Arrow-optimized createDataFrame() bridge -- `pip install pyspark` alone
         # does not pull pandas in as a dependency.
+        # pyarrow became required here too as of the Arrow-native normalise
+        # rewrite (github.com/amaye15/JSON-Tools-rs/issues/35, 2026-07-31):
+        # reconstruction now always builds a real Arrow table in Rust first,
+        # and there is no pyarrow-free way to get that data into a pandas
+        # DataFrame (verified directly -- every route tried, including via a
+        # polars intermediary, needs pyarrow internally). This job used to
+        # deliberately exclude pyarrow to cover a genuinely pyarrow-free
+        # pyspark scenario (e.g. a Databricks environment without it) -- that
+        # coverage is now gone; `target="pyspark"` (and plain execute() on a
+        # PySpark DataFrame) require pyarrow unconditionally.
         run: |
           python -m venv .venv
           source .venv/bin/activate
-          pip install maturin pytest pyspark pandas
+          pip install maturin pytest pyspark pandas pyarrow
           maturin develop --features python
       - name: Run PySpark-dependent tests
         run: |

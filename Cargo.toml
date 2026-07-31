@@ -61,6 +61,12 @@ pyo3-arrow = { version = "0.19", optional = true }
 # own arrow-array requirement (59.x) to avoid a duplicate version in the
 # dependency tree.
 arrow-array = { version = "59", optional = true }
+# arrow-schema: needed directly for Schema/Field/DataType when building a
+# RecordBatch from scratch (the normalise=True/target= reconstruction engine,
+# 2026-07-31 -- see python.rs's `arrow_normalise` module doc comment). Version
+# kept in lockstep with arrow-array/pyo3-arrow's own requirement (59.x), same
+# reasoning as the arrow-array pin above.
+arrow-schema = { version = "59", optional = true }
 # Phantom pin (not used directly by any code here): pyo3-arrow's own
 # arrow-cast dependency unconditionally requests the "prettyprint" feature,
 # which pulls in comfy-table transitively regardless of anything in this
@@ -128,7 +134,7 @@ default = []  # Python bindings are opt-in via --features python
 # hand-tuned C `json` module benchmarked faster than a generic serde-based
 # PyObject<->Value traversal for the nested/batch data this library's own
 # flatten/unflatten operations are meant for.
-python = ["pyo3", "pyo3-arrow", "arrow-array", "comfy-table"]
+python = ["pyo3", "pyo3-arrow", "arrow-array", "arrow-schema", "comfy-table"]
 mimalloc = ["dep:mimalloc"]  # High-performance allocator (~14-28% measured, see src/lib.rs)
 
 test-assets-performance = []

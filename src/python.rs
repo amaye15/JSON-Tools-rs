@@ -23,9 +23,18 @@ use std::sync::Mutex;
 use indexmap::{IndexMap, IndexSet};
 
 #[cfg(feature = "python")]
-use arrow_array::{Array, LargeStringArray, StringArray, StringViewArray};
+use arrow_array::builder::{
+    ArrayBuilder, BooleanBuilder, Date32Builder, Float64Builder, Int64Builder, ListBuilder,
+    StringBuilder, TimestampMicrosecondBuilder,
+};
 #[cfg(feature = "python")]
-use pyo3_arrow::PyChunkedArray;
+use arrow_array::{Array, ArrayRef, LargeStringArray, RecordBatch, StringArray, StringViewArray};
+#[cfg(feature = "python")]
+use arrow_schema::{DataType, Field, Schema};
+#[cfg(feature = "python")]
+use pyo3_arrow::{PyChunkedArray, PyTable};
+#[cfg(feature = "python")]
+use std::sync::Arc;
 
 #[cfg(feature = "python")]
 use crate::flatten::write_json_escaped_key;
@@ -1158,6 +1167,89 @@ fn splice_zerocopy_columns(
     }
 
     Ok(out)
+}
+
+/// Un-nest every top-level *object*-valued field into top-level siblings,
+/// dropping the field's own key -- so a DataFrame column holding a nested
+/// object (whether a native dict/struct-typed column, serialized as-is by the
+/// DataFrame library's own writer, or a JSON-*string* column already decoded
+/// into real JSON by `splice_row`/`splice_zerocopy_columns` above) expands
+/// into bare inner-key columns instead of columns prefixed by the source
+/// column's own name (github.com/amaye15/JSON-Tools-rs/issues -- "don't keep
+/// the original column name" report, 2026-07-31). Every top-level key in a
+/// DataFrame row *is* a column name by construction (a DataFrame row has
+/// exactly one JSON level per column), so this never risks mistaking a
+/// document's own meaningful nesting for a column boundary -- that
+/// distinction only exists for genuinely top-level fields, which is exactly
+/// what this function -- and only this function -- looks at. Applied once,
+/// non-recursively: nesting *within* a column's own content (e.g. a column
+/// whose value is `{"a": {"b": 1}}`) still flattens normally from "a"
+/// onward -- only the column-name level itself is suppressed.
+///
+/// Array-valued fields are left nested under their original key (unchanged):
+/// an index-based prefix like `col.0` is still meaningful, whereas a bare
+/// `0`/`1`/... column name would not be, and risks collision across every
+/// array-valued column in the DataFrame.
+///
+/// Un-nesting two different columns whose contents share a field name (or a
+/// field name that collides with an existing top-level column) can produce
+/// genuine duplicate keys in the reconstructed row text -- deliberately left
+/// unresolved here. This function only ever copies bytes; the core flatten
+/// pass immediately following it already has its own, user-configurable
+/// collision handling (`handle_key_collision`) for exactly this situation,
+/// and reusing it (rather than inventing a second policy here) is the
+/// explicit, confirmed choice for this feature.
+///
+/// Returns `None` (row unchanged, zero-copy) when no top-level field is
+/// object-valued -- the common case for a DataFrame with no embedded/struct
+/// columns at all.
+#[cfg(feature = "python")]
+fn unnest_object_valued_columns(row: &str) -> Option<String> {
+    let fields: IndexMap<String, &serde_json::value::RawValue> = serde_json::from_str(row).ok()?;
+
+    if !fields
+        .values()
+        .any(|raw| raw.get().as_bytes().first() == Some(&b'{'))
+    {
+        return None;
+    }
+
+    let mut out = String::with_capacity(row.len() + 64);
+    out.push('{');
+    let mut first = true;
+    for (key, raw) in &fields {
+        let text = raw.get();
+        if text.as_bytes().first() == Some(&b'{') {
+            // RawValue already guarantees `text` is well-formed JSON, so a
+            // leading `{` guarantees this inner parse succeeds -- structurally
+            // impossible to fail here.
+            if let Ok(inner_fields) =
+                serde_json::from_str::<IndexMap<String, &serde_json::value::RawValue>>(text)
+            {
+                for (inner_key, inner_raw) in &inner_fields {
+                    if !first {
+                        out.push(',');
+                    }
+                    first = false;
+                    out.push('"');
+                    write_json_escaped_key(&mut out, inner_key);
+                    out.push_str("\":");
+                    out.push_str(inner_raw.get());
+                }
+            }
+        } else {
+            if !first {
+                out.push(',');
+            }
+            first = false;
+            out.push('"');
+            write_json_escaped_key(&mut out, key);
+            out.push_str("\":");
+            out.push_str(text);
+        }
+    }
+    out.push('}');
+    Some(out)
 }
 
 /// Convert a Python list of dicts to per-item JSON strings via Python's own
@@ -2349,7 +2441,14 @@ fn extract_normalise_json_strings(
                 // Unconditional here (no is_flatten_mode() check needed): the only
                 // caller, execute_normalise, already hard-requires flatten mode
                 // before reaching this function at all -- see its doc comment.
-                expand_json_string_columns(py, rows)?
+                let rows = expand_json_string_columns(py, rows)?;
+                // See `unnest_object_valued_columns`'s doc comment -- same
+                // column-name-prefix removal `execute_dataframe` applies,
+                // needed here too since normalise=True has its own separate
+                // DataFrame-to-json_strings path rather than sharing that one.
+                rows.into_iter()
+                    .map(|row| unnest_object_valued_columns(&row).unwrap_or(row))
+                    .collect()
             }
             DataStructureType::Series(series_type) => {
                 let list = series_to_list(json_input, series_type)?;
@@ -2471,6 +2570,7 @@ fn require_importable<'py>(
     py: Python<'py>,
     target: NormaliseTarget,
 ) -> PyResult<Bound<'py, PyModule>> {
+    require_pyarrow_for_normalise(py, target.name())?;
     let cell = match target {
         NormaliseTarget::Pandas => &PANDAS_MODULE,
         NormaliseTarget::Polars => &POLARS_MODULE,
@@ -2486,11 +2586,51 @@ fn require_importable<'py>(
     })
 }
 
-/// Auto-discover the active PySpark session for `target="pyspark"`. No `spark=`
-/// parameter is offered -- the caller is expected to already be inside a Spark
-/// driver/notebook with a session created (`SparkSession.builder.getOrCreate()`).
+/// `normalise=True`'s reconstruction is Arrow-native (github.com/amaye15/
+/// JSON-Tools-rs/issues/35): pandas and pyspark are derived from a genuine
+/// `pyarrow.Table` (`build_normalise_table`), so pyarrow itself is now
+/// required for those two targets, not just `target="pyarrow"` -- verified
+/// directly that there is no pyarrow-free way to get genuinely Arrow-built
+/// data into a pandas DataFrame (every route tried needs pyarrow internally,
+/// even via a polars intermediary); pyspark inherits the same requirement
+/// since its own reconstruction bridges through pandas. `target="pyarrow"`
+/// itself is exempted from calling this separately -- `require_importable`'s
+/// own subsequent pyarrow-specific check already covers it with a
+/// pyarrow-specific message, calling this too would just duplicate it.
+/// `target="polars"` is also exempted: verified directly (in a pyarrow-free
+/// environment) that `pl.from_arrow` accepts the raw pyo3-arrow
+/// capsule-protocol object without pyarrow at all, so `build_normalise_table`
+/// skips the pyarrow-materialization step entirely for that target --
+/// preserving the same zero-pyarrow-dependency guarantee `target="polars"`
+/// already had before this round.
+#[cfg(feature = "python")]
+fn require_pyarrow_for_normalise(py: Python<'_>, target_name: &str) -> PyResult<()> {
+    if target_name == "pyarrow" || target_name == "polars" {
+        return Ok(());
+    }
+    cached_import(py, &PYARROW_MODULE, "pyarrow").map_err(|_| {
+        JsonToolsError::new_err(format!(
+            "normalise(target=\"{target_name}\") requires the 'pyarrow' package to be \
+             installed -- normalise's reconstruction builds a real Arrow table \
+             internally, then derives {target_name} from it, regardless of which \
+             target was requested"
+        ))
+    })?;
+    Ok(())
+}
+
+/// Auto-discover the active PySpark session for `target="pyspark"` (and plain
+/// `execute()` on a PySpark DataFrame, which reuses this same reconstruction
+/// mechanism). No `spark=` parameter is offered -- the caller is expected to
+/// already be inside a Spark driver/notebook with a session created
+/// (`SparkSession.builder.getOrCreate()`).
 #[cfg(feature = "python")]
 fn require_active_spark_session(py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
+    // See `require_pyarrow_for_normalise`'s doc comment -- PySpark
+    // reconstruction bridges through pandas, which itself requires pyarrow
+    // under this engine, so check it explicitly with a clear message here
+    // too (this call site doesn't go through `require_importable`).
+    require_pyarrow_for_normalise(py, "pyspark")?;
     let pyspark_sql = cached_import(py, &PYSPARK_SQL_MODULE, "pyspark.sql").map_err(|_| {
         JsonToolsError::new_err(
             "normalise(target=\"pyspark\") requires the 'pyspark' package to be installed",
@@ -2508,401 +2648,787 @@ fn require_active_spark_session(py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
     Ok(active)
 }
 
-/// Flattened rows reshaped into columns for `normalise=True`, keyed by
-/// first-seen field order, with every column's length equal to the row count
-/// (a row missing a given key contributes `None` for it).
-///
-/// Values are left as plain `None` for missing cells -- pandas/polars/pyarrow
-/// all handle an all-`None` column on their own without crashing (`object`,
-/// `Null`, and `null`-typed respectively; confirmed empirically). PySpark is
-/// the one target that needs special handling, done entirely within
-/// `reconstruct_pyspark_normalise` via an explicit schema -- see its doc
-/// comment for why.
+// =============================================================================
+// Arrow-native normalise() reconstruction (github.com/amaye15/JSON-Tools-rs/
+// issues/35 -- "native Arrow output" / real column typing, 2026-07-31)
+// =============================================================================
+//
+// Replaces the previous `union_and_columnarize` + four `reconstruct_*_
+// normalise` functions' `Bound<PyAny>`-boxing approach with a single pass
+// that builds a real Arrow `RecordBatch` directly from `RawValue`-parsed
+// rows -- never boxing a scalar value into a Python object -- then derives
+// every requested target from that ONE canonical table via the cheapest
+// conversion path verified for each target (measured directly, see
+// CHANGELOG.md's v0.9.20 entry for the numbers this design is based on):
+//   - pyarrow: `PyTable::into_pyarrow(py)` -- genuinely zero-copy.
+//   - pandas: `.to_pandas(types_mapper=pd.ArrowDtype)` -- genuinely
+//     zero-copy, but changes the output dtype from plain numpy dtypes to
+//     Arrow-backed ones (e.g. `int64` -> `int64[pyarrow]`) -- an intentional,
+//     confirmed choice, not an oversight.
+//   - polars: `pl.from_arrow(table, rechunk=False)` -- near-zero-copy
+//     (verified: far cheaper than a real copy, but not a pure O(1) view).
+//   - pyspark: `.to_pandas()` (plain, NOT ArrowDtype -- see
+//     `reconstruct_pyspark_normalise`'s doc comment for why) feeding the
+//     existing, unchanged `SparkSession.createDataFrame(df, schema)` bridge.
+//     Not zero-copy -- architecturally impossible across the JVM process
+//     boundary -- but still avoids all per-value PyObject boxing.
+//
+// List-valued columns (a genuinely list-valued JSON leaf, or
+// `handle_key_collision(True)`'s collision arrays) build as real Arrow
+// `List<T>` columns, not stringified -- verified directly (an isolated
+// scratch-crate probe) that pyarrow/polars/pandas all consume `List<T>`
+// correctly. A column that's genuinely mixed-scalar-kind across rows with no
+// list involved still stringifies: Arrow's `Union` type, the only real
+// alternative, was tested directly and rejected outright by both polars
+// (`ComputeError: cannot create series from Union(...)`) and pandas
+// (`NotImplementedError`/`ArrowNotImplementedError`) -- a confirmed dead end
+// for this ecosystem, not a laziness shortcut.
+
+/// Scalar Arrow type a column (or a list column's element type) resolves to.
+/// `Date32`/`TimestampUtcMicros` are scalar-column-only (never a list
+/// element's type -- see `ColumnPlan`'s doc comment) and only ever chosen
+/// when the caller's `.convert_dates()`/`.auto_convert_types()` config is
+/// enabled (see `raw_scalar_kind`'s `dates_enabled` parameter) -- this
+/// engine never independently pattern-matches a plain string into a date
+/// against the user's own wishes, only promotes what the core engine's own
+/// existing, opt-in date recognition already normalized.
 #[cfg(feature = "python")]
-struct NormaliseColumns<'py> {
-    /// Column name -> per-row values, in first-seen key order.
-    columns: IndexMap<String, Vec<Bound<'py, PyAny>>>,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ScalarKind {
+    Bool,
+    Int64,
+    Float64,
+    Date32,
+    TimestampUtcMicros,
+    Utf8,
 }
 
-/// Classify a leaf value into the three JSON-adjacent "kinds" this module's
-/// column-type-consistency checks care about (github.com/amaye15/
-/// JSON-Tools-rs/issues/32, #33): bool, numeric (int or float -- pandas
-/// promotes a mix of those to a uniform `float64` column on its own, so
-/// they're deliberately not distinguished here), and str. `None` and
-/// anything else (e.g. a stray nested list/dict) classify as "none of the
-/// three", which never contributes to a mixed-kind count -- consistent with
-/// treating null and unclassifiable leaves as compatible with any column.
+/// A column's overall shape: either every row's value is a scalar, or at
+/// least one row's value is a JSON array (in which case every other non-null
+/// cell is treated as a single-element list of that same element kind --
+/// same "once any row is list-valued, wrap every other cell too" rule
+/// `union_and_columnarize` used, ported unchanged). List columns never
+/// resolve to `Date32`/`TimestampUtcMicros` -- date detection only runs at
+/// the top level (see `raw_scalar_kind`); a date-shaped string inside a
+/// `handle_key_collision(True)` array is deliberately left as plain text,
+/// a narrow, explicit scope boundary rather than doubling the number of
+/// `ColumnBuilder::List*` variants for a very rare combination.
 #[cfg(feature = "python")]
-fn classify_scalar_kind(v: &Bound<'_, PyAny>) -> (bool, bool, bool) {
-    if v.is_instance_of::<pyo3::types::PyBool>() {
-        (true, false, false)
-    } else if v.is_instance_of::<pyo3::types::PyInt>() || v.is_instance_of::<pyo3::types::PyFloat>()
-    {
-        (false, true, false)
-    } else if v.is_instance_of::<PyString>() {
-        (false, false, true)
-    } else {
-        (false, false, false)
+#[derive(Debug, Clone, Copy)]
+enum ColumnPlan {
+    Scalar(ScalarKind),
+    List(ScalarKind),
+}
+
+/// Per-column (or per-list-column-element) kind flags accumulated during
+/// Pass 1 -- mirrors the old `classify_scalar_kind`'s (bool, numeric, str)
+/// triple, split into (bool, int, float, date, datetime) since this engine
+/// -- unlike the `PyAny`-based original, which gets int/float distinction
+/// for free from Python's own object types -- must decide the exact Arrow
+/// type itself to pick the right builder.
+#[cfg(feature = "python")]
+#[derive(Default, Clone, Copy)]
+struct KindFlags {
+    bool_: bool,
+    int_: bool,
+    float_: bool,
+    str_: bool,
+    date_: bool,
+    datetime_: bool,
+}
+
+#[cfg(feature = "python")]
+impl KindFlags {
+    fn merge(&mut self, other: KindFlags) {
+        self.bool_ |= other.bool_;
+        self.int_ |= other.int_;
+        self.float_ |= other.float_;
+        self.str_ |= other.str_;
+        self.date_ |= other.date_;
+        self.datetime_ |= other.datetime_;
+    }
+
+    /// Resolve to a single Arrow scalar type, matching `classify_scalar_kind`'s
+    /// established priority: any 2+ of {bool, numeric, str, temporal} present ->
+    /// stringify fallback (Utf8); numeric alone -> Float64 if any float seen
+    /// (including an integer too large for i64, downgraded here rather than
+    /// erroring -- an accepted precision tradeoff for a value this large) else
+    /// Int64; temporal alone -> TimestampUtcMicros if any genuine datetime seen
+    /// (a bare date promotes to midnight UTC, the same "promote the narrower
+    /// kind" pattern int->float already uses) else Date32 if only bare dates;
+    /// str alone, or nothing seen at all (all-null column) -> Utf8, matching the
+    /// old all-None default.
+    fn resolve(&self) -> ScalarKind {
+        let numeric = self.int_ || self.float_;
+        let temporal = self.date_ || self.datetime_;
+        let kinds_present = [self.bool_, numeric, self.str_, temporal]
+            .into_iter()
+            .filter(|p| *p)
+            .count();
+        if kinds_present > 1 {
+            ScalarKind::Utf8
+        } else if self.bool_ {
+            ScalarKind::Bool
+        } else if self.float_ {
+            ScalarKind::Float64
+        } else if self.int_ {
+            ScalarKind::Int64
+        } else if self.datetime_ {
+            ScalarKind::TimestampUtcMicros
+        } else if self.date_ {
+            ScalarKind::Date32
+        } else {
+            ScalarKind::Utf8
+        }
     }
 }
 
-/// Parse each processed (flattened) JSON string into a row, union every row's
-/// keys in first-seen order, and null-fill any row missing a given key -- shared
-/// by all four `normalise` targets so their union/null-fill behavior is
-/// *provably* consistent by construction, rather than relying on three separate
-/// third-party constructors' own implicit (and independently version-dependent)
-/// dict-list union behavior.
+/// Classify a single JSON scalar leaf's raw text. Returns `None` for `null`
+/// (nulls never contribute to kind flags -- consistent with treating null as
+/// compatible with any column, same as the old Python-`None` handling).
+/// Callers only ever hand this a genuine scalar or a literal `{}` -- flatten
+/// mode's own recursive expansion means a non-empty object/array can never
+/// survive as a leaf (verified directly against `flatten.rs`'s walkers), and
+/// a non-empty `[...]` is filtered out before this is reached (routed to the
+/// list-column path instead). A literal **empty object** `{}` is the one
+/// object-shaped leaf that *can* still reach here (when
+/// `remove_empty_objects(False)` is set) -- classified as `str_` and
+/// stringified to its own literal text `"{}"`, the same "unusual value ->
+/// stringify" treatment already applied to any other kind this engine can't
+/// give a cleaner Arrow type. Confirmed via direct reproduction that without
+/// this case, `{}`'s `{` first byte fell through to the number-parsing
+/// branch below and panicked on the inevitable parse failure.
+/// `dates_enabled` gates date/datetime detection on the caller's own
+/// `.convert_dates()`/`.auto_convert_types()` setting (checked once by
+/// `build_normalise_table`, not re-derived per cell) -- this engine never
+/// independently pattern-matches an ordinary string into a date; it only
+/// promotes what the core flatten engine's own opt-in date recognition
+/// already normalized into this crate's fixed ISO8601 shape (`convert.rs`'s
+/// `try_parse_and_normalize_iso8601`: a bare `YYYY-MM-DD` date, or a
+/// `Z`/offset-suffixed RFC3339 datetime -- always normalized to UTC when
+/// recognized). When disabled, a date-shaped string is just an ordinary
+/// string, same as before this feature existed.
 #[cfg(feature = "python")]
-fn union_and_columnarize<'py>(
+fn raw_scalar_kind(text: &str, dates_enabled: bool) -> Option<KindFlags> {
+    match *text.as_bytes().first()? {
+        b'n' => None, // null
+        b't' | b'f' => Some(KindFlags {
+            bool_: true,
+            ..Default::default()
+        }),
+        b'"' => {
+            // Cheap quote-stripping, not full JSON unescaping: this crate's own
+            // normalized date/datetime text never contains characters that need
+            // escaping (only digits/`-`/`:`/`T`/`.`/`Z`/offset signs), so a plain
+            // slice is safe and avoids an allocation for the common case where
+            // dates_enabled is true but this particular string isn't a date --
+            // an escaped string that coincidentally looked date-shaped after
+            // naive slicing would just fail the strict chrono parse below and
+            // fall through to the ordinary str_ classification, harmlessly.
+            if dates_enabled && text.len() >= 2 {
+                let inner = &text[1..text.len() - 1];
+                match parse_normalized_date_or_datetime(inner) {
+                    Some(DateOrDateTime::Date(_)) => {
+                        return Some(KindFlags {
+                            date_: true,
+                            ..Default::default()
+                        })
+                    }
+                    Some(DateOrDateTime::DateTime(_)) => {
+                        return Some(KindFlags {
+                            datetime_: true,
+                            ..Default::default()
+                        })
+                    }
+                    None => {}
+                }
+            }
+            Some(KindFlags {
+                str_: true,
+                ..Default::default()
+            })
+        }
+        b'{' => Some(KindFlags {
+            str_: true,
+            ..Default::default()
+        }),
+        _ => {
+            // Number: `.`/`e`/`E` or an integer too large for i64 both need
+            // Float64; everything else fits Int64.
+            let is_float_syntax = text.bytes().any(|b| matches!(b, b'.' | b'e' | b'E'));
+            if !is_float_syntax && text.parse::<i64>().is_ok() {
+                Some(KindFlags {
+                    int_: true,
+                    ..Default::default()
+                })
+            } else {
+                Some(KindFlags {
+                    float_: true,
+                    ..Default::default()
+                })
+            }
+        }
+    }
+}
+
+/// A successfully-recognized date or datetime, from `parse_normalized_date_or_datetime`.
+#[cfg(feature = "python")]
+enum DateOrDateTime {
+    Date(chrono::NaiveDate),
+    DateTime(chrono::DateTime<chrono::Utc>),
+}
+
+/// Attempt to parse `inner` (already quote-stripped) as this engine's own
+/// normalized date/datetime shape -- a real `chrono` parse (RFC3339 for
+/// datetimes, `%Y-%m-%d` for bare dates), not a regex/length heuristic, so a
+/// malformed or merely date-*looking* string never false-positives.
+#[cfg(feature = "python")]
+fn parse_normalized_date_or_datetime(inner: &str) -> Option<DateOrDateTime> {
+    if let Ok(date) = chrono::NaiveDate::parse_from_str(inner, "%Y-%m-%d") {
+        return Some(DateOrDateTime::Date(date));
+    }
+    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(inner) {
+        return Some(DateOrDateTime::DateTime(dt.with_timezone(&chrono::Utc)));
+    }
+    None
+}
+
+/// Days since the Unix epoch, for building a `Date32Builder` value.
+#[cfg(feature = "python")]
+fn date32_days(date: chrono::NaiveDate) -> i32 {
+    date.signed_duration_since(chrono::NaiveDate::from_ymd_opt(1970, 1, 1).expect("valid date"))
+        .num_days() as i32
+}
+
+/// Python `str()`-equivalent text for a raw JSON scalar leaf -- used only for
+/// the mixed-kind stringify fallback, so behavior matches what
+/// `union_and_columnarize`'s old `cell.str()?` already produced: a JSON
+/// string's own (unescaped) content, `True`/`False` (capitalized, matching
+/// Python bool's `__str__`) for booleans, and a number's own JSON text
+/// as-is (Python's `str(int)`/`str(float)` and JSON's own number formatting
+/// agree for the vast majority of real values; an exact byte-for-byte match
+/// of Python's float-repr algorithm is not chased here -- this is already a
+/// best-effort fallback for a column too heterogeneous to type cleanly, not
+/// a precision-critical path).
+#[cfg(feature = "python")]
+fn stringify_raw(text: &str) -> std::borrow::Cow<'_, str> {
+    match text.as_bytes().first() {
+        Some(b'"') => match serde_json::from_str::<String>(text) {
+            Ok(s) => std::borrow::Cow::Owned(s),
+            Err(_) => std::borrow::Cow::Borrowed(text),
+        },
+        Some(b't') => std::borrow::Cow::Borrowed("True"),
+        Some(b'f') => std::borrow::Cow::Borrowed("False"),
+        _ => std::borrow::Cow::Borrowed(text),
+    }
+}
+
+/// One column's Arrow array under construction. A `List*` variant's inner
+/// builder holds every list cell's elements back-to-back; `append` calls on
+/// the outer `ListBuilder` mark each cell's boundary (`append(true)` for a
+/// present -- possibly empty -- list, `append(false)` for a null cell).
+#[cfg(feature = "python")]
+enum ColumnBuilder {
+    Bool(BooleanBuilder),
+    Int64(Int64Builder),
+    Float64(Float64Builder),
+    Date32(Date32Builder),
+    TimestampUtcMicros(TimestampMicrosecondBuilder),
+    Utf8(StringBuilder),
+    ListBool(ListBuilder<BooleanBuilder>),
+    ListInt64(ListBuilder<Int64Builder>),
+    ListFloat64(ListBuilder<Float64Builder>),
+    ListUtf8(ListBuilder<StringBuilder>),
+}
+
+#[cfg(feature = "python")]
+impl ColumnBuilder {
+    fn new(plan: ColumnPlan, capacity: usize) -> Self {
+        match plan {
+            ColumnPlan::Scalar(ScalarKind::Bool) => {
+                ColumnBuilder::Bool(BooleanBuilder::with_capacity(capacity))
+            }
+            ColumnPlan::Scalar(ScalarKind::Int64) => {
+                ColumnBuilder::Int64(Int64Builder::with_capacity(capacity))
+            }
+            ColumnPlan::Scalar(ScalarKind::Float64) => {
+                ColumnBuilder::Float64(Float64Builder::with_capacity(capacity))
+            }
+            ColumnPlan::Scalar(ScalarKind::Date32) => {
+                ColumnBuilder::Date32(Date32Builder::with_capacity(capacity))
+            }
+            ColumnPlan::Scalar(ScalarKind::TimestampUtcMicros) => {
+                ColumnBuilder::TimestampUtcMicros(
+                    TimestampMicrosecondBuilder::with_capacity(capacity).with_timezone("UTC"),
+                )
+            }
+            ColumnPlan::Scalar(ScalarKind::Utf8) => {
+                ColumnBuilder::Utf8(StringBuilder::with_capacity(capacity, capacity * 8))
+            }
+            ColumnPlan::List(ScalarKind::Bool) => {
+                ColumnBuilder::ListBool(ListBuilder::with_capacity(BooleanBuilder::new(), capacity))
+            }
+            ColumnPlan::List(ScalarKind::Int64) => {
+                ColumnBuilder::ListInt64(ListBuilder::with_capacity(Int64Builder::new(), capacity))
+            }
+            ColumnPlan::List(ScalarKind::Float64) => ColumnBuilder::ListFloat64(
+                ListBuilder::with_capacity(Float64Builder::new(), capacity),
+            ),
+            ColumnPlan::List(ScalarKind::Utf8) => {
+                ColumnBuilder::ListUtf8(ListBuilder::with_capacity(StringBuilder::new(), capacity))
+            }
+            // Date32/TimestampUtcMicros are never chosen for a List plan --
+            // see ColumnPlan's doc comment (date detection is scalar-only).
+            ColumnPlan::List(ScalarKind::Date32 | ScalarKind::TimestampUtcMicros) => {
+                unreachable!("date/datetime kinds are never resolved for a list column")
+            }
+        }
+    }
+
+    fn arrow_field(&self, name: &str) -> Field {
+        fn item_field(kind_dt: DataType) -> Arc<Field> {
+            Arc::new(Field::new("item", kind_dt, true))
+        }
+        let dt = match self {
+            ColumnBuilder::Bool(_) => DataType::Boolean,
+            ColumnBuilder::Int64(_) => DataType::Int64,
+            ColumnBuilder::Float64(_) => DataType::Float64,
+            ColumnBuilder::Date32(_) => DataType::Date32,
+            ColumnBuilder::TimestampUtcMicros(_) => {
+                DataType::Timestamp(arrow_schema::TimeUnit::Microsecond, Some("UTC".into()))
+            }
+            ColumnBuilder::Utf8(_) => DataType::Utf8,
+            ColumnBuilder::ListBool(_) => DataType::List(item_field(DataType::Boolean)),
+            ColumnBuilder::ListInt64(_) => DataType::List(item_field(DataType::Int64)),
+            ColumnBuilder::ListFloat64(_) => DataType::List(item_field(DataType::Float64)),
+            ColumnBuilder::ListUtf8(_) => DataType::List(item_field(DataType::Utf8)),
+        };
+        Field::new(name, dt, true)
+    }
+
+    /// Append one row's raw JSON value. `raw = None` means the key was
+    /// entirely absent from this row (union null-fill); `Some(text)` where
+    /// `text` is JSON `null` means the key was present but explicitly null --
+    /// both append a null cell. Every `.parse()`/text-shape assumption below
+    /// is guaranteed to hold by Pass 1's own classification (this column's
+    /// `ColumnPlan` was derived from scanning these exact same values) --
+    /// `.expect()` on failure indicates a bug in that classification, not a
+    /// possible-in-practice user-facing error, and PyO3 converts an
+    /// `#[pymethod]`-body panic into a Python exception rather than crashing.
+    fn append_row(&mut self, raw: Option<&serde_json::value::RawValue>) {
+        let text = raw.map(serde_json::value::RawValue::get);
+        let is_null = text.is_none() || text.map(|t| t.as_bytes()[0]) == Some(b'n');
+        match self {
+            ColumnBuilder::Bool(b) => {
+                if is_null {
+                    b.append_null();
+                } else {
+                    b.append_value(text.expect("checked non-null above") == "true");
+                }
+            }
+            ColumnBuilder::Int64(b) => {
+                if is_null {
+                    b.append_null();
+                } else {
+                    let t = text.expect("checked non-null above");
+                    b.append_value(
+                        t.parse::<i64>()
+                            .expect("Pass 1 classified this column Int64"),
+                    );
+                }
+            }
+            ColumnBuilder::Float64(b) => {
+                if is_null {
+                    b.append_null();
+                } else {
+                    let t = text.expect("checked non-null above");
+                    b.append_value(
+                        t.parse::<f64>()
+                            .expect("Pass 1 classified this column Float64"),
+                    );
+                }
+            }
+            ColumnBuilder::Date32(b) => {
+                if is_null {
+                    b.append_null();
+                } else {
+                    let t = text.expect("checked non-null above");
+                    let inner = &t[1..t.len() - 1];
+                    let parsed = parse_normalized_date_or_datetime(inner)
+                        .expect("Pass 1 classified this column Date32");
+                    let DateOrDateTime::Date(date) = parsed else {
+                        unreachable!("Date32 column never sees a genuine datetime value")
+                    };
+                    b.append_value(date32_days(date));
+                }
+            }
+            ColumnBuilder::TimestampUtcMicros(b) => {
+                if is_null {
+                    b.append_null();
+                } else {
+                    let t = text.expect("checked non-null above");
+                    let inner = &t[1..t.len() - 1];
+                    let parsed = parse_normalized_date_or_datetime(inner)
+                        .expect("Pass 1 classified this column TimestampUtcMicros");
+                    let micros = match parsed {
+                        DateOrDateTime::Date(d) => d
+                            .and_hms_opt(0, 0, 0)
+                            .expect("valid time")
+                            .and_utc()
+                            .timestamp_micros(),
+                        DateOrDateTime::DateTime(dt) => dt.timestamp_micros(),
+                    };
+                    b.append_value(micros);
+                }
+            }
+            ColumnBuilder::Utf8(b) => {
+                if is_null {
+                    b.append_null();
+                } else {
+                    b.append_value(stringify_raw(text.expect("checked non-null above")));
+                }
+            }
+            ColumnBuilder::ListBool(b) => append_list_row(b, text, |inner, t| match t {
+                Some(t) => inner.append_value(t == "true"),
+                None => inner.append_null(),
+            }),
+            ColumnBuilder::ListInt64(b) => append_list_row(b, text, |inner, t| match t {
+                Some(t) => inner.append_value(
+                    t.parse::<i64>()
+                        .expect("Pass 1 classified this column's list elements Int64"),
+                ),
+                None => inner.append_null(),
+            }),
+            ColumnBuilder::ListFloat64(b) => append_list_row(b, text, |inner, t| match t {
+                Some(t) => inner.append_value(
+                    t.parse::<f64>()
+                        .expect("Pass 1 classified this column's list elements Float64"),
+                ),
+                None => inner.append_null(),
+            }),
+            ColumnBuilder::ListUtf8(b) => append_list_row(b, text, |inner, t| match t {
+                Some(t) => inner.append_value(stringify_raw(t)),
+                None => inner.append_null(),
+            }),
+        }
+    }
+
+    fn finish(self) -> ArrayRef {
+        match self {
+            ColumnBuilder::Bool(mut b) => Arc::new(b.finish()),
+            ColumnBuilder::Int64(mut b) => Arc::new(b.finish()),
+            ColumnBuilder::Float64(mut b) => Arc::new(b.finish()),
+            ColumnBuilder::Date32(mut b) => Arc::new(b.finish()),
+            ColumnBuilder::TimestampUtcMicros(mut b) => Arc::new(b.finish()),
+            ColumnBuilder::Utf8(mut b) => Arc::new(b.finish()),
+            ColumnBuilder::ListBool(mut b) => Arc::new(b.finish()),
+            ColumnBuilder::ListInt64(mut b) => Arc::new(b.finish()),
+            ColumnBuilder::ListFloat64(mut b) => Arc::new(b.finish()),
+            ColumnBuilder::ListUtf8(mut b) => Arc::new(b.finish()),
+        }
+    }
+}
+
+/// Shared per-row append logic for every `List*` `ColumnBuilder` variant --
+/// `append_elem` does the one type-specific thing (parse this element's text
+/// into the inner builder's own value type, or append a null when given
+/// `None`); everything else (null cell vs. present list, iterating a genuine
+/// JSON array vs. wrapping a lone scalar into a single-element list --
+/// `union_and_columnarize`'s existing rule, ported unchanged) is identical
+/// across all four element types.
+#[cfg(feature = "python")]
+fn append_list_row<T: ArrayBuilder>(
+    list_builder: &mut ListBuilder<T>,
+    text: Option<&str>,
+    mut append_elem: impl FnMut(&mut T, Option<&str>),
+) {
+    let Some(text) = text else {
+        list_builder.append(false);
+        return;
+    };
+    match text.as_bytes().first() {
+        Some(b'n') => list_builder.append(false), // null
+        Some(b'[') => {
+            let elems: Vec<&serde_json::value::RawValue> =
+                serde_json::from_str(text).unwrap_or_default();
+            for elem in elems {
+                let elem_text = elem.get();
+                if elem_text.as_bytes().first() == Some(&b'n') {
+                    append_elem(list_builder.values(), None);
+                } else {
+                    append_elem(list_builder.values(), Some(elem_text));
+                }
+            }
+            list_builder.append(true);
+        }
+        _ => {
+            // A scalar cell in a list-typed column: wrap into a single-element
+            // list, same as `union_and_columnarize`'s existing behavior.
+            append_elem(list_builder.values(), Some(text));
+            list_builder.append(true);
+        }
+    }
+}
+
+/// Parse each processed (flattened) JSON string into `RawValue`-backed rows,
+/// union every row's keys in first-seen order, decide each column's real
+/// Arrow type, and build the corresponding `RecordBatch` -- all without ever
+/// boxing a scalar value into a Python object. Returns the built table and
+/// the Rust-native `Schema` it was built from (so `reconstruct_pyspark_
+/// normalise` can derive its PySpark schema directly from known Arrow
+/// `DataType`s instead of re-parsing a string type representation back out
+/// of Python).
+///
+/// `via_pyarrow` controls how the table crosses into Python: `true` calls
+/// `PyTable::into_pyarrow` to materialize a genuine `pyarrow.Table`
+/// (verified zero-copy) -- required for pandas/pyspark, which have no
+/// pyarrow-free route to real Arrow-built data (verified directly: every
+/// path tried, including via a polars intermediary, needs pyarrow
+/// internally). `false` returns the raw pyo3-arrow capsule-protocol object
+/// via `into_pyobject` instead -- polars' own `from_arrow` accepts this
+/// directly (verified directly, in a pyarrow-free environment), so `target=
+/// "polars"` keeps working exactly as before this round: no new pyarrow
+/// dependency.
+///
+/// `dates_enabled` (the caller's own `.convert_dates()`/`.auto_convert_types()`
+/// setting -- see `raw_scalar_kind`'s doc comment) gates whether a
+/// date/datetime-shaped string column resolves to a real `Date32`/
+/// `TimestampUtcMicros` Arrow column instead of `Utf8`. Only applied to
+/// top-level scalar columns, never to list-column elements (`ColumnPlan`'s
+/// doc comment) -- list elements always pass `false` regardless.
+#[cfg(feature = "python")]
+fn build_normalise_table<'py>(
     py: Python<'py>,
-    processed: Vec<String>,
-) -> PyResult<NormaliseColumns<'py>> {
+    processed: &[String],
+    via_pyarrow: bool,
+    dates_enabled: bool,
+) -> PyResult<(Bound<'py, PyAny>, Arc<Schema>)> {
     let n_rows = processed.len();
-    let mut rows: Vec<Bound<'py, PyDict>> = Vec::with_capacity(n_rows);
+    let mut rows: Vec<IndexMap<String, &serde_json::value::RawValue>> = Vec::with_capacity(n_rows);
     let mut key_order: IndexSet<String> = IndexSet::new();
 
     for (idx, json_str) in processed.iter().enumerate() {
-        let value = py_loads(py, json_str).map_err(|e| {
-            JsonToolsError::new_err(format!("Failed to parse flattened row {idx}: {e}"))
-        })?;
-        let dict = value
-            .cast::<PyDict>()
-            .map_err(|_| {
+        let fields: IndexMap<String, &serde_json::value::RawValue> = serde_json::from_str(json_str)
+            .map_err(|e| {
                 JsonToolsError::new_err(format!(
                     "normalise=True requires every flattened row to be a JSON object; \
-                     row {idx} produced a different type instead"
+                     row {idx} failed to parse as one: {e}"
                 ))
-            })?
-            .clone();
-        for key in dict.keys() {
-            key_order.insert(key.extract::<String>()?);
+            })?;
+        for key in fields.keys() {
+            key_order.insert(key.clone());
         }
-        rows.push(dict);
+        rows.push(fields);
     }
 
     let n_keys = key_order.len();
 
-    // Scatter each row's own (key, value) pairs directly into pre-sized
-    // per-column slots via a single native `dict` iteration per row, instead
-    // of the previous `for key in &key_order { for row in &rows {
-    // row.get_item(key)? } }` -- an O(n_rows * n_keys) `PyDict.get_item` hash
-    // lookup (~3 million individual PyO3 dict lookups for issue #31's own
-    // reported 754-row/4,042-column case). A single pass over each row's own
-    // entries costs O(total key/value pairs actually present) instead: a
-    // native `dict.items()` walk (no hashing, just an internal table scan)
-    // plus one Rust-side `IndexSet::get_index_of` lookup per entry
-    // (already-hashed via Rust's own hasher, not a Python C-API call).
-    // Strictly cheaper in the dense case and asymptotically better in the
-    // sparse/heterogeneous case issues #32/#33 are actually about (rows with
-    // different key subsets after a `key_replacement` collision).
-    let mut column_slots: Vec<Vec<Option<Bound<'py, PyAny>>>> =
+    if n_keys == 0 {
+        // No columns at all (zero rows, or every row was `{}`) -- a genuinely
+        // empty table. Arrow's own RecordBatch can't represent "N rows, 0
+        // columns" (row count is derived from column lengths), the same
+        // degenerate case the old PySpark-specific code special-cased.
+        let schema = Arc::new(Schema::empty());
+        let batch = RecordBatch::new_empty(schema.clone());
+        let table = PyTable::try_new(vec![batch], schema.clone())
+            .map_err(|e| JsonToolsError::new_err(format!("Failed to build empty table: {e}")))?;
+        return Ok((table_to_python(table, py, via_pyarrow)?, schema));
+    }
+
+    // Pass 1a: scatter each row's own entries into pre-sized per-column slots
+    // (same single-native-iteration-per-row idiom `union_and_columnarize`
+    // established -- O(total fields present), not O(n_rows * n_keys)), and
+    // detect which columns are ever list-valued.
+    let mut column_slots: Vec<Vec<Option<&serde_json::value::RawValue>>> =
         (0..n_keys).map(|_| vec![None; n_rows]).collect();
     let mut any_list_per_col: Vec<bool> = vec![false; n_keys];
 
     for (row_idx, row) in rows.iter().enumerate() {
-        for (key, value) in row.iter() {
-            let key_str: &str = key.extract()?;
-            let Some(col_idx) = key_order.get_index_of(key_str) else {
+        for (key, raw) in row {
+            let Some(col_idx) = key_order.get_index_of(key.as_str()) else {
                 continue; // unreachable: key_order was built from these same rows above
             };
-            if value.is_instance_of::<PyList>() {
+            if raw.get().as_bytes().first() == Some(&b'[') {
                 any_list_per_col[col_idx] = true;
             }
-            column_slots[col_idx][row_idx] = Some(value);
+            column_slots[col_idx][row_idx] = Some(*raw);
         }
     }
 
-    let mut columns: IndexMap<String, Vec<Bound<'py, PyAny>>> = IndexMap::with_capacity(n_keys);
-
-    for (col_idx, key) in key_order.iter().enumerate() {
-        let mut col: Vec<Bound<'py, PyAny>> = column_slots[col_idx]
-            .drain(..)
-            .map(|maybe_v| maybe_v.unwrap_or_else(|| py.None().into_bound(py)))
-            .collect();
-        let any_list = any_list_per_col[col_idx];
-        // `handle_key_collision(True)` produces a list-valued cell only for rows
-        // where a collision actually occurred that row; other rows for the same
-        // key stay scalar. A column mixing list and scalar values is rejected by
-        // pyarrow (`ArrowInvalid: cannot mix list and non-list, non-null values`)
-        // and polars (`TypeError: unexpected value while building Series of type
-        // List(...)`) -- confirmed empirically, not hypothetical. Once any row
-        // makes a column list-valued, wrap every other non-null cell in that
-        // column into a single-element list too, so the column is uniformly
-        // list-typed across all four targets instead of failing on two of them.
-        if any_list {
-            for cell in col.iter_mut() {
-                if !cell.is_none() && !cell.is_instance_of::<PyList>() {
-                    *cell = PyList::new(py, [cell.clone()])?.into_any();
-                }
-            }
-            // Shape uniformity (list vs. scalar) isn't the whole story
-            // (github.com/amaye15/JSON-Tools-rs/issues/33): a collision list
-            // is built from each colliding source key's own independently
-            // `auto_convert_types`-converted value, so a *single* row's
-            // collision can already mix kinds (e.g. `[100, "abc"]`), and a
-            // scalar just wrapped above carries whatever kind it already had.
-            // `infer_spark_type` declares one element type for the whole
-            // column; if the actual elements disagree, Arrow rejects it with
-            // the list-flavored twin of the scalar mismatch below
-            // (`Arrow Array (list<element: ...>)` instead of
-            // `Arrow Array (...)`). Stringify every element in every list
-            // cell when that happens, mirroring the scalar-column fallback.
-            let (has_bool, has_numeric, has_str) = col
-                .iter()
-                .filter_map(|cell| cell.cast::<PyList>().ok())
-                .flat_map(|list| list.iter())
-                .map(|item| classify_scalar_kind(&item))
-                .fold((false, false, false), |acc, k| {
-                    (acc.0 || k.0, acc.1 || k.1, acc.2 || k.2)
-                });
-            if [has_bool, has_numeric, has_str]
-                .iter()
-                .filter(|present| **present)
-                .count()
-                > 1
-            {
-                for cell in col.iter_mut() {
-                    let Ok(list) = cell.cast::<PyList>() else {
-                        continue;
-                    };
-                    let stringified = list
-                        .iter()
-                        .map(|item| {
-                            if item.is_none() {
-                                Ok(item)
-                            } else {
-                                item.str().map(|s| s.into_any())
+    // Pass 1b: per column, aggregate kind flags (scalar interpretation, or --
+    // for a list-valued column -- element kind across every list cell's
+    // elements plus every to-be-wrapped scalar cell's own kind, matching
+    // `union_and_columnarize`'s wrap-then-classify order) and decide this
+    // column's `ColumnPlan`.
+    let mut plans: Vec<ColumnPlan> = Vec::with_capacity(n_keys);
+    for col_idx in 0..n_keys {
+        let is_list_col = any_list_per_col[col_idx];
+        let mut flags = KindFlags::default();
+        for cell in &column_slots[col_idx] {
+            let Some(raw) = cell else { continue };
+            let text = raw.get();
+            if is_list_col {
+                // Date detection never applies to list elements (see
+                // ColumnPlan's doc comment) -- always `dates_enabled: false`
+                // here regardless of the caller's own setting.
+                match text.as_bytes().first() {
+                    Some(b'[') => {
+                        let elems: Vec<&serde_json::value::RawValue> =
+                            serde_json::from_str(text).unwrap_or_default();
+                        for elem in elems {
+                            if let Some(k) = raw_scalar_kind(elem.get(), false) {
+                                flags.merge(k);
                             }
-                        })
-                        .collect::<PyResult<Vec<_>>>()?;
-                    *cell = PyList::new(py, stringified)?.into_any();
-                }
-            }
-        } else {
-            // `auto_convert_types` converts each value independently based on its
-            // own content (github.com/amaye15/JSON-Tools-rs/issues/32) -- the same
-            // key can hold a clean numeric string in one row ("123" -> int 123)
-            // and ordinary text in another ("Smith" -> stays str), producing a
-            // column with genuinely mixed Python types. pandas tolerates that as
-            // an `object`-dtype column, but the Arrow bridge PySpark reconstruction
-            // relies on does not: confirmed empirically, Spark's `createDataFrame`
-            // raises `PySparkTypeError: Exception thrown when converting
-            // pandas.Series (object) ... to Arrow Array` the moment a column mixes
-            // e.g. str and int. int/float mixes are left alone -- pandas already
-            // promotes those to a uniform float64 column, and `infer_spark_type`
-            // accounts for that -- but any other combination (str with bool/
-            // numeric, or bool with numeric) falls back to stringifying every
-            // value in the column, the same least-surprising fallback every other
-            // target already uses for a column it can't type consistently.
-            let (has_bool, has_numeric, has_str) = col
-                .iter()
-                .map(classify_scalar_kind)
-                .fold((false, false, false), |acc, k| {
-                    (acc.0 || k.0, acc.1 || k.1, acc.2 || k.2)
-                });
-            let kinds_present = [has_bool, has_numeric, has_str]
-                .iter()
-                .filter(|present| **present)
-                .count();
-            if kinds_present > 1 {
-                for cell in col.iter_mut() {
-                    if !cell.is_none() {
-                        *cell = cell.str()?.into_any();
+                        }
+                    }
+                    _ => {
+                        if let Some(k) = raw_scalar_kind(text, false) {
+                            flags.merge(k);
+                        }
                     }
                 }
+            } else if let Some(k) = raw_scalar_kind(text, dates_enabled) {
+                flags.merge(k);
             }
         }
-        columns.insert(key.clone(), col);
-    }
-
-    Ok(NormaliseColumns { columns })
-}
-
-/// Reconstruct a pandas DataFrame from unioned/null-filled columns. Only called
-/// after `require_importable` has confirmed pandas is present.
-#[cfg(feature = "python")]
-fn reconstruct_pandas_normalise(
-    py: Python<'_>,
-    cols: &NormaliseColumns<'_>,
-) -> PyResult<Py<PyAny>> {
-    let pandas = cached_import(py, &PANDAS_MODULE, "pandas")?;
-    let data = PyDict::new(py);
-    for (key, values) in &cols.columns {
-        data.set_item(key, PyList::new(py, values.iter().cloned())?)?;
-    }
-    let df = pandas.call_method1("DataFrame", (data,))?;
-    Ok(df.unbind())
-}
-
-/// Reconstruct a polars DataFrame from unioned/null-filled columns. Only called
-/// after `require_importable` has confirmed polars is present.
-#[cfg(feature = "python")]
-fn reconstruct_polars_normalise(
-    py: Python<'_>,
-    cols: &NormaliseColumns<'_>,
-) -> PyResult<Py<PyAny>> {
-    let polars = cached_import(py, &POLARS_MODULE, "polars")?;
-    let data = PyDict::new(py);
-    for (key, values) in &cols.columns {
-        data.set_item(key, PyList::new(py, values.iter().cloned())?)?;
-    }
-    let df = polars.call_method1("DataFrame", (data,))?;
-    Ok(df.unbind())
-}
-
-/// Reconstruct a PyArrow Table from unioned/null-filled columns. Only called
-/// after `require_importable` has confirmed pyarrow is present.
-#[cfg(feature = "python")]
-fn reconstruct_pyarrow_normalise(
-    py: Python<'_>,
-    cols: &NormaliseColumns<'_>,
-) -> PyResult<Py<PyAny>> {
-    let pyarrow = cached_import(py, &PYARROW_MODULE, "pyarrow")?;
-    let data = PyDict::new(py);
-    for (key, values) in &cols.columns {
-        data.set_item(key, PyList::new(py, values.iter().cloned())?)?;
-    }
-    let table = pyarrow
-        .getattr("Table")?
-        .call_method1("from_pydict", (data,))?;
-    Ok(table.unbind())
-}
-
-/// Infer a single column's PySpark type by scanning every non-`None` value
-/// (columns are already uniformly typed by this point for the cases that
-/// matter -- see `union_and_columnarize`'s list-collision and mixed-scalar-type
-/// uniformity handling, github.com/amaye15/JSON-Tools-rs/issues/32, #33 --
-/// except for a pre-existing, out-of-scope edge case shared with pandas/
-/// polars/pyarrow's own type inference: a leaf value that's neither bool/
-/// int/float/str/list, e.g. a stray nested object). Scanning all values, not
-/// just the first, matters specifically for int/float mixes: `union_and_
-/// columnarize` deliberately leaves those alone rather than stringifying
-/// them (pandas already promotes such a column to a uniform `float64` when
-/// the DataFrame is built), so the declared schema type must independently
-/// arrive at the same `DoubleType` conclusion regardless of which value
-/// happens to come first -- picking `LongType` from an early int while a
-/// later float made the real pandas column `float64` is exactly the
-/// mismatch that made Spark's Arrow bridge raise `PySparkTypeError` in the
-/// first place. The same reasoning applies one level down for list-valued
-/// columns: the element type is derived from every element of every list in
-/// the column, not just the first list's first element, since `union_and_
-/// columnarize` only guarantees element-kind uniformity, not which kind. An
-/// all-`None` column (no non-`None` value found) defaults to `StringType`,
-/// matching the other three targets' own harmless defaults for the same
-/// case (pandas `object`, polars `Null`, pyarrow `null`).
-#[cfg(feature = "python")]
-fn infer_spark_type<'py>(
-    types_mod: &Bound<'py, PyModule>,
-    values: &[Bound<'py, PyAny>],
-) -> PyResult<Bound<'py, PyAny>> {
-    let mut saw_bool = false;
-    let mut saw_int = false;
-    let mut saw_float = false;
-    let mut saw_list = false;
-    let mut saw_other = false;
-    for v in values {
-        if v.is_none() {
-            continue;
-        }
-        // bool before int: Python's bool is an int subclass.
-        if v.is_instance_of::<pyo3::types::PyBool>() {
-            saw_bool = true;
-        } else if v.is_instance_of::<pyo3::types::PyInt>() {
-            saw_int = true;
-        } else if v.is_instance_of::<pyo3::types::PyFloat>() {
-            saw_float = true;
-        } else if v.is_instance_of::<PyList>() {
-            saw_list = true;
-        } else if !v.is_instance_of::<PyString>() {
-            saw_other = true;
-        }
-    }
-    if saw_bool {
-        return types_mod.getattr("BooleanType")?.call0();
-    }
-    if saw_list {
-        let mut elem_bool = false;
-        let mut elem_int = false;
-        let mut elem_float = false;
-        for v in values {
-            let Ok(list) = v.cast::<PyList>() else {
-                continue;
-            };
-            for item in list.iter() {
-                if item.is_none() {
-                    continue;
-                }
-                // bool before int: Python's bool is an int subclass.
-                if item.is_instance_of::<pyo3::types::PyBool>() {
-                    elem_bool = true;
-                } else if item.is_instance_of::<pyo3::types::PyInt>() {
-                    elem_int = true;
-                } else if item.is_instance_of::<pyo3::types::PyFloat>() {
-                    elem_float = true;
-                }
-            }
-        }
-        let element_type = if elem_bool {
-            types_mod.getattr("BooleanType")?.call0()?
-        } else if elem_float {
-            types_mod.getattr("DoubleType")?.call0()?
-        } else if elem_int {
-            types_mod.getattr("LongType")?.call0()?
+        let kind = flags.resolve();
+        plans.push(if is_list_col {
+            ColumnPlan::List(kind)
         } else {
-            types_mod.getattr("StringType")?.call0()?
-        };
-        return types_mod.getattr("ArrayType")?.call1((element_type,));
+            ColumnPlan::Scalar(kind)
+        });
     }
-    if saw_float {
-        return types_mod.getattr("DoubleType")?.call0();
+
+    // Pass 2: build each column's real Arrow array.
+    let mut fields: Vec<Field> = Vec::with_capacity(n_keys);
+    let mut arrays: Vec<ArrayRef> = Vec::with_capacity(n_keys);
+    for (col_idx, key) in key_order.iter().enumerate() {
+        let mut builder = ColumnBuilder::new(plans[col_idx], n_rows);
+        fields.push(builder.arrow_field(key));
+        for cell in &column_slots[col_idx] {
+            builder.append_row(*cell);
+        }
+        arrays.push(builder.finish());
     }
-    if saw_int {
-        return types_mod.getattr("LongType")?.call0();
-    }
-    // Uniform str, uniform/all-`saw_other`, or all-`None` -> StringType.
-    let _ = saw_other;
-    types_mod.getattr("StringType")?.call0()
+
+    let schema = Arc::new(Schema::new(fields));
+    let batch = RecordBatch::try_new(schema.clone(), arrays)
+        .map_err(|e| JsonToolsError::new_err(format!("Failed to build record batch: {e}")))?;
+    let table = PyTable::try_new(vec![batch], schema.clone())
+        .map_err(|e| JsonToolsError::new_err(format!("Failed to build Arrow table: {e}")))?;
+    Ok((table_to_python(table, py, via_pyarrow)?, schema))
 }
 
-/// Reconstruct a real PySpark DataFrame by reusing the pandas reconstruction
-/// above for the actual data, then handing it to Spark's own Arrow-optimized
-/// `SparkSession.createDataFrame(pandas.DataFrame, schema)` bridge (Arrow
-/// conversion on by default since Spark 3.0 via
+/// Cross a built `PyTable` into Python. See `build_normalise_table`'s
+/// `via_pyarrow` doc comment for what each mode requires/supports.
+#[cfg(feature = "python")]
+fn table_to_python(
+    table: PyTable,
+    py: Python<'_>,
+    via_pyarrow: bool,
+) -> PyResult<Bound<'_, PyAny>> {
+    if via_pyarrow {
+        table.into_pyarrow(py)
+    } else {
+        Ok(table.into_pyobject(py)?.into_any())
+    }
+}
+
+/// Reconstruct a pandas DataFrame from the canonical Arrow table, via
+/// `to_pandas(types_mapper=pd.ArrowDtype)` -- genuinely zero-copy (verified:
+/// flat ~0.3ms regardless of row count, vs. linear-scaling ~700ms+ at 5M rows
+/// for plain numpy dtypes). This is an intentional, user-confirmed breaking
+/// dtype change from the old `union_and_columnarize`-based output (`int64`
+/// becomes `int64[pyarrow]` etc.) -- see CHANGELOG.md's v0.9.20 entry.
+#[cfg(feature = "python")]
+fn reconstruct_pandas_normalise(py: Python<'_>, table: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
+    let pandas = cached_import(py, &PANDAS_MODULE, "pandas")?;
+    let arrow_dtype = pandas.getattr("ArrowDtype")?;
+    let kwargs = PyDict::new(py);
+    kwargs.set_item("types_mapper", arrow_dtype)?;
+    let df = table.call_method("to_pandas", (), Some(&kwargs))?;
+    Ok(df.unbind())
+}
+
+/// Reconstruct a polars DataFrame from the canonical Arrow table, via
+/// `pl.from_arrow(table, rechunk=False)` -- near-zero-copy (verified: far
+/// cheaper than a real copy, though not a pure O(1) view like the pandas
+/// ArrowDtype path above -- `rechunk=False` avoids paying for a forced
+/// contiguous-memory pass this engine's single-`RecordBatch` output never
+/// needs anyway).
+#[cfg(feature = "python")]
+fn reconstruct_polars_normalise(py: Python<'_>, table: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
+    let polars = cached_import(py, &POLARS_MODULE, "polars")?;
+    let kwargs = PyDict::new(py);
+    kwargs.set_item("rechunk", false)?;
+    let df = polars.call_method("from_arrow", (table,), Some(&kwargs))?;
+    Ok(df.unbind())
+}
+
+/// Map an Arrow `DataType` to its PySpark SQL type. Only the shapes this
+/// engine's own `ColumnBuilder` ever produces are handled (Boolean/Int64/
+/// Float64/Date32/Timestamp/Utf8, and List of one of those) -- exhaustive
+/// for this module's own output, not a general Arrow-to-Spark mapper.
+#[cfg(feature = "python")]
+fn arrow_type_to_spark<'py>(
+    types_mod: &Bound<'py, PyModule>,
+    dt: &DataType,
+) -> PyResult<Bound<'py, PyAny>> {
+    match dt {
+        DataType::Boolean => types_mod.getattr("BooleanType")?.call0(),
+        DataType::Int64 => types_mod.getattr("LongType")?.call0(),
+        DataType::Float64 => types_mod.getattr("DoubleType")?.call0(),
+        DataType::Date32 => types_mod.getattr("DateType")?.call0(),
+        DataType::Timestamp(_, _) => types_mod.getattr("TimestampType")?.call0(),
+        DataType::Utf8 => types_mod.getattr("StringType")?.call0(),
+        DataType::List(inner) => {
+            let elem_type = arrow_type_to_spark(types_mod, inner.data_type())?;
+            types_mod.getattr("ArrayType")?.call1((elem_type,))
+        }
+        other => Err(JsonToolsError::new_err(format!(
+            "Unsupported Arrow type for PySpark schema derivation: {other:?}"
+        ))),
+    }
+}
+
+/// Reconstruct a real PySpark DataFrame from the canonical Arrow table, via
+/// Spark's own Arrow-optimized `SparkSession.createDataFrame(pandas.DataFrame,
+/// schema)` bridge (Arrow conversion on by default since Spark 3.0 via
 /// `spark.sql.execution.arrow.pyspark.enabled`) -- the idiomatic, "native" way
-/// to get driver-side tabular data into a real distributed DataFrame.
+/// to get driver-side tabular data into a real distributed DataFrame. This
+/// mechanism itself is unchanged from before this round's rewrite; only its
+/// input changed, from `NormaliseColumns`' boxed-object columns to a plain
+/// pandas DataFrame derived from this module's own Arrow table.
 ///
-/// The schema is passed explicitly rather than left for Spark to infer, which
-/// is not optional polish: confirmed empirically that inference is unreliable
-/// on the *non*-Arrow fallback path Spark silently takes when pyarrow isn't
-/// installed (a real, reachable configuration -- pyspark does not depend on
-/// pyarrow). An all-`None` column corrupted to `StructType([])` (empty
-/// struct) instead of a null string column, and separately, pandas's nullable
-/// `"string"` dtype's `pd.NA` sentinel (an earlier version of this function
-/// used it for exactly this all-`None` case) serialized as the *literal
-/// string* `"<NA>"` on that same fallback path instead of a real null --
-/// silent data corruption, not a crash, so it would not have been obvious
-/// without checking actual cell values. Plain Python `None` plus an explicit
-/// schema was verified correct on both the Arrow and non-Arrow paths, with
-/// and without pyarrow installed, for both all-`None` and mixed-value
-/// columns -- schema-driven construction sidesteps inference on either path
-/// entirely rather than depending on either one behaving correctly.
-///
-/// Requires pandas importable (a safe assumption in any real PySpark
-/// environment -- PySpark's own Arrow optimizations, and this project's
-/// `pandas_udf` docs example, already assume it).
+/// The pandas bridge here deliberately uses **plain** `to_pandas()`, not
+/// `types_mapper=pd.ArrowDtype` (unlike `reconstruct_pandas_normalise`
+/// above): this exact bridge already has a documented history of silent
+/// corruption from pandas nullable-extension dtypes on Spark's *non*-Arrow
+/// fallback path (taken automatically when pyarrow isn't installed) -- an
+/// earlier version of this function used pandas's nullable `"string"` dtype
+/// for an all-null column and it serialized as the *literal string* `"<NA>"`
+/// instead of a real null on that fallback path. `ArrowDtype` is exactly this
+/// same category of nullable extension dtype, so it inherits that same risk
+/// until proven otherwise; plain Python `None`-backed columns were verified
+/// correct on both the Arrow and non-Arrow paths, so that's what's used here.
+/// The explicit schema (derived directly from this table's own Arrow schema,
+/// not re-inferred) is what actually made that earlier all-null-column
+/// corruption bug (`StructType([])` from schema inference) go away in the
+/// first place, and remains required for the same reason.
 ///
 /// Used by both `execute_normalise` (`target="pyspark"`) and, since
 /// github.com/amaye15/JSON-Tools-rs/issues/31, plain `execute_dataframe` for
-/// PySpark input -- the latter no longer falls back to a plain list of dicts.
+/// PySpark input.
 #[cfg(feature = "python")]
 fn reconstruct_pyspark_normalise(
     py: Python<'_>,
     spark: &Bound<'_, PyAny>,
-    cols: &NormaliseColumns<'_>,
+    table: &Bound<'_, PyAny>,
+    schema: &Schema,
 ) -> PyResult<Py<PyAny>> {
     let types_mod = cached_import(py, &PYSPARK_TYPES_MODULE, "pyspark.sql.types")?;
 
-    if cols.columns.is_empty() {
+    if schema.fields().is_empty() {
         let empty_schema = types_mod.getattr("StructType")?.call0()?;
         let empty_rows: Vec<Py<PyAny>> = Vec::new();
         let df = spark.call_method1("createDataFrame", (empty_rows, empty_schema))?;
@@ -2919,15 +3445,15 @@ fn reconstruct_pyspark_normalise(
     })?;
 
     let struct_field_cls = types_mod.getattr("StructField")?;
-    let mut fields: Vec<Bound<'_, PyAny>> = Vec::with_capacity(cols.columns.len());
-    for (key, values) in &cols.columns {
-        let field_type = infer_spark_type(&types_mod, values)?;
-        fields.push(struct_field_cls.call1((key, field_type, true))?);
+    let mut spark_fields: Vec<Bound<'_, PyAny>> = Vec::with_capacity(schema.fields().len());
+    for field in schema.fields() {
+        let field_type = arrow_type_to_spark(&types_mod, field.data_type())?;
+        spark_fields.push(struct_field_cls.call1((field.name(), field_type, true))?);
     }
-    let schema = types_mod.getattr("StructType")?.call1((fields,))?;
+    let spark_schema = types_mod.getattr("StructType")?.call1((spark_fields,))?;
 
-    let pandas_df = reconstruct_pandas_normalise(py, cols)?;
-    let df = spark.call_method1("createDataFrame", (pandas_df, schema))?;
+    let pandas_df = table.call_method0("to_pandas")?;
+    let df = spark.call_method1("createDataFrame", (pandas_df, spark_schema))?;
     Ok(df.unbind())
 }
 
@@ -2951,8 +3477,12 @@ impl PyJSONTools {
         // doc comment), then in flatten mode only, auto-expand any column
         // holding JSON *strings* (not already dicts/structs) the same way a
         // dict-typed column already expands (github.com/amaye15/
-        // JSON-Tools-rs/issues/30). `.normal()`/`.unflatten()` DataFrame
-        // processing is intentionally untouched by any of this.
+        // JSON-Tools-rs/issues/30), and finally un-nest every object-valued
+        // top-level field (from either source) so its own keys become bare
+        // columns instead of being prefixed by the source column's name (see
+        // `unnest_object_valued_columns`'s doc comment). `.normal()`/
+        // `.unflatten()` DataFrame processing is intentionally untouched by
+        // any of this.
         //
         // For Polars/PyArrow input, `detect_and_extract_json_columns_zerocopy`
         // finds embedded-JSON-string columns directly via Arrow zero-copy
@@ -2963,7 +3493,7 @@ impl PyJSONTools {
         // function's doc comment for the measured win and why this is
         // scoped to just those two DataFrame types.
         let json_strings = if is_flatten_mode {
-            match detect_and_extract_json_columns_zerocopy(df, df_type)? {
+            let rows = match detect_and_extract_json_columns_zerocopy(df, df_type)? {
                 Some((target_cols, target_values, column_order)) if !target_cols.is_empty() => {
                     let df_reduced = dataframe_drop_columns(df, df_type, &target_cols)?;
                     let base_rows = dataframe_to_json_strings(&df_reduced, df_type)?;
@@ -2986,7 +3516,10 @@ impl PyJSONTools {
                     let rows = dataframe_to_json_strings(df, df_type)?;
                     expand_json_string_columns(py, rows)?
                 }
-            }
+            };
+            rows.into_iter()
+                .map(|row| unnest_object_valued_columns(&row).unwrap_or(row))
+                .collect()
         } else {
             dataframe_to_json_strings(df, df_type)?
         };
@@ -3011,8 +3544,10 @@ impl PyJSONTools {
                 // dict-list-then-fallback-to-list behavior.
                 DataFrameType::PySpark => {
                     let spark = require_active_spark_session(py)?;
-                    let columns = union_and_columnarize(py, processed_list)?;
-                    reconstruct_pyspark_normalise(py, &spark, &columns)
+                    let dates_enabled = lock_config(&self.inner)?.date_conversion().enabled;
+                    let (table, schema) =
+                        build_normalise_table(py, &processed_list, true, dates_enabled)?;
+                    reconstruct_pyspark_normalise(py, &spark, &table, &schema)
                 }
                 _ => {
                     // Convert JSON strings back to Python dicts
@@ -3196,15 +3731,23 @@ impl PyJSONTools {
             JsonOutput::Single(single) => vec![single],
         };
 
-        let columns = union_and_columnarize(py, processed_list)?;
+        // Only `target="polars"` can skip pyarrow entirely (verified directly
+        // -- see `build_normalise_table`'s `via_pyarrow` doc comment); every
+        // other target needs a genuine `pyarrow.Table` regardless.
+        let via_pyarrow = resolved_target != NormaliseTarget::Polars;
+        let dates_enabled = lock_config(&self.inner)?.date_conversion().enabled;
+        let (table, schema) =
+            build_normalise_table(py, &processed_list, via_pyarrow, dates_enabled)?;
 
         match resolved_target {
-            NormaliseTarget::Pandas => reconstruct_pandas_normalise(py, &columns),
-            NormaliseTarget::Polars => reconstruct_polars_normalise(py, &columns),
-            NormaliseTarget::PyArrow => reconstruct_pyarrow_normalise(py, &columns),
+            // `build_normalise_table` already produced the canonical pyarrow.Table
+            // -- nothing further to derive.
+            NormaliseTarget::PyArrow => Ok(table.unbind()),
+            NormaliseTarget::Pandas => reconstruct_pandas_normalise(py, &table),
+            NormaliseTarget::Polars => reconstruct_polars_normalise(py, &table),
             NormaliseTarget::PySpark => {
                 let spark = spark_session.expect("resolved to PySpark target above");
-                reconstruct_pyspark_normalise(py, &spark, &columns)
+                reconstruct_pyspark_normalise(py, &spark, &table, &schema)
             }
         }
     }
@@ -3303,5 +3846,303 @@ mod marshal_tests {
                 );
             }
         }
+    }
+}
+
+#[cfg(all(test, feature = "python"))]
+mod arrow_normalise_tests {
+    use super::{raw_scalar_kind, stringify_raw, KindFlags, ScalarKind};
+    use arrow_array::builder::{Float64Builder, Int64Builder, ListBuilder, StringBuilder};
+    use arrow_array::{Array, BooleanArray, Float64Array, Int64Array, StringArray};
+
+    // -------------------------------------------------------------------
+    // raw_scalar_kind / KindFlags::resolve -- pure classification logic,
+    // no Python interpreter needed (this crate's `pyo3` dependency uses the
+    // "extension-module" feature, which disables auto-initialization, so
+    // `cargo test --features python` has no embedded interpreter to run
+    // Python-calling code against -- consistent with `marshal_tests` above
+    // only testing the Python-free `may_contain_big_int`).
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn raw_scalar_kind_classifies_every_shape() {
+        assert!(raw_scalar_kind("null", false).is_none());
+        assert!(raw_scalar_kind("true", false).unwrap().bool_);
+        assert!(raw_scalar_kind("false", false).unwrap().bool_);
+        assert!(raw_scalar_kind("\"hi\"", false).unwrap().str_);
+        assert!(raw_scalar_kind("123", false).unwrap().int_);
+        assert!(raw_scalar_kind("-42", false).unwrap().int_);
+        assert!(raw_scalar_kind("1.5", false).unwrap().float_);
+        assert!(raw_scalar_kind("1e10", false).unwrap().float_);
+        assert!(raw_scalar_kind("1E10", false).unwrap().float_);
+        // Integer too large for i64 -- downgrades to float, not an error.
+        assert!(
+            raw_scalar_kind("99999999999999999999", false)
+                .unwrap()
+                .float_
+        );
+        // i64::MAX itself still fits.
+        assert!(raw_scalar_kind("9223372036854775807", false).unwrap().int_);
+        // A literal empty object (remove_empty_objects=False) -- str_,
+        // stringified to its own "{}" text, not a number-parse panic.
+        assert!(raw_scalar_kind("{}", false).unwrap().str_);
+    }
+
+    #[test]
+    fn raw_scalar_kind_dates_gated_on_dates_enabled() {
+        // dates_enabled=false: a date-shaped string is just an ordinary string,
+        // never independently pattern-matched -- the whole point of gating this
+        // on the caller's own opt-in convert_dates()/auto_convert_types().
+        assert!(raw_scalar_kind("\"2024-01-15\"", false).unwrap().str_);
+        assert!(
+            raw_scalar_kind("\"2024-01-15T10:30:00Z\"", false)
+                .unwrap()
+                .str_
+        );
+
+        // dates_enabled=true: recognized as date/datetime.
+        assert!(raw_scalar_kind("\"2024-01-15\"", true).unwrap().date_);
+        assert!(
+            raw_scalar_kind("\"2024-01-15T10:30:00Z\"", true)
+                .unwrap()
+                .datetime_
+        );
+        assert!(
+            raw_scalar_kind("\"2024-01-15T10:30:00+05:00\"", true)
+                .unwrap()
+                .datetime_
+        );
+        // An ordinary string that merely starts with digits stays a string --
+        // a real chrono parse, not a shape heuristic that could false-positive.
+        assert!(
+            raw_scalar_kind("\"2024-01-15-extra-text\"", true)
+                .unwrap()
+                .str_
+        );
+        assert!(raw_scalar_kind("\"not a date\"", true).unwrap().str_);
+        assert!(raw_scalar_kind("\"hi\"", true).unwrap().str_);
+    }
+
+    #[test]
+    fn kind_flags_resolve_priority() {
+        let bool_only = KindFlags {
+            bool_: true,
+            ..Default::default()
+        };
+        assert_eq!(bool_only.resolve(), ScalarKind::Bool);
+
+        let int_only = KindFlags {
+            int_: true,
+            ..Default::default()
+        };
+        assert_eq!(int_only.resolve(), ScalarKind::Int64);
+
+        let float_only = KindFlags {
+            float_: true,
+            ..Default::default()
+        };
+        assert_eq!(float_only.resolve(), ScalarKind::Float64);
+
+        // int + float mix -> promotes to Float64, not a "mixed kind" stringify.
+        let int_float = KindFlags {
+            int_: true,
+            float_: true,
+            ..Default::default()
+        };
+        assert_eq!(int_float.resolve(), ScalarKind::Float64);
+
+        let str_only = KindFlags {
+            str_: true,
+            ..Default::default()
+        };
+        assert_eq!(str_only.resolve(), ScalarKind::Utf8);
+
+        // Nothing seen at all (all-null column) -> Utf8 default.
+        assert_eq!(KindFlags::default().resolve(), ScalarKind::Utf8);
+
+        // Any real mix beyond int/float alone -> stringify fallback.
+        let bool_numeric = KindFlags {
+            bool_: true,
+            int_: true,
+            ..Default::default()
+        };
+        assert_eq!(bool_numeric.resolve(), ScalarKind::Utf8);
+
+        let bool_str = KindFlags {
+            bool_: true,
+            str_: true,
+            ..Default::default()
+        };
+        assert_eq!(bool_str.resolve(), ScalarKind::Utf8);
+
+        let numeric_str = KindFlags {
+            int_: true,
+            str_: true,
+            ..Default::default()
+        };
+        assert_eq!(numeric_str.resolve(), ScalarKind::Utf8);
+
+        let date_only = KindFlags {
+            date_: true,
+            ..Default::default()
+        };
+        assert_eq!(date_only.resolve(), ScalarKind::Date32);
+
+        let datetime_only = KindFlags {
+            datetime_: true,
+            ..Default::default()
+        };
+        assert_eq!(datetime_only.resolve(), ScalarKind::TimestampUtcMicros);
+
+        // date + datetime mix -> promotes to TimestampUtcMicros (a bare date
+        // becomes midnight UTC), the same "promote the narrower kind" pattern
+        // int->float already uses -- not a stringify fallback.
+        let date_datetime = KindFlags {
+            date_: true,
+            datetime_: true,
+            ..Default::default()
+        };
+        assert_eq!(date_datetime.resolve(), ScalarKind::TimestampUtcMicros);
+
+        // temporal mixed with any other real kind -> stringify fallback, same
+        // as any other kind mixing.
+        let date_str = KindFlags {
+            date_: true,
+            str_: true,
+            ..Default::default()
+        };
+        assert_eq!(date_str.resolve(), ScalarKind::Utf8);
+
+        let date_numeric = KindFlags {
+            date_: true,
+            int_: true,
+            ..Default::default()
+        };
+        assert_eq!(date_numeric.resolve(), ScalarKind::Utf8);
+
+        let date_bool = KindFlags {
+            date_: true,
+            bool_: true,
+            ..Default::default()
+        };
+        assert_eq!(date_bool.resolve(), ScalarKind::Utf8);
+    }
+
+    #[test]
+    fn kind_flags_merge_is_union() {
+        let mut flags = KindFlags::default();
+        flags.merge(KindFlags {
+            int_: true,
+            ..Default::default()
+        });
+        flags.merge(KindFlags {
+            float_: true,
+            ..Default::default()
+        });
+        assert!(flags.int_ && flags.float_ && !flags.bool_ && !flags.str_);
+    }
+
+    // -------------------------------------------------------------------
+    // stringify_raw -- the mixed-kind fallback's Python str()-equivalent
+    // conversion.
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn stringify_raw_matches_python_str_semantics() {
+        assert_eq!(stringify_raw("\"hello\""), "hello");
+        assert_eq!(stringify_raw("\"with \\\"quotes\\\"\""), "with \"quotes\"");
+        assert_eq!(stringify_raw("true"), "True");
+        assert_eq!(stringify_raw("false"), "False");
+        assert_eq!(stringify_raw("123"), "123");
+        assert_eq!(stringify_raw("1.5"), "1.5");
+    }
+
+    // -------------------------------------------------------------------
+    // ColumnBuilder / append_list_row -- these build real `arrow_array`
+    // types directly and never touch a Python object, so they're testable
+    // without a live interpreter too.
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn scalar_int_column_builds_correctly_with_nulls() {
+        let mut b = Int64Builder::new();
+        b.append_value(1);
+        b.append_null();
+        b.append_value(3);
+        let arr: Int64Array = b.finish();
+        assert_eq!(arr.len(), 3);
+        assert_eq!(arr.value(0), 1);
+        assert!(arr.is_null(1));
+        assert_eq!(arr.value(2), 3);
+    }
+
+    #[test]
+    fn scalar_bool_column_builds_correctly() {
+        use arrow_array::builder::BooleanBuilder;
+        let mut b = BooleanBuilder::new();
+        b.append_value(true);
+        b.append_value(false);
+        b.append_null();
+        let arr: BooleanArray = b.finish();
+        assert_eq!(arr.len(), 3);
+        assert!(arr.value(0));
+        assert!(!arr.value(1));
+        assert!(arr.is_null(2));
+    }
+
+    #[test]
+    fn scalar_float_column_promotes_int_and_float_uniformly() {
+        // Mirrors what ColumnBuilder::Float64's append_row does for a
+        // column resolved to Float64 (int/float mix): every value, whether
+        // its source text was int- or float-formatted, parses as f64.
+        let mut b = Float64Builder::new();
+        for text in ["5", "5.5", "-3"] {
+            b.append_value(text.parse::<f64>().unwrap());
+        }
+        let arr: Float64Array = b.finish();
+        assert_eq!(arr.values(), &[5.0, 5.5, -3.0]);
+    }
+
+    #[test]
+    fn homogeneous_string_list_builds_correctly() {
+        let mut b = ListBuilder::new(StringBuilder::new());
+        b.values().append_value("a");
+        b.values().append_value("b");
+        b.append(true); // ["a", "b"]
+        b.append(true); // [] (empty but present)
+        b.append(false); // null
+        b.values().append_value("z");
+        b.append(true); // ["z"]
+        let arr = b.finish();
+
+        assert_eq!(arr.len(), 4);
+        assert!(!arr.is_null(0));
+        assert_eq!(arr.value(0).len(), 2);
+        assert!(!arr.is_null(1));
+        assert_eq!(arr.value(1).len(), 0); // empty, not null
+        assert!(arr.is_null(2));
+        assert_eq!(arr.value(3).len(), 1);
+
+        let first_cell = arr.value(0);
+        let inner: &StringArray = first_cell.as_any().downcast_ref().unwrap();
+        assert_eq!(inner.value(0), "a");
+        assert_eq!(inner.value(1), "b");
+    }
+
+    #[test]
+    fn scalar_cell_wraps_into_single_element_list() {
+        // Mirrors handle_key_collision(True): a row where no collision
+        // occurred contributes a scalar value that must wrap into a
+        // single-element list to keep the column uniformly List<T>.
+        let mut b = ListBuilder::new(StringBuilder::new());
+        // Simulates append_list_row's "_ => wrap scalar" branch.
+        b.values().append_value("solo");
+        b.append(true);
+        let arr = b.finish();
+        assert_eq!(arr.len(), 1);
+        let first_cell = arr.value(0);
+        let inner: &StringArray = first_cell.as_any().downcast_ref().unwrap();
+        assert_eq!(inner.len(), 1);
+        assert_eq!(inner.value(0), "solo");
     }
 }

@@ -4,6 +4,14 @@
 
 ## v0.9.20 (2026-07-30)
 
+### Changed (BREAKING)
+- **DataFrame column expansion no longer prefixes with the source column's name** -- a column named `payload` holding `{"user": {"name": "Alice"}}` now expands to `user.name`, not `payload.user.name` (dict/struct-typed columns and JSON-string columns alike, in both `execute(df)` and `execute(df, normalise=True)`). Genuine nesting *within* a column's content still prefixes normally; array-valued columns are unaffected (`tags.0`, `tags.1`, ...). A key colliding across two columns resolves via the existing `.handle_key_collision()` setting. See [DataFrame & Series Support](../guide/dataframe-support.md#auto-expanding-json-string-columns).
+- **`normalise=True`/`target=...` reconstruction is now Arrow-native** ([issue #35](https://github.com/amaye15/JSON-Tools-rs/issues/35)) -- one real Arrow `RecordBatch` built directly in Rust, no new methods. `handle_key_collision(True)` list columns now build as real, correctly-typed `List<T>` instead of being stringified. Recognized date/datetime columns build as real `Date32`/`Timestamp` columns, gated on `.convert_dates(True)`/`.auto_convert_types(True)` (never independently guessed). `target="pandas"` output uses Arrow-backed dtypes (`int64[pyarrow]`, ...) -- genuinely zero-copy, but a breaking dtype change. `target="pandas"`/`"pyspark"` now require `pyarrow` installed (`target="polars"` does not). See [DataFrame & Series Support](../guide/dataframe-support.md#normalise-always-get-a-wide-dataframe).
+
+### Performance
+- **`normalise=True`/`target=...` reconstruction: honest, modest ~1-4% end-to-end win** -- core flattening/input serialization dominate total time for typical data, not reconstruction; the real win this round is column-typing correctness, not speed.
+- **`.convert_dates(True)`'s own detection cost: ~0.1-4.5% end-to-end**, measured directly including the worst case (conversion on, no actual dates present) -- not charged when date conversion is off.
+
 ### Removed (BREAKING)
 - **The JVM/Java/Scala binding has been removed entirely** -- `jvm/`, `src/jvm.rs`, the `jni` dependency/`jvm` Cargo feature, and the JVM CI workflow are all gone, and the `io.github.amaye15:json-tools-rs-spark` Maven Central artifact will not receive new versions (`0.9.19` remains available there). The Rust core and Python bindings are unaffected. Databricks/Spark users should switch to the Python bindings wrapped in a `pandas_udf` -- see [Setting Up on Databricks](../guide/databricks-setup.md).
 

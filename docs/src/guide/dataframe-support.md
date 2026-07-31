@@ -53,7 +53,7 @@ df = pd.DataFrame([
 
 result = jt.JSONTools().flatten().execute(df)
 print(type(result))  # <class 'pandas.core.frame.DataFrame'>
-print(result.columns.tolist())  # ['user.name', 'user.age']
+print(result.columns.tolist())  # ['name', 'age']
 ```
 
 ### Polars DataFrame
@@ -69,13 +69,14 @@ df = pl.DataFrame([
 
 result = jt.JSONTools().flatten().execute(df)
 print(type(result))  # <class 'polars.dataframe.frame.DataFrame'>
-print(result.columns)  # ['user.name', 'user.age']
+print(result.columns)  # ['name', 'age']
 ```
 
 > A column holding pre-serialized JSON *strings* (e.g. `pl.DataFrame({"data": ['{"a":
 > 1}', ...]})`) also flattens correctly in `.flatten()` mode -- `execute()`
 > auto-detects columns holding JSON strings and expands them the same way a
-> struct-typed column already does, so `data` becomes `data.a` here too. See
+> struct-typed column already does, so `data` becomes `a` here too (the column's
+> own name, `data`, is never kept as a prefix). See
 > [Auto-Expanding JSON-String Columns](#auto-expanding-json-string-columns) below
 > for the detection rules and caveats.
 
@@ -114,15 +115,35 @@ df = pd.DataFrame({
 
 result = jt.JSONTools().flatten().execute(df)
 print(result)
-#    id payload.user.name
-# 0   1             Alice
-# 1   2               Bob
+#    id user.name
+# 0   1     Alice
+# 1   2       Bob
 ```
 
 This closes the gap the previous version of this page documented for the polars
 `write_ndjson` case above, and applies uniformly to pandas, polars, pyarrow, and
 PySpark (PySpark DataFrames convert to pandas internally first, so they get this
 for free too).
+
+> **The source column's own name is never kept as a prefix.** Every top-level
+> key in a DataFrame row *is* a column name by construction, so an
+> object-valued column (dict/struct-typed, or a JSON-string column decoded per
+> the rules below) expands using only its own inner keys -- `payload` above
+> contributes nothing to the output column names; `user` does, because that's
+> genuine nesting *within* `payload`'s own content, one level deeper. This
+> applies uniformly whether the column arrived as a native dict/struct or as a
+> JSON string, and to both plain `execute(df)` and `execute(df, normalise=True)`.
+>
+> If two different columns' contents (or a column's content and another
+> top-level column) share a key name, that's a genuine collision -- resolved
+> by whatever `.handle_key_collision()` is already set to, exactly as it
+> would be for any other duplicate key this engine encounters: collected into
+> an array when `True`, last value wins when `False` (the default).
+>
+> A JSON-string-encoded **array** is the one exception -- it stays nested
+> under its original column name (`tags.0`, `tags.1`, ...) rather than
+> un-nesting, since a bare `0`/`1`/... column name wouldn't be meaningful and
+> would risk colliding across every array-valued column in the DataFrame.
 
 ### Detection rules
 
@@ -178,6 +199,40 @@ JSON string or dict becomes a 1-row DataFrame, a list becomes an N-row one, and 
 existing DataFrame/Series gets re-normalised the same way. Requires `.flatten()`
 mode (a `JsonToolsError` explains why if it's not set -- unflattened/nested JSON
 can't produce clean scalar columns).
+
+> **Arrow-native reconstruction.** `normalise`'s reconstruction builds one real
+> Apache Arrow table directly in Rust -- with genuinely typed columns, including
+> real `List<T>` columns for a `handle_key_collision(True)` result (not a
+> stringified fallback) and real `Date32`/`Timestamp` columns for recognized
+> dates/datetimes -- then derives whichever `target` was requested from it.
+> This has four consequences worth knowing about:
+>
+> - **`pandas` output uses Arrow-backed dtypes** (`int64[pyarrow]`,
+>   `string[pyarrow]`, ...) instead of the classic numpy-backed dtypes, e.g.
+>   `df["id"].dtype` is now `int64[pyarrow]`, not `int64`. This is a deliberate
+>   choice -- it's genuinely zero-copy -- but is a real, breaking change to
+>   `.dtype` for code written against the old output.
+> - **`target="pandas"` and `target="pyspark"` now require `pyarrow` installed**,
+>   even though neither target *returns* a pyarrow object -- there's no
+>   pyarrow-free route to get genuinely Arrow-built data into a pandas
+>   DataFrame (verified directly). `target="polars"` is unaffected and stays
+>   usable without pyarrow, same as before.
+> - A column mixing genuinely different scalar kinds across rows (e.g. an int in
+>   one row, a string in another, with no list involved) still falls back to a
+>   stringified column -- Arrow's `Union` type is the only real alternative and
+>   was confirmed unusable across pandas/polars (both reject it outright), not
+>   a shortcut taken here.
+> - **A recognized date/datetime column gets a real `Date32`/`Timestamp` type
+>   only when `.convert_dates(True)`/`.auto_convert_types(True)` is enabled** --
+>   this engine never independently pattern-matches an ordinary string into a
+>   date; it only promotes what the core engine's own opt-in date recognition
+>   already normalized. A bare date (`"2024-01-15"`) becomes `Date32`; a
+>   datetime becomes a UTC `Timestamp` (any input timezone offset is converted,
+>   not just relabeled); a column mixing dates and datetimes promotes to
+>   `Timestamp` (the date becomes midnight UTC), the same "promote the
+>   narrower kind" rule int→float already uses. Date detection applies to
+>   top-level columns only, not to elements inside a `handle_key_collision`
+>   list.
 
 ### A single record → a 1-row DataFrame
 
@@ -325,18 +380,22 @@ not the flatten computation itself).
 > **Mixed-type columns with `auto_convert_types`.** `auto_convert_types(True)`
 > converts each value independently based on its own content, so the same
 > flattened key can hold a clean numeric string in one row (`"123"` -> `int
-> 123`) and ordinary text in another (`"Smith"` -> stays `str`). For the
-> `pyspark` target, a column like that is detected and stringified as a whole
-> (falling back to `StringType` for every value in it) rather than crashing
-> Spark's Arrow bridge with a `PySparkTypeError`. Columns mixing only `int`
-> and `float` are unaffected -- they promote to a numeric `double` column,
-> matching pandas's own automatic promotion for the same case. The same
-> protection applies one level down for `.key_replacement()` /
-> `.handle_key_collision(True)` list columns: a collision list is built from
-> each colliding key's own independently-converted value, so a single row's
-> collision can itself hold mixed element types (e.g. `[100, "abc"]`) --
-> those elements fall back to strings too, while a uniformly-typed collision
-> column (e.g. every element an `int`) gets a correctly-typed array instead.
+> 123`) and ordinary text in another (`"Smith"` -> stays `str`). A column like
+> that is detected and stringified as a whole (falling back to a string type
+> for every value in it) rather than producing an inconsistent or broken
+> result -- true for every target now (`pyspark`'s Arrow bridge was always
+> strict about this and would raise `PySparkTypeError`; pandas/polars/pyarrow
+> now share the exact same real-Arrow-type reconstruction, so they get the
+> same protection, not just a Python-level `object`-dtype column as before).
+> Columns mixing only `int` and `float` are unaffected -- they promote to a
+> numeric `Float64` column. The same protection applies one level down for
+> `.key_replacement()` / `.handle_key_collision(True)` list columns: a
+> collision list is built from each colliding key's own independently-
+> converted value, so a single row's collision can itself hold mixed element
+> types (e.g. `[100, "abc"]`) -- those elements fall back to strings too,
+> while a uniformly-typed collision column (e.g. every element an `int`) gets
+> a real, correctly-typed `List<Int64>` Arrow column instead of a stringified
+> one.
 
 ### What happens without `.flatten()` mode
 
@@ -397,7 +456,7 @@ import pandas as pd
 
 df = pd.DataFrame([{"user": {"name": "Alice", "age": 30}}, {"user": {"name": "Bob", "age": 25}}])
 result = jt.JSONTools().flatten().execute(df)
-# DataFrame with columns ['user.name', 'user.age']
+# DataFrame with columns ['name', 'age'] -- "user" is the column name, not kept
 ```
 
 ### Medium: Polars struct column with filtering
@@ -417,12 +476,12 @@ result = (jt.JSONTools()
     .execute(df)
 )
 # shape: (2, 3)
-# ┌───────────┬──────────┬──────────┐
-# │ user.name ┆ user.age ┆ user.bio │
-# ╞═══════════╪══════════╪══════════╡
-# │ Alice     ┆ 30       ┆ null     │
-# │ Bob       ┆ null     ┆ hi       │
-# └───────────┴──────────┴──────────┘
+# ┌───────┬──────┬──────┐
+# │ name  ┆ age  ┆ bio  │
+# ╞═══════╪══════╪══════╡
+# │ Alice ┆ 30   ┆ null │
+# │ Bob   ┆ null ┆ hi   │
+# └───────┴──────┴──────┘
 ```
 
 Filtering is per-row, but a DataFrame's columns are shared across all rows. Row 0's

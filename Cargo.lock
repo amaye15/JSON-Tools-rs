@@ -661,6 +661,7 @@ name = "json-tools-rs"
 version = "0.9.19"
 dependencies = [
  "arrow-array",
+ "arrow-schema",
  "bumpalo",
  "chrono",
  "comfy-table 6.2.0",

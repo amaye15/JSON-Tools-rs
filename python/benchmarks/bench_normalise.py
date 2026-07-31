@@ -1,7 +1,9 @@
 """Quick, hand-timed benchmark for the DataFrame reconstruction path --
 execute(..., normalise=True, target=...) and PySpark execute(spark_df) --
-i.e. union_and_columnarize() and the reconstruct_*_normalise() functions in
-src/python.rs.
+i.e. the Arrow-native build_normalise_table()/reconstruct_*_normalise()
+functions in src/python.rs (github.com/amaye15/JSON-Tools-rs/issues/35;
+replaced the older union_and_columnarize()-based implementation this script
+originally measured).
 
 This code lives entirely behind the `python` feature (PyO3 layer) and can't
 be reached by the pure-Rust `benches/*.rs` (Criterion) suite or
@@ -31,6 +33,19 @@ SCENARIOS = [
     ("large", 754, 4042),
 ]
 
+# Date-typed scenarios (issue #35's Date32/Timestamp support, gated on
+# .convert_dates(True)) -- separate from SCENARIOS above since these need
+# convert_dates enabled and exercise date-specific columns/mixes, not just
+# scalar/collision shapes. "date_worst_case" is deliberately adversarial:
+# convert_dates(True) is on but *nothing* is actually a date, measuring the
+# wasted chrono-parse-attempt cost on every string cell in the case where
+# date detection never pays off.
+DATE_SCENARIOS = [
+    ("date_medium", 200, 500),
+    ("date_large", 754, 4042),
+    ("date_worst_case", 200, 500),
+]
+
 
 # Heterogeneous: only every 3rd row carries the "extra_i" key, so the union
 # has more columns than any single row -- exercises the sparse/union case
@@ -48,8 +63,33 @@ def make_data(n_rows: int, n_cols: int) -> list:
     return [make_row(i, n_cols) for i in range(n_rows)]
 
 
-def time_once(data: list, target: str) -> float:
+# Same shape as make_row, but every 5th column is a date-shaped string and
+# every 7th is a full datetime -- a realistic mix of temporal and ordinary
+# columns, not an all-date table (which would be unrealistically favorable).
+def make_row_with_dates(i: int, n_cols: int) -> dict:
+    row = {}
+    for j in range(n_cols):
+        if j % 5 == 0:
+            day = 1 + (i + j) % 28
+            row[f"field_{j}"] = f"2024-{1 + (j % 12):02d}-{day:02d}"
+        elif j % 7 == 0:
+            hour = i % 24
+            row[f"field_{j}"] = f"2024-01-{1 + (i % 28):02d}T{hour:02d}:30:00Z"
+        else:
+            row[f"field_{j}"] = i * j if j % 3 == 0 else f"value_{i}_{j}"
+    if i % 3 == 0:
+        row["extra_marker"] = i
+    return row
+
+
+def make_date_data(n_rows: int, n_cols: int) -> list:
+    return [make_row_with_dates(i, n_cols) for i in range(n_rows)]
+
+
+def time_once(data: list, target: str, convert_dates: bool = False) -> float:
     tools = jt.JSONTools().flatten()
+    if convert_dates:
+        tools = tools.convert_dates(True)
     start = time.perf_counter()
     tools.execute(data, normalise=True, target=target)
     return time.perf_counter() - start
@@ -65,8 +105,8 @@ def time_once_pyspark(data: list, spark) -> float:
     return time.perf_counter() - start
 
 
-def bench(data: list, target: str, repeats: int) -> float:
-    times = [time_once(data, target) for _ in range(repeats)]
+def bench(data: list, target: str, repeats: int, convert_dates: bool = False) -> float:
+    times = [time_once(data, target, convert_dates) for _ in range(repeats)]
     return statistics.median(times)
 
 
@@ -122,6 +162,20 @@ def main() -> None:
         if spark is not None:
             t = bench_pyspark(data, spark, args.repeats)
             rows_out.append((name, n_rows, n_cols, "pyspark", t))
+
+    for name, n_rows, n_cols in DATE_SCENARIOS:
+        # date_worst_case reuses the plain (dateless) data generator, still
+        # with convert_dates(True) on -- the adversarial "pays the detection
+        # cost, gets nothing for it" case; the other two use real date/
+        # datetime-bearing rows.
+        data = (
+            make_data(n_rows, n_cols)
+            if name == "date_worst_case"
+            else make_date_data(n_rows, n_cols)
+        )
+        for target in available_targets:
+            t = bench(data, target, args.repeats, convert_dates=True)
+            rows_out.append((name, n_rows, n_cols, target, t))
 
     if args.csv:
         print("scenario,rows,cols,target,median_seconds")

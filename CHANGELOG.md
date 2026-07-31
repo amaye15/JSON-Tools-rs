@@ -9,6 +9,80 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.9.20] - 2026-07-30
 
+### Changed (BREAKING)
+- **DataFrame column expansion no longer prefixes with the source column's
+  name.** A DataFrame column holding an embedded object -- whether a native
+  dict/struct-typed column, or a JSON-*string* column auto-detected per
+  [issue #30](https://github.com/amaye15/JSON-Tools-rs/issues/30) -- used to
+  expand into columns prefixed by the source column's own name (e.g. a column
+  named `payload` holding `{"user": {"name": "Alice"}}` produced
+  `payload.user.name`). It now expands using only the embedded content's own
+  keys (`user.name`) -- every top-level key in a DataFrame row is a column
+  name by construction, so the column boundary itself carries no meaning
+  worth preserving in the output, only what's genuinely nested *within* a
+  column's content does. Applies to both plain `execute(df)` and
+  `execute(df, normalise=True)`, uniformly across pandas/polars/pyarrow/
+  PySpark. A JSON-string-encoded **array**-valued column is unaffected --
+  still expands into indexed sub-columns prefixed by its own column name
+  (`tags.0`, `tags.1`, ...), since a bare `0`/`1`/... column name wouldn't be
+  meaningful. Two columns whose content shares a key name (or a column's
+  content colliding with another top-level column) is resolved by whatever
+  `.handle_key_collision()` is already set to -- collected into an array when
+  `True`, last value wins when `False` (the default) -- the same policy this
+  engine already applies to any other duplicate key, not a new one invented
+  for this. See the [DataFrame & Series Support
+  guide](https://amaye15.github.io/JSON-Tools-rs/guide/dataframe-support.html#auto-expanding-json-string-columns)
+  for the full behavior and examples.
+- **`normalise=True`/`target=...` reconstruction is now Arrow-native**
+  ([issue #35](https://github.com/amaye15/JSON-Tools-rs/issues/35)). Replaces
+  the old per-value Python-object-boxing reconstruction with one real Apache
+  Arrow `RecordBatch` built directly in Rust, from which every target is
+  derived. No new methods -- `normalise=True, target=...`'s existing surface
+  is unchanged, only what happens internally. Three real, user-visible
+  consequences:
+  - **List-valued columns (from `handle_key_collision(True)`) now build as
+    real, correctly-typed Arrow `List<T>` columns** instead of being
+    stringified -- verified directly that pyarrow/polars/pandas all consume
+    `List<T>` correctly; the old stringify-on-any-list behavior was
+    unnecessarily conservative.
+  - **Recognized date/datetime columns now build as real `Date32`/
+    `Timestamp` Arrow columns**, gated on `.convert_dates(True)`/
+    `.auto_convert_types(True)` -- this engine never independently
+    pattern-matches an ordinary string into a date, only promotes what the
+    core engine's own opt-in date recognition already normalized. A bare
+    date becomes `Date32`; a datetime becomes a UTC `Timestamp` (any input
+    timezone offset is converted, not just relabeled); mixing a date with a
+    datetime in the same column promotes to `Timestamp`, mixing either with
+    a non-date value stringifies the whole column, matching the existing
+    mixed-kind fallback rule.
+  - **`target="pandas"` output uses Arrow-backed dtypes**
+    (`int64[pyarrow]`, `string[pyarrow]`, ...) instead of classic numpy
+    dtypes -- genuinely zero-copy (measured: flat ~0.3ms regardless of row
+    count from 100K to 5M rows, vs. ~700ms+ at 5M rows for a real copy to
+    numpy dtypes), but a real, intentional breaking dtype change.
+  - **`target="pandas"` and `target="pyspark"` now require `pyarrow`
+    installed** (verified directly: there is no pyarrow-free route to get
+    genuinely Arrow-built data into a pandas DataFrame, even via a polars
+    intermediary). `target="polars"` is unaffected -- confirmed it stays
+    fully usable without pyarrow.
+
+### Performance
+- **`normalise=True`/`target=...` reconstruction: honest, modest end-to-end
+  win, ~1-4%** measured via interleaved A/B (100-4,000 columns, all four
+  targets) -- core flattening and input serialization, unchanged by this
+  round, dominate total wall time for typical column-heavy data, so
+  eliminating reconstruction's `PyObject` boxing moves the needle less than
+  the architecture change might suggest. Reported plainly rather than
+  oversold; the real deliverable of this round is column-typing correctness
+  (see Changed above), not raw speed.
+- **`.convert_dates(True)`'s new date-detection cost, measured directly**
+  (interleaved A/B, fresh subprocess per run): a real but small overhead,
+  **~0.1-4.5%** end-to-end across pandas/polars/pyarrow at 500-4,000
+  columns, including the adversarial worst case (date conversion enabled
+  but no column actually contains a date, so every string cell pays a
+  wasted `chrono` parse attempt for no typing benefit). Not charged at all
+  when `.convert_dates()`/`.auto_convert_types()` is off, the default.
+
 ### Removed (BREAKING)
 - **The JVM/Java/Scala binding has been removed entirely.** `jvm/` (the Maven
   project: Java source, tests, examples, `pom.xml`), `src/jvm.rs` (the JNI
