@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-## v0.9.20 (2026-07-30)
+## v0.9.20 (2026-07-31)
 
 ### Changed (BREAKING)
 - **DataFrame column expansion no longer prefixes with the source column's name** -- a column named `payload` holding `{"user": {"name": "Alice"}}` now expands to `user.name`, not `payload.user.name` (dict/struct-typed columns and JSON-string columns alike, in both `execute(df)` and `execute(df, normalise=True)`). Genuine nesting *within* a column's content still prefixes normally; array-valued columns are unaffected (`tags.0`, `tags.1`, ...). A key colliding across two columns resolves via the existing `.handle_key_collision()` setting. See [DataFrame & Series Support](../guide/dataframe-support.md#auto-expanding-json-string-columns).

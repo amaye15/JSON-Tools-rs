@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.9.20] - 2026-07-30
+## [0.9.20] - 2026-07-31
 
 ### Changed (BREAKING)
 - **DataFrame column expansion no longer prefixes with the source column's

@@ -379,7 +379,16 @@ Dual-licensed under either [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), a
 
 ## Changelog
 
-### v0.9.19 (Current)
+### v0.9.20 (Current)
+
+* **Changed (BREAKING)**: DataFrame column expansion no longer prefixes with the source column's name -- a column named `payload` holding `{"user": {"name": "Alice"}}` now expands to `user.name`, not `payload.user.name`. Genuine nesting *within* a column's content still prefixes normally; array-valued columns are unaffected.
+* **Changed (BREAKING)**: `normalise=True`/`target=...` reconstruction is now Arrow-native -- one real Arrow `RecordBatch` built directly in Rust, no new methods. `handle_key_collision(True)` list columns and recognized date/datetime columns (gated on `.convert_dates()`) now build as real, correctly-typed `List<T>`/`Date32`/`Timestamp` columns instead of being stringified. `target="pandas"` output uses Arrow-backed dtypes (a breaking dtype change); `target="pandas"`/`"pyspark"` now require `pyarrow` installed, `target="polars"` does not.
+* **Removed (BREAKING)**: the JVM/Java/Scala binding has been removed entirely -- the Rust core and Python bindings are unaffected; the published Maven Central artifact will not receive new versions. Databricks/Spark users should switch to the Python bindings wrapped in a `pandas_udf`.
+* **Performance**: `normalise=True`/`target=...` reconstruction ~1-4% faster end-to-end; `.convert_dates(True)`'s own detection cost measured at ~0.1-4.5%, not charged when off.
+
+See [CHANGELOG.md](CHANGELOG.md) for the full, itemized list.
+
+### v0.9.19
 
 * **Changed**: MSRV raised from 1.80 to 1.85, required for current `pyo3-arrow` releases (see below). Affects every source (`cargo add`) consumer.
 * **Performance**: `execute()` on a Polars `DataFrame`/PyArrow `Table` with an embedded JSON-string column is ~41-48% faster end-to-end -- detection/extraction now uses `pyo3-arrow`'s zero-copy Arrow buffer access instead of round-tripping through the DataFrame's native JSON writer (escape, then immediately unescape). Column ordering is preserved exactly as before. Scoped to Polars/PyArrow; plain pandas and PySpark are unaffected.
