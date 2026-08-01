@@ -231,7 +231,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Install dependencies
@@ -258,7 +258,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: python-${{ matrix.python-version }}
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
       - name: Install maturin and build
@@ -294,11 +294,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: python-pyspark
-      - uses: actions/setup-java@v5
+      - uses: actions/setup-java@v5.6.0
         with:
           distribution: temurin
           java-version: "17"
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Install maturin, pytest, pyspark, pandas, and pyarrow
