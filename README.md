@@ -379,7 +379,13 @@ Dual-licensed under either [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), a
 
 ## Changelog
 
-### v0.9.20 (Current)
+### v0.9.21 (Current)
+
+* **Performance**: three rounds of profiling-driven fixes to hot allocation paths. Date/datetime normalization output no longer re-parses a `chrono` format string per value (~10.6% faster on date-heavy `convert_dates(True)` workloads); `unflatten()` reuses one path buffer across a document instead of allocating one per key (~3.8% faster on wide documents); the Arrow-native `normalise()` engine no longer double-parses list-valued columns (~5-6% faster on `handle_key_collision(True)`-heavy data) and no longer re-clones already-seen keys when unioning columns across rows (~13% faster at issue #31's scale, 754 rows x 4,042 columns); DataFrame extraction no longer allocates an owned `String` per JSON key when un-nesting or splicing embedded columns (~6-9% faster per call, ~8.9% faster end-to-end for embedded-JSON-string-column DataFrames). No behavior changes.
+
+See [CHANGELOG.md](CHANGELOG.md) for the full, itemized list.
+
+### v0.9.20
 
 * **Changed (BREAKING)**: DataFrame column expansion no longer prefixes with the source column's name -- a column named `payload` holding `{"user": {"name": "Alice"}}` now expands to `user.name`, not `payload.user.name`. Genuine nesting *within* a column's content still prefixes normally; array-valued columns are unaffected.
 * **Changed (BREAKING)**: `normalise=True`/`target=...` reconstruction is now Arrow-native -- one real Arrow `RecordBatch` built directly in Rust, no new methods. `handle_key_collision(True)` list columns and recognized date/datetime columns (gated on `.convert_dates()`) now build as real, correctly-typed `List<T>`/`Date32`/`Timestamp` columns instead of being stringified. `target="pandas"` output uses Arrow-backed dtypes (a breaking dtype change); `target="pandas"`/`"pyspark"` now require `pyarrow` installed, `target="polars"` does not.

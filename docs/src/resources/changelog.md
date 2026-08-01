@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.9.21 (2026-08-01)
+
 ### Performance
 Profiling-driven follow-up round after v0.9.20 (`samply`/macOS `sample` against the Criterion stress suite, plus a targeted audit of the Arrow-native `normalise()` path). Three fixes, each verified via interleaved A/B:
 - **Date/datetime normalization output no longer re-parses a `chrono` format string per value** (`src/convert.rs`) -- hand-rolled formatting replaces `DateTime::format()`. **~10.6% faster** for date-heavy `convert_dates(True)` workloads.

@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.21] - 2026-08-01
+
 ### Performance
 Follow-up round after v0.9.20, driven by profiling (`samply`/macOS `sample`
 against the Criterion stress suite) plus a targeted code audit of the core
