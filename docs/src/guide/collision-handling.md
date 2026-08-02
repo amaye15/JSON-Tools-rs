@@ -60,6 +60,61 @@ Collision handling works during `.flatten()`, `.unflatten()`, and `.normal()` op
 > is backed by a hash map internally, so treat the array as an unordered bag of the
 > colliding values, not a positional record of which key contributed which value.
 
+## Consistent Shape Across Documents: `always_array_keys`
+
+A key's scalar-vs-array shape from `.handle_key_collision(true)` depends on
+whether a collision actually happened *in that specific document*: a key
+that collides in some rows of a batch (e.g. because of `.key_replacement()`)
+but not others ends up a plain value in some results and an array in
+others. That's awkward for anything expecting a stable schema -- including
+building a DataFrame column from the results, or [`normalise()`](dataframe-support.md)'s
+own column typing, which needs every row's value to already be
+array-shaped to resolve a column to `List<T>`.
+
+`.always_array_keys([...])` names flattened key names that must **always**
+render as an array, even when only one value is present in a given
+document -- independent of `.handle_key_collision()`:
+
+```rust
+let result = JSONTools::new()
+    .flatten()
+    .key_replacement("r'(User|Admin)_'", "")
+    .always_array_keys(["name"])
+    .execute(json)?;
+```
+
+```python
+result = (jt.JSONTools()
+    .flatten()
+    .key_replacement("r'(User|Admin)_'", "")
+    .always_array_keys(["name"])
+    .execute(data)
+)
+```
+
+```json
+// Document with a collision -- same as handle_key_collision(true) alone
+{"User_name": "John", "Admin_name": "Jane"}  ->  {"name": ["John", "Jane"]}
+
+// Document with NO collision -- would be a bare string without always_array_keys;
+// wrapped into a one-element array instead
+{"User_name": "John"}  ->  {"name": ["John"]}
+```
+
+A document that doesn't have the key at all is unaffected -- the key stays
+absent, it is never injected. Keys not named in `always_array_keys` keep
+their ordinary behavior (governed by `.handle_key_collision()`).
+
+Matched against the *final* flattened key name -- the same name
+`.handle_key_collision()` resolves collisions on -- and works for all
+operations (`.flatten()`, `.unflatten()`, `.normal()`) and for
+`normalise()`/DataFrame input, since those build on top of `.flatten()`.
+
+This is also the way to *guarantee* `normalise()` resolves a column to
+`List<T>` even when a particular batch happens to have zero collisions for
+it -- without `always_array_keys`, `normalise()` only promotes a column to
+`List<T>` once at least one row in that batch actually collides.
+
 ## Examples
 
 ### Easy: two colliding keys

@@ -64,6 +64,7 @@ All methods consume `self` and return `Self` for chaining. Marked `#[must_use]`.
 | `.exclude_key(pattern)` | `impl Into<String>` | -- | Drop any key (and its entire subtree) whose name contains `pattern` (literal by default, `r'...'` for regex); additive |
 | `.exclude_value(pattern)` | `impl Into<String>` | -- | Drop a key-value pair whose (scalar leaf) value contains `pattern`; additive |
 | `.handle_key_collision(flag)` | `bool` | `false` | Collect colliding keys into arrays |
+| `.always_array_keys(keys)` | `impl IntoIterator<Item = impl Into<String>>` | `[]` | Final flattened key names that must always render as an array, even with one value -- consistent shape across documents regardless of `.handle_key_collision()` |
 | `.auto_convert_types(flag)` | `bool` | `false` | Auto-convert string values to native types (all 4 categories below, default behavior) |
 | `.convert_dates(flag)` / `.convert_dates_config(cfg)` | `bool` / `DateConversionConfig` | `false` | Date/datetime conversion, independently toggleable/customizable |
 | `.convert_nulls(flag)` / `.convert_nulls_config(cfg)` | `bool` / `NullConversionConfig` | `false` | Null-string conversion, independently toggleable/customizable |

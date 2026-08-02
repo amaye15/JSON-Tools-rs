@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Added
+- **`.always_array_keys([...])`** -- flattened key names that must always render as a JSON array, even with only one value present, keeping a key's shape consistent across every document/row of a batch regardless of `.handle_key_collision()`. Also guarantees `normalise()` resolves that column to `List<T>` even when a particular batch has zero collisions for it. See the [Key Collision Handling guide](../guide/collision-handling.md#consistent-shape-across-documents-always_array_keys).
+
+### Performance
+Audited every clone/copy site in the codebase (the core engine had zero `.clone()` calls already). `PyJsonOutput.get_single()`/`get_multiple()`/`__str__()` (the `execute_to_output()` API) cloned a result before PyO3's own unavoidable copy at the FFI boundary -- fixed to build the Python object directly from the borrowed value. **Measured ~25-27% faster**, confirmed via interleaved A/B, zero behavior change. Two further changes made on the same reasoning (an `unflatten.rs` allocation avoidance, a `flatten.rs` capacity hint) were measured the same way and honestly did not hold up as real wins -- reported plainly rather than claimed.
+
 ## v0.9.21 (2026-08-01)
 
 ### Performance

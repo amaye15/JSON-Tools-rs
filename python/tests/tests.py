@@ -181,6 +181,96 @@ class TestCollisionHandling:
         assert "" not in result["name"]
 
 
+class TestAlwaysArrayKeys:
+    """Test always_array_keys: consistent scalar-or-array shape across documents."""
+
+    def test_wraps_single_value_into_array(self):
+        """A key with no collision in this document still becomes a one-element array."""
+        tools = (
+            json_tools_rs.JSONTools()
+            .flatten()
+            .key_replacement("r'(User|Admin)_'", "")
+            .always_array_keys(["name"])
+        )
+        result = tools.execute({"User_name": "John"})
+        assert result["name"] == ["John"]
+
+    def test_still_collects_real_collisions(self):
+        tools = (
+            json_tools_rs.JSONTools()
+            .flatten()
+            .key_replacement("r'(User|Admin)_'", "")
+            .always_array_keys(["name"])
+        )
+        result = tools.execute({"User_name": "John", "Admin_name": "Jane"})
+        assert sorted(result["name"]) == ["Jane", "John"]
+
+    def test_works_without_handle_key_collision(self):
+        """always_array_keys forces array shape for its own key even when
+        handle_key_collision is off; a key not named still last-wins."""
+        tools = (
+            json_tools_rs.JSONTools()
+            .flatten()
+            .key_replacement("r'(User|Admin)_'", "")
+            .always_array_keys(["name"])
+            .handle_key_collision(False)
+        )
+        result = tools.execute(
+            {"User_name": "John", "Admin_name": "Jane", "User_age": 1, "Admin_age": 2}
+        )
+        assert sorted(result["name"]) == ["Jane", "John"]
+        assert result["age"] == 2  # not always-array -> last-wins
+
+    def test_absent_key_stays_absent(self):
+        tools = json_tools_rs.JSONTools().flatten().always_array_keys(["name"])
+        result = tools.execute({"other": 1})
+        assert "name" not in result
+        assert result["other"] == 1
+
+    def test_unrelated_keys_unaffected(self):
+        tools = json_tools_rs.JSONTools().flatten().always_array_keys(["name"])
+        result = tools.execute({"id": 42})
+        assert result["id"] == 42
+        assert not isinstance(result["id"], list)
+
+    def test_consistent_shape_across_batch(self):
+        """The real motivating scenario: the same field collides in one row
+        of a batch but not another -- without always_array_keys this would
+        be str in one result and list in the other."""
+        tools = (
+            json_tools_rs.JSONTools()
+            .flatten()
+            .key_replacement("r'(User|Admin)_'", "")
+            .always_array_keys(["name"])
+        )
+        data = [
+            {"User_name": "John", "Admin_name": "Jane"},
+            {"User_name": "Bob"},
+        ]
+        results = tools.execute(data)
+        assert sorted(results[0]["name"]) == ["Jane", "John"]
+        assert results[1]["name"] == ["Bob"]
+        assert all(isinstance(r["name"], list) for r in results)
+
+    def test_normalise_gets_list_type_even_with_zero_collisions(self):
+        """The key benefit for normalise(): a column becomes List<T> even
+        when NO row in this particular batch ever collides, because
+        always_array_keys forces array shape at the flatten() level before
+        normalise()'s own column-typing ever runs."""
+        pa = pytest.importorskip("pyarrow")
+
+        tools = (
+            json_tools_rs.JSONTools()
+            .flatten()
+            .key_replacement("r'(User|Admin)_'", "")
+            .always_array_keys(["name"])
+        )
+        data = [{"User_name": "Solo1"}, {"User_name": "Solo2"}]
+        table = tools.execute(data, normalise=True, target="pyarrow")
+        assert table.schema.field("name").type == pa.list_(pa.string())
+        assert table.column("name").to_pylist() == [["Solo1"], ["Solo2"]]
+
+
 class TestAdvancedConfiguration:
     """Test advanced configuration options"""
 

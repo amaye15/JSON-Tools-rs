@@ -251,6 +251,7 @@ There are also narrative walkthroughs for a quicker first read:
 | `.exclude_key(pattern)` | Drop a key (and its entire subtree) matching a pattern | `.exclude_key("crypto")` |
 | `.exclude_value(pattern)` | Drop a key-value pair whose value matches a pattern | `.exclude_value("banned")` |
 | `.handle_key_collision(bool)` | Collect colliding keys into arrays | `.handle_key_collision(true)` |
+| `.always_array_keys([...])` | Always render these flattened keys as arrays, even with one value -- consistent shape across documents | `.always_array_keys(["name"])` |
 | `.auto_convert_types(bool)` | Convert types (nums, bools, dates, nulls) -- all 4 categories, default behavior | `.auto_convert_types(true)` |
 | `.convert_dates/nulls/booleans/numbers(bool)` | Convert types independently per category, with optional `_config(...)` customization | `.convert_numbers(true)` |
 | `.parallel_threshold(n)` | Min batch size for parallelism | `.parallel_threshold(500)` |
@@ -379,7 +380,13 @@ Dual-licensed under either [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), a
 
 ## Changelog
 
-### v0.9.21 (Current)
+### Unreleased
+
+* **Added**: `.always_array_keys([...])` -- flattened key names that must always render as a JSON array, even with only one value present, keeping a key's shape consistent across every document/row of a batch regardless of `.handle_key_collision()`. Also guarantees `normalise()` resolves that column to `List<T>` even when a particular batch has zero collisions for it.
+
+See [CHANGELOG.md](CHANGELOG.md) for the full, itemized list.
+
+### v0.9.21
 
 * **Performance**: three rounds of profiling-driven fixes to hot allocation paths. Date/datetime normalization output no longer re-parses a `chrono` format string per value (~10.6% faster on date-heavy `convert_dates(True)` workloads); `unflatten()` reuses one path buffer across a document instead of allocating one per key (~3.8% faster on wide documents); the Arrow-native `normalise()` engine no longer double-parses list-valued columns (~5-6% faster on `handle_key_collision(True)`-heavy data) and no longer re-clones already-seen keys when unioning columns across rows (~13% faster at issue #31's scale, 754 rows x 4,042 columns); DataFrame extraction no longer allocates an owned `String` per JSON key when un-nesting or splicing embedded columns (~6-9% faster per call, ~8.9% faster end-to-end for embedded-JSON-string-column DataFrames). No behavior changes.
 

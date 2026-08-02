@@ -222,6 +222,13 @@ can't produce clean scalar columns).
 >   stringified column -- Arrow's `Union` type is the only real alternative and
 >   was confirmed unusable across pandas/polars (both reject it outright), not
 >   a shortcut taken here.
+> - A column only resolves to `List<T>` once *at least one row in that batch*
+>   actually collides -- a batch where a key never happens to collide gets a
+>   plain scalar column, even if that same key collides in some other batch.
+>   If you need a column to always be `List<T>` regardless of any particular
+>   batch's luck, use [`.always_array_keys([...])`](collision-handling.md#consistent-shape-across-documents-always_array_keys)
+>   -- it forces that key's shape at the `.flatten()` level, before
+>   `normalise()`'s column typing ever runs.
 > - **A recognized date/datetime column gets a real `Date32`/`Timestamp` type
 >   only when `.convert_dates(True)`/`.auto_convert_types(True)` is enabled** --
 >   this engine never independently pattern-matches an ordinary string into a

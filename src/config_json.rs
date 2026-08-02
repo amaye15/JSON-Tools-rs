@@ -41,6 +41,8 @@ pub(crate) struct Config {
     pub(crate) remove_empty_objects: Option<bool>,
     pub(crate) remove_empty_arrays: Option<bool>,
     pub(crate) handle_key_collision: Option<bool>,
+    #[serde(default)]
+    pub(crate) always_array_keys: Vec<String>,
     pub(crate) auto_convert_types: Option<bool>,
     pub(crate) convert_dates: Option<bool>,
     pub(crate) date_conversion_config: Option<DateConversionConfigWire>,
@@ -143,6 +145,9 @@ pub(crate) fn build_tools(config_json: &str) -> Result<JSONTools, JsonToolsError
     }
     if let Some(v) = config.handle_key_collision {
         tools = tools.handle_key_collision(v);
+    }
+    if !config.always_array_keys.is_empty() {
+        tools = tools.always_array_keys(config.always_array_keys);
     }
     if let Some(v) = config.auto_convert_types {
         tools = tools.auto_convert_types(v);

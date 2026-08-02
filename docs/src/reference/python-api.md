@@ -281,6 +281,34 @@ result = (jt.JSONTools()
 # {"name": ["Alice", "Bob"]}
 ```
 
+#### `.always_array_keys(keys)`
+
+```python
+tools.always_array_keys(keys: Sequence[str]) -> JSONTools
+```
+
+Flattened key names that must always render as a JSON array, even when only one
+value is present in a given document -- keeps a key's scalar-vs-array shape
+consistent across every document/row of a batch, not just documents where a
+collision happened to occur. Independent of `.handle_key_collision()`: a key
+named here always gets full array treatment. See [Key Collision
+Handling](../guide/collision-handling.md#consistent-shape-across-documents-always_array_keys)
+for the full explanation, including why this matters for `normalise()`'s
+`List<T>` column typing.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `keys` | `Sequence[str]` | `[]` | Final flattened key names to always wrap in an array |
+
+```python
+result = (jt.JSONTools()
+    .flatten()
+    .key_replacement("r'(User|Admin)_'", "")
+    .always_array_keys(["name"])
+    .execute({"User_name": "John"}))
+# {"name": ["John"]}  -- wrapped even though nothing collided here
+```
+
 #### `.auto_convert_types(flag)`
 
 ```python

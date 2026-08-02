@@ -1121,6 +1121,112 @@ mod unit_tests {
         assert_eq!(parsed["email"], "jane@example.com");
     }
 
+    // ===== ALWAYS-ARRAY-KEYS TESTS =====
+
+    #[test]
+    fn test_always_array_keys_wraps_single_value() {
+        // No collision in this document at all, but "name" is declared
+        // always-array -- it must still come out as a one-element array,
+        // not a bare scalar (the whole point: consistent shape across
+        // documents regardless of whether a given one happens to collide).
+        let json = r#"{"User_name": "John"}"#;
+        let result = JSONTools::new()
+            .flatten()
+            .key_replacement("r'(User|Admin)_'", "")
+            .always_array_keys(["name"])
+            .execute(json)
+            .unwrap();
+        let flattened = extract_single(result);
+        let parsed: Value = serde_json::from_str(&flattened).unwrap();
+        let arr = parsed["name"].as_array().unwrap();
+        assert_eq!(arr, &[Value::String("John".to_string())]);
+    }
+
+    #[test]
+    fn test_always_array_keys_still_collects_real_collisions() {
+        let json = r#"{"User_name": "John", "Admin_name": "Jane"}"#;
+        let result = JSONTools::new()
+            .flatten()
+            .key_replacement("r'(User|Admin)_'", "")
+            .always_array_keys(["name"])
+            .execute(json)
+            .unwrap();
+        let flattened = extract_single(result);
+        let parsed: Value = serde_json::from_str(&flattened).unwrap();
+        let mut values: Vec<&str> = parsed["name"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        values.sort();
+        assert_eq!(values, vec!["Jane", "John"]);
+    }
+
+    #[test]
+    fn test_always_array_keys_works_without_handle_key_collision() {
+        // always_array_keys must force full array-collection for its own
+        // named key even when handle_key_collision is off (default) -- a
+        // key NOT named here still falls back to last-wins in that case.
+        let json = r#"{"User_name": "John", "Admin_name": "Jane", "User_age": 1, "Admin_age": 2}"#;
+        let result = JSONTools::new()
+            .flatten()
+            .key_replacement("r'(User|Admin)_'", "")
+            .always_array_keys(["name"])
+            .handle_key_collision(false)
+            .execute(json)
+            .unwrap();
+        let flattened = extract_single(result);
+        let parsed: Value = serde_json::from_str(&flattened).unwrap();
+
+        let mut values: Vec<&str> = parsed["name"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        values.sort();
+        assert_eq!(values, vec!["Jane", "John"]);
+        // "age" was not declared always-array, so it keeps the ordinary
+        // no-collision-handling last-wins behavior.
+        assert_eq!(parsed["age"], 2);
+    }
+
+    #[test]
+    fn test_always_array_keys_absent_key_stays_absent() {
+        // A document that never has the always-array key at all must not
+        // have it injected -- shape consistency only applies to keys that
+        // are actually present.
+        let json = r#"{"other": 1}"#;
+        let result = JSONTools::new()
+            .flatten()
+            .always_array_keys(["name"])
+            .execute(json)
+            .unwrap();
+        let flattened = extract_single(result);
+        let parsed: Value = serde_json::from_str(&flattened).unwrap();
+        let obj = parsed.as_object().unwrap();
+        assert!(!obj.contains_key("name"));
+        assert_eq!(parsed["other"], 1);
+    }
+
+    #[test]
+    fn test_always_array_keys_unrelated_keys_unaffected() {
+        // A key not in always_array_keys, with no collision at all, stays
+        // a plain scalar -- confirms this is a per-key opt-in, not a global
+        // behavior change.
+        let json = r#"{"id": 42}"#;
+        let result = JSONTools::new()
+            .flatten()
+            .always_array_keys(["name"])
+            .execute(json)
+            .unwrap();
+        let flattened = extract_single(result);
+        let parsed: Value = serde_json::from_str(&flattened).unwrap();
+        assert_eq!(parsed["id"], 42);
+        assert!(!parsed["id"].is_array());
+    }
+
     #[test]
     fn test_collision_with_custom_separator() {
         let json = r#"{"User_name": "John", "Admin_name": "Jane"}"#;

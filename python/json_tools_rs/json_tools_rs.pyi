@@ -1,6 +1,6 @@
 """Type stubs for the json_tools_rs native extension module."""
 
-from typing import Any, Optional, Union
+from typing import Any, Optional, Sequence, Union
 
 class JsonToolsError(Exception):
     """Exception raised by JSON Tools operations."""
@@ -100,6 +100,10 @@ class JSONTools:
 
     def handle_key_collision(self, value: bool) -> "JSONTools":
         """Enable collision handling by collecting duplicate keys into arrays."""
+        ...
+
+    def always_array_keys(self, keys: Sequence[str]) -> "JSONTools":
+        """Flattened key names that must always render as an array, even with only one value -- keeps a key's shape consistent across documents/rows regardless of handle_key_collision. Matched against the final flattened key name."""
         ...
 
     def auto_convert_types(self, enable: bool) -> "JSONTools":

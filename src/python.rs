@@ -358,9 +358,16 @@ impl PyJsonOutput {
     }
 
     /// Get the single result (raises ValueError if multiple)
-    fn get_single(&self) -> PyResult<String> {
+    ///
+    /// Builds the Python string directly from the borrowed Rust value --
+    /// avoids cloning the (potentially large) result string on the Rust side
+    /// before PyO3's own unavoidable Rust->Python string copy at the FFI
+    /// boundary, matching `to_python()`'s existing zero-extra-copy pattern
+    /// (this method's own doc comment above already promises avoiding a
+    /// clone; the accessor should keep that promise too).
+    fn get_single(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         match &self.inner {
-            JsonOutput::Single(result) => Ok(result.clone()),
+            JsonOutput::Single(result) => Ok(result.into_pyobject(py)?.into_any().unbind()),
             JsonOutput::Multiple(_) => Err(PyValueError::new_err(
                 "Result contains multiple JSON strings, use get_multiple() instead",
             )),
@@ -368,12 +375,16 @@ impl PyJsonOutput {
     }
 
     /// Get the multiple results (raises ValueError if single)
-    fn get_multiple(&self) -> PyResult<Vec<String>> {
+    ///
+    /// See `get_single`'s doc comment -- same avoided-clone reasoning,
+    /// more consequential here since it's a `Vec<String>` (every result
+    /// string in the batch) rather than one string.
+    fn get_multiple(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         match &self.inner {
             JsonOutput::Single(_) => Err(PyValueError::new_err(
                 "Result contains single JSON string, use get_single() instead",
             )),
-            JsonOutput::Multiple(results) => Ok(results.clone()),
+            JsonOutput::Multiple(results) => Ok(results.into_pyobject(py)?.into_any().unbind()),
         }
     }
 
@@ -392,10 +403,13 @@ impl PyJsonOutput {
         }
     }
 
-    fn __str__(&self) -> String {
+    fn __str__(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         match &self.inner {
-            JsonOutput::Single(result) => result.clone(),
-            JsonOutput::Multiple(results) => format!("{:?}", results),
+            JsonOutput::Single(result) => Ok(result.into_pyobject(py)?.into_any().unbind()),
+            JsonOutput::Multiple(results) => Ok(format!("{:?}", results)
+                .into_pyobject(py)?
+                .into_any()
+                .unbind()),
         }
     }
 }
@@ -1583,6 +1597,35 @@ impl PyJSONTools {
     #[inline]
     pub fn handle_key_collision(slf: PyRef<'_, Self>, value: bool) -> PyResult<PyRef<'_, Self>> {
         py_builder_method!(slf, tools, tools.handle_key_collision(value))
+    }
+
+    /// Flattened key names that must always render as a JSON array, even
+    /// when only one value is present in a given document.
+    ///
+    /// Without this, a key's scalar-vs-array shape depends on whether a
+    /// collision actually happened *in that specific document*: a key that
+    /// collides in some rows of a batch/DataFrame (e.g. because of
+    /// key_replacement()) but not others ends up a str in some results and
+    /// a list in others -- an inconsistent shape that's awkward for any
+    /// downstream consumer expecting a stable schema, including building a
+    /// DataFrame column from the results, or normalise()'s own column
+    /// typing (a column that's consistently List<T> needs every row's
+    /// value to already be array-shaped -- this is exactly how to get
+    /// that). Naming a key here guarantees every document that has that
+    /// key emits it as an array, regardless of handle_key_collision().
+    ///
+    /// Matched against the *final* flattened key name (after
+    /// separator-joining and any key transforms) -- the same name
+    /// handle_key_collision() resolves collisions on. Works for all
+    /// operations (flatten, unflatten, normal) and for normalise()/
+    /// DataFrame input, since those are built on top of flatten().
+    ///
+    /// Args:
+    ///     keys: Iterable of flattened key names that must always be arrays.
+    #[pyo3(text_signature = "($self, keys)")]
+    #[inline]
+    pub fn always_array_keys(slf: PyRef<'_, Self>, keys: Vec<String>) -> PyResult<PyRef<'_, Self>> {
+        py_builder_method!(slf, tools, tools.always_array_keys(keys))
     }
 
     /// Enable automatic type conversion from strings to numbers and booleans

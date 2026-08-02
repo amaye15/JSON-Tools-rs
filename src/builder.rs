@@ -44,6 +44,7 @@ impl ProcessingConfig {
             },
             collision: CollisionConfig {
                 handle_collisions: tools.handle_key_collision,
+                always_array_keys: tools.always_array_keys.clone(),
             },
             replacements: ReplacementConfig {
                 key_replacements: tools.key_replacements.clone(),
@@ -88,6 +89,13 @@ pub struct JSONTools {
     value_exclusions: SmallVec<[String; 2]>,
     /// Separator for nested keys (default: ".")
     separator: String,
+    /// Flattened key names that must always render as an array -- see
+    /// `CollisionConfig::always_array_keys`'s doc comment. `SmallVec`
+    /// (stack-allocated up to 4 keys, the common case; a linear scan beats a
+    /// hash lookup for the tiny, developer-configured lists this holds --
+    /// measured, see `always_array_keys`'s own doc comment) -- zero
+    /// allocation for callers who don't use the feature.
+    always_array_keys: SmallVec<[String; 4]>,
 
     // Medium fields (8 bytes on 64-bit systems)
     /// Minimum batch size to use parallel processing (default: 100)
@@ -137,6 +145,7 @@ impl Default for JSONTools {
             key_exclusions: SmallVec::new(),
             value_exclusions: SmallVec::new(),
             separator: ".".to_string(),
+            always_array_keys: SmallVec::new(),
             // Medium fields — use shared LazyLock statics from config module
             parallel_threshold: *DEFAULT_PARALLEL_THRESHOLD,
             num_threads: *DEFAULT_NUM_THREADS,
@@ -422,6 +431,49 @@ impl JSONTools {
     #[must_use]
     pub fn handle_key_collision(mut self, value: bool) -> Self {
         self.handle_key_collision = value;
+        self
+    }
+
+    /// Flattened key names that must always render as a JSON array, even when
+    /// only one value is present in a given document.
+    ///
+    /// Without this, a key's scalar-vs-array shape depends on whether a
+    /// collision actually happened *in that specific document*: a key that
+    /// collides in some documents of a batch (e.g. because of
+    /// [`key_replacement`](Self::key_replacement)) but not others ends up a
+    /// `str` in some outputs and a `list` in others -- an inconsistent shape
+    /// that's awkward for any downstream consumer expecting a stable schema
+    /// (including building a DataFrame column from the results). Naming a key
+    /// here guarantees every document that has that key emits it as an array
+    /// -- `[value]` for one value, the full collected array for more --
+    /// regardless of [`handle_key_collision`](Self::handle_key_collision).
+    ///
+    /// Matched against the *final* flattened key name (after separator-joining
+    /// and any key transforms), the same name [`handle_key_collision`](Self::handle_key_collision)
+    /// resolves collisions on. Works for all operations (flatten, unflatten, normal).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use json_tools_rs::JSONTools;
+    ///
+    /// let tools = JSONTools::new()
+    ///     .flatten()
+    ///     .key_replacement("r'(User|Admin)_'", "")
+    ///     .always_array_keys(["name"]);
+    ///
+    /// // Collides in this document -> already an array without this option.
+    /// let with_collision = tools.execute(r#"{"User_name": "a", "Admin_name": "b"}"#).unwrap();
+    /// // No collision in this one -> without always_array_keys this would be a bare string.
+    /// let without_collision = tools.execute(r#"{"User_name": "a"}"#).unwrap();
+    /// ```
+    #[must_use]
+    pub fn always_array_keys<I, S>(mut self, keys: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.always_array_keys = keys.into_iter().map(Into::into).collect();
         self
     }
 
@@ -915,6 +967,7 @@ impl JSONTools {
             remove_empty_objects: Some(self.remove_empty_objects),
             remove_empty_arrays: Some(self.remove_empty_arrays),
             handle_key_collision: Some(self.handle_key_collision),
+            always_array_keys: self.always_array_keys.iter().cloned().collect(),
             auto_convert_types: None,
             convert_dates: Some(self.date_conversion.enabled),
             date_conversion_config: Some(DateConversionConfigWire {

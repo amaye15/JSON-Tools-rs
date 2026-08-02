@@ -7,6 +7,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`.always_array_keys([...])`** -- flattened key names that must always
+  render as a JSON array, even when only one value is present in a given
+  document. `.handle_key_collision(true)` alone makes a key's shape depend
+  on whether a collision actually happened *in that specific document*: a
+  key that collides in some rows of a batch (e.g. because of
+  `.key_replacement()`) but not others ends up a plain value in some
+  results and an array in others -- an inconsistent shape that's awkward
+  for anything expecting a stable schema, including
+  [`normalise()`](https://amaye15.github.io/JSON-Tools-rs/guide/dataframe-support.html)'s
+  own column typing, which only resolves a column to `List<T>` once at
+  least one row in a given batch actually collides. Naming a key in
+  `always_array_keys` guarantees every document with that key emits it as
+  an array (`[value]` for one value, the full collected array for more),
+  independent of `.handle_key_collision()`, and -- since it acts at the
+  `.flatten()` level -- flows through to `normalise()` automatically with
+  no changes needed there: a column can now be guaranteed `List<T>` even
+  when a particular batch happens to have zero collisions for it. Matched
+  against the *final* flattened key name; works for `.flatten()`,
+  `.unflatten()`, `.normal()`, and `normalise()`/DataFrame input. See the
+  [Key Collision Handling
+  guide](https://amaye15.github.io/JSON-Tools-rs/guide/collision-handling.html#consistent-shape-across-documents-always_array_keys).
+
+### Performance
+Audited every `.clone()`/copy site across the codebase (the core engine --
+`flatten.rs`/`unflatten.rs`/`convert.rs`/`transform.rs` -- already had zero
+`.clone()` calls; activity was concentrated in `python.rs`/`builder.rs`).
+Three fixes, each measured via interleaved A/B (alternating rebuilds,
+multiple rounds) rather than assumed from reasoning alone:
+- **`PyJsonOutput.get_single()`/`get_multiple()`/`__str__()`** (`src/python.rs`,
+  the `execute_to_output()` API) cloned the Rust `String`/`Vec<String>`
+  result before PyO3's own unavoidable Rust->Python copy at the FFI
+  boundary -- two full copies where one suffices, building the Python
+  object directly from the borrowed value instead (matching the sibling
+  `to_python()` method's existing pattern). **Confirmed ~25-27% faster**,
+  consistent across 3 interleaved rounds. Zero observable behavior change
+  (same Python types/values/error paths, verified directly).
+- Two further changes made on the same reasoning -- `unflatten.rs`'s
+  array-to-object fallback path avoiding a heap `String` for array indices
+  (via the crate's existing stack-buffer `IntBuf` formatter), and a missing
+  capacity hint on `flatten.rs`'s `collect_child_ranges` -- were measured
+  the same rigorous way and **did not hold up**: the `IntBuf` change showed
+  no measurable difference (within noise), and the capacity hint showed
+  only a weak, inconsistent signal (~1-2%, favorable in 6/8 rounds).
+  Reported honestly rather than claimed as wins; kept since they're
+  correct and harmless, not because they're proven faster.
+
 ## [0.9.21] - 2026-08-01
 
 ### Performance

@@ -8,6 +8,7 @@
 
 use std::borrow::Cow;
 
+use crate::flatten::IntBuf;
 use crate::fxhash::{FxHashMap, FxIndexMap};
 use compact_str::CompactString;
 use memchr::{memchr, memmem};
@@ -858,10 +859,11 @@ fn set_nested_value_recursive<'a>(
             } else {
                 // Non-numeric key in array context — convert array to object
                 let mut obj: ObjectMap<'a> = ObjectMap::default();
+                let mut itoa_buf = IntBuf::new();
                 for (i, item) in arr.iter_mut().enumerate() {
                     if !matches!(item, UnflatNode::Null) {
                         let taken = std::mem::replace(item, UnflatNode::Null);
-                        obj.insert(CompactString::from(i.to_string()), taken);
+                        obj.insert(CompactString::from(itoa_buf.format(i)), taken);
                     }
                 }
                 obj.insert(CompactString::from(next_part), UnflatNode::Null);

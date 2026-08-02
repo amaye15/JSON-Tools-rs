@@ -114,6 +114,16 @@ impl FilteringConfig {
 pub struct CollisionConfig {
     /// Handle key collisions by collecting values into arrays
     pub handle_collisions: bool,
+    /// Flattened key names that must always render as a JSON array, even
+    /// when only one value is present in a given document -- so a field
+    /// that collides in *some* documents of a batch but not others (e.g.
+    /// because of `key_replacement`) has a consistent scalar-or-array shape
+    /// across every document, not just within one. Matched against the
+    /// final flattened key (after separator-joining and any key
+    /// transforms), independent of `handle_collisions`: a key listed here
+    /// always gets array treatment (collecting every colliding value, not
+    /// just last-wins) regardless of that flag.
+    pub always_array_keys: SmallVec<[String; 4]>,
 }
 
 impl CollisionConfig {
@@ -129,9 +139,26 @@ impl CollisionConfig {
         self
     }
 
+    /// Set the flattened key names that must always render as an array --
+    /// see `always_array_keys`'s own doc comment.
+    #[must_use]
+    pub fn always_array_keys<I, S>(mut self, keys: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.always_array_keys = keys.into_iter().map(Into::into).collect();
+        self
+    }
+
     /// Check if any collision handling is enabled
     pub fn has_collision_handling(&self) -> bool {
         self.handle_collisions
+    }
+
+    /// Check if any always-array keys are configured.
+    pub fn has_always_array_keys(&self) -> bool {
+        !self.always_array_keys.is_empty()
     }
 }
 
