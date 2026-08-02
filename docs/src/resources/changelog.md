@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.9.22 (2026-08-02)
+
 ### Added
 - **`.always_array_keys([...])`** -- flattened key names that must always render as a JSON array, even with only one value present, keeping a key's shape consistent across every document/row of a batch regardless of `.handle_key_collision()`. Also guarantees `normalise()` resolves that column to `List<T>` even when a particular batch has zero collisions for it. See the [Key Collision Handling guide](../guide/collision-handling.md#consistent-shape-across-documents-always_array_keys).
 

@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.22] - 2026-08-02
+
 ### Added
 - **`.always_array_keys([...])`** -- flattened key names that must always
   render as a JSON array, even when only one value is present in a given
