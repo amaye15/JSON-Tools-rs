@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Performance
+Follow-up zero-copy/allocation audit of the core engine (`flatten.rs`,
+`unflatten.rs`, `convert.rs`) and the PyO3/Arrow boundary (`python.rs`).
+Three changes, each measured via interleaved A/B (alternating rebuilds,
+multiple rounds, real call path):
+- **`auto_convert_types`'s converted-value chain (`convert.rs`) no longer
+  heap-allocates for short results.** `try_convert_string_to_json_bytes[_configured]`/
+  `convert_string_for_mode` returned `Cow<str>`, whose `Owned` variant is a
+  `String` -- every converted value (even `"true"` or a single-digit number)
+  heap-allocated regardless of length. Replaced with a new `ConvertedStr`
+  (`Borrowed(&str)`/`Owned(CompactString)`) so short computed values (bools,
+  small/whole numbers -- the common case) stay on the stack; `f64_to_json_bytes`
+  now writes integers directly into the `CompactString` instead of via
+  `.to_string()`. **Confirmed ~5-13% faster** across 3 interleaved rounds:
+  ~11-13% for `.flatten()` with a key transform configured (which also
+  benefits from the next change below), ~3-9% for `.normal()` mode alone
+  (isolating this change specifically).
+- **`flatten.rs`'s/`unflatten.rs`'s collision-handling value storage
+  (`ValueRef::Owned`) switched from `String` to `CompactString`** for the
+  same reason -- only reachable when a key transform (lowercasing/
+  replacement/collision-handling) is configured together with value
+  replacement or `auto_convert_types`. Included in the ~11-13% flatten
+  figure above (not independently isolated, since both changes sit on the
+  same call path).
+- **`python.rs`'s zero-copy Arrow JSON-string-column extraction
+  (`extract_arrow_string_values`) switched `Vec<Option<String>>` to
+  `Vec<Option<CompactString>>`.** Measured across 3 interleaved rounds
+  (Polars, short embedded-JSON cells -- the best case for this change) and
+  found **no consistent signal**: -1.8%, +0.5%, +9.2% across the three
+  rounds, i.e. within noise and not distinguishable from zero. Kept since
+  it's correct and consistent with the rest of the codebase's short-string
+  handling, not because it's a proven win -- reported honestly rather than
+  claimed as a win, matching this project's stated measurement discipline.
+
 ## [0.9.22] - 2026-08-02
 
 ### Added

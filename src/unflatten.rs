@@ -324,11 +324,15 @@ fn extract_value<'a>(
                                 type_conversion_mode,
                                 &config.type_conversion,
                             ) {
-                                return ValueRef::Owned(converted.into_owned());
+                                return ValueRef::Owned(CompactString::from(converted));
                             }
                         }
                         let escaped = escape_json_string(&replaced);
-                        return ValueRef::Owned(format!("\"{}\"", escaped));
+                        let mut buf = CompactString::with_capacity(escaped.len() + 2);
+                        buf.push('"');
+                        buf.push_str(&escaped);
+                        buf.push('"');
+                        return ValueRef::Owned(buf);
                     }
                 }
 
@@ -339,7 +343,7 @@ fn extract_value<'a>(
                         type_conversion_mode,
                         &config.type_conversion,
                     ) {
-                        return ValueRef::Owned(converted.into_owned());
+                        return ValueRef::Owned(CompactString::from(converted));
                     }
                 }
             }
@@ -456,7 +460,7 @@ fn handle_entry_collisions<'a>(
                 })
                 .sum::<usize>()
                 + 2; // brackets
-            let mut array_json = String::with_capacity(estimated_len);
+            let mut array_json = CompactString::with_capacity(estimated_len);
             array_json.push('[');
             for (j, &idx) in indices.iter().enumerate() {
                 if j > 0 {

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Performance
+Follow-up zero-copy audit of `convert.rs`/`flatten.rs`/`unflatten.rs`/`python.rs`. `auto_convert_types`'s converted-value chain switched from `Cow<str>` (always heap-allocates when owned) to a new `ConvertedStr` type backed by `CompactString`, so short converted values (bools, small numbers) stay on the stack; `flatten.rs`'s/`unflatten.rs`'s collision-handling value storage got the same treatment. **Confirmed ~11-13% faster** for `.flatten()` with a key transform configured, **~3-9% faster** for `.normal()` mode alone, both across 3 interleaved rounds. A third change (Arrow JSON-string-column extraction in `python.rs`, same `String`→`CompactString` idea) was measured the same way and showed **no consistent signal** (-1.8%/+0.5%/+9.2% across 3 rounds) -- kept as correct but not claimed as a win.
+
 ## v0.9.22 (2026-08-02)
 
 ### Added

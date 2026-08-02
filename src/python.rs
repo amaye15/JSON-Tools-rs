@@ -32,6 +32,8 @@ use arrow_array::{Array, ArrayRef, LargeStringArray, RecordBatch, StringArray, S
 #[cfg(feature = "python")]
 use arrow_schema::{DataType, Field, Schema};
 #[cfg(feature = "python")]
+use compact_str::CompactString;
+#[cfg(feature = "python")]
 use pyo3_arrow::{PyChunkedArray, PyTable};
 #[cfg(feature = "python")]
 use std::sync::Arc;
@@ -994,8 +996,18 @@ fn dataframe_drop_columns<'py>(
 /// text (a dict/struct-typed column is already handled directly by the
 /// flatten engine; a numeric/bool/nested-list column can't hold JSON text at
 /// all).
+/// `CompactString` rather than `String` per cell: short JSON-string-column
+/// values (short embedded objects, short scalars) stay on the stack instead
+/// of heap-allocating, same tradeoff as this crate's other short-string
+/// hot paths (`CompactKeyBuilder`/`ValueRef::Owned`). Values long enough to
+/// exceed the 24-byte inline cap (larger embedded JSON blobs, the case this
+/// whole zero-copy path exists for) still heap-allocate exactly as before --
+/// this only removes the allocation for the shorter cells in a column, not
+/// all of them.
 #[cfg(feature = "python")]
-fn extract_arrow_string_values(col: &Bound<'_, PyAny>) -> PyResult<Option<Vec<Option<String>>>> {
+fn extract_arrow_string_values(
+    col: &Bound<'_, PyAny>,
+) -> PyResult<Option<Vec<Option<CompactString>>>> {
     let Ok(chunked) = col.extract::<PyChunkedArray>() else {
         return Ok(None);
     };
@@ -1003,15 +1015,15 @@ fn extract_arrow_string_values(col: &Bound<'_, PyAny>) -> PyResult<Option<Vec<Op
     for chunk in chunked.chunks() {
         if let Some(arr) = chunk.as_any().downcast_ref::<StringArray>() {
             for i in 0..arr.len() {
-                out.push(arr.is_valid(i).then(|| arr.value(i).to_string()));
+                out.push(arr.is_valid(i).then(|| CompactString::from(arr.value(i))));
             }
         } else if let Some(arr) = chunk.as_any().downcast_ref::<LargeStringArray>() {
             for i in 0..arr.len() {
-                out.push(arr.is_valid(i).then(|| arr.value(i).to_string()));
+                out.push(arr.is_valid(i).then(|| CompactString::from(arr.value(i))));
             }
         } else if let Some(arr) = chunk.as_any().downcast_ref::<StringViewArray>() {
             for i in 0..arr.len() {
-                out.push(arr.is_valid(i).then(|| arr.value(i).to_string()));
+                out.push(arr.is_valid(i).then(|| CompactString::from(arr.value(i))));
             }
         } else {
             return Ok(None); // not a string array (int/float/bool/struct/...)
@@ -1061,7 +1073,7 @@ fn detect_and_extract_json_columns_zerocopy(
 ) -> PyResult<
     Option<(
         Vec<String>,
-        IndexMap<String, Vec<Option<String>>>,
+        IndexMap<String, Vec<Option<CompactString>>>,
         Vec<String>,
     )>,
 > {
@@ -1071,7 +1083,7 @@ fn detect_and_extract_json_columns_zerocopy(
 
     let column_order = dataframe_column_names(df, df_type)?;
     let mut target_cols = Vec::new();
-    let mut target_values: IndexMap<String, Vec<Option<String>>> = IndexMap::new();
+    let mut target_values: IndexMap<String, Vec<Option<CompactString>>> = IndexMap::new();
 
     for name in &column_order {
         let col = dataframe_get_column(df, df_type, name)?;
@@ -1119,7 +1131,7 @@ fn splice_zerocopy_columns(
     base_rows: Vec<String>,
     column_order: &[String],
     target_cols: &[String],
-    target_values: &IndexMap<String, Vec<Option<String>>>,
+    target_values: &IndexMap<String, Vec<Option<CompactString>>>,
 ) -> PyResult<Vec<String>> {
     let target_set: IndexSet<&str> = target_cols.iter().map(String::as_str).collect();
     let mut failure_counts: IndexMap<String, usize> = IndexMap::new();
