@@ -658,7 +658,7 @@ dependencies = [
 
 [[package]]
 name = "json-tools-rs"
-version = "0.9.22"
+version = "0.9.23"
 dependencies = [
  "arrow-array",
  "arrow-schema",

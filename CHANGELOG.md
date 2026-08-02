@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.23] - 2026-08-02
+
 ### Performance
 Follow-up zero-copy/allocation audit of the core engine (`flatten.rs`,
 `unflatten.rs`, `convert.rs`) and the PyO3/Arrow boundary (`python.rs`).
