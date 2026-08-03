@@ -615,6 +615,8 @@ Convert to native Python type: returns `str` for single results, `list[str]` for
 
 JSON Tools RS natively supports Pandas, Polars, PyArrow, and PySpark DataFrames and Series. Detection is performed via duck typing -- no explicit imports are required.
 
+**Performance note:** in `.flatten()` mode, a DataFrame with no nested columns to flatten automatically takes a faster internal path that skips JSON serialization entirely -- transparent, no flag to set, same output either way. See [Performance: The Flat-DataFrame Fast Path](../guide/dataframe-support.md#performance-the-flat-dataframe-fast-path).
+
 ### Pandas DataFrame
 
 Each **row** is serialized to a JSON object (column names become keys) and processed as a whole document -- so flattening finds nested structure in columns holding actual nested Python objects (dicts/lists) directly. In `.flatten()` mode, columns holding pre-serialized JSON-text strings are also detected and expanded the same way (auto-detected, not requiring the column to already be dict/list-typed) -- see [Auto-Expanding JSON-String Columns](../guide/dataframe-support.md#auto-expanding-json-string-columns) for the detection rules. The source column's own name is never kept as a prefix in the output -- only nesting *within* the column's own content is (see that same section). `.unflatten()`/`.normal()` mode leave a JSON-string column's value untouched, as a plain string scalar.

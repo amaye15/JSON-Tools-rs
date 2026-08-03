@@ -8,6 +8,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Performance
+- **`execute(df)` on a pandas/Polars/PyArrow DataFrame with no nested
+  columns skips the JSON-text round trip entirely.** Every call previously
+  serialized the whole DataFrame to per-row JSON strings, parsed+flattened
+  each row in Rust, deserialized the output back into Python objects, then
+  reconstructed a DataFrame from those objects -- paid even when there's
+  nothing nested to flatten (a common case: generic pipelines that call
+  `.flatten()` defensively, or use it purely for its key-transform/
+  `auto_convert_types` features on already-tabular data). Measured directly:
+  for a DataFrame with no nested/struct columns, that round trip cost
+  ~90-99ms for 20K rows x 20 cols, of which this crate's own flatten logic
+  (isolated) was only ~6.5ms -- pandas' `to_json()` and the deserialize/
+  reconstruct steps were the actual cost. The new fast path reads column
+  values directly, applies the exact same per-cell transform logic
+  (`convert_string_for_mode`/`apply_replacement_patterns`, unchanged)
+  directly in Rust, and writes results back into columns/renames columns
+  natively -- never touching `to_json`/`py_loads`/`DataFrame(list_of_dicts)`.
+  Eligibility is a whole-DataFrame decision with a strict fallback discipline
+  (any nested/struct column, embedded-JSON-string column, `remove_nulls`/
+  `value_exclusions` configured, or a rename-induced key collision under
+  `handle_key_collision`/`always_array_keys` falls straight through to the
+  existing, unmodified pipeline) -- this is strictly an optimization, never
+  a second code path with its own behavior to keep in sync by hand. Scoped
+  to plain `.flatten().execute(df)` (`normalise=True` already has its own,
+  separately-optimized Arrow-native path). **Confirmed via interleaved A/B
+  (2 rounds each)**: Polars **~2.7-3.7x faster**, PyArrow **~4.2-5.6x
+  faster** (both across wide-scalar, string+`auto_convert_types`, and
+  `always_array_keys`-heavy scenarios, including small sub-1K-row frames);
+  pandas **~1.5-2.2x faster** for the same scenarios, and **~345x faster**
+  for the pure column-rename case (no per-value transform at all) since it
+  reuses the exact same `Series` object rather than reconstructing anything.
+  No behavior change -- differential-tested against the existing pipeline's
+  actual output across 10-11 cases per backend (mixed-type columns, `always_
+  array_keys`, collisions with/without `handle_key_collision`, struct-column
+  fallback, filter-order edge cases, empty DataFrames, all-null columns).
 - **`unflatten()` no longer re-looks-up a container's array-vs-object
   classification on every visit to an already-created node.**
   `set_nested_value_recursive` (`src/unflatten.rs`) queried the precomputed

@@ -190,6 +190,47 @@ for free too).
 > by default and PySpark bridges through pandas already, so both keep using the
 > text-based path described above.
 
+## Performance: The Flat-DataFrame Fast Path
+
+`execute(df)` on a pandas, Polars, or PyArrow DataFrame automatically takes a
+faster path when the DataFrame has no nested columns to flatten -- a common
+case: calling `.flatten()` defensively in a generic pipeline, or using it
+purely for its key-transform (`.lowercase_keys()`, `.key_replacement()`) or
+`.auto_convert_types()` features on data that's already tabular. Normally,
+`execute(df)` serializes the whole DataFrame to JSON text, parses and
+flattens each row, deserializes the result back into Python objects, and
+reconstructs a DataFrame from those -- real work even when there's nothing
+nested. When every column is scalar (no struct/list/embedded-JSON-string
+columns), the fast path instead reads column values directly, applies the
+exact same per-cell transform logic in Rust, and writes results back into
+columns natively -- skipping the JSON round trip entirely.
+
+```python
+import polars as pl
+import json_tools_rs as jt
+
+df = pl.DataFrame({
+    "UserId": [1, 2, 3],
+    "UserName": ["Alice", "Bob", "Carol"],
+    "Amount": ["$19.99", "$45.00", "$8.50"],
+})
+
+# Already flat -- lowercase_keys()/auto_convert_types() apply directly to
+# columns, no JSON round trip.
+result = (jt.JSONTools()
+    .flatten()
+    .lowercase_keys(True)
+    .auto_convert_types(True)
+    .execute(df))
+```
+
+This is purely an internal optimization -- output is identical to the
+existing pipeline's, and it's entirely automatic (no flag to set). It falls
+back to the normal pipeline whenever any column has real nested structure to
+flatten, an embedded JSON-string column, `.remove_nulls()`/`.exclude_value()`
+configured, or a key-transform-induced column name collision -- in every one
+of those cases `execute(df)` behaves exactly as it always has.
+
 ## Normalise: Always Get a Wide DataFrame
 
 `.execute()` normally mirrors the input's own type (str→str, dict→dict, DataFrame→
