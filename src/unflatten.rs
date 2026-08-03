@@ -767,14 +767,20 @@ fn set_nested_value_recursive<'a>(
     }
     path_buffer.push_str(part);
 
-    let should_be_array = path_types
-        .get(path_buffer.as_str())
-        .copied()
-        .unwrap_or(false);
-
     // Single hash lookup via entry() instead of contains_key + insert + get_mut
     // (was 2-3 lookups; IndexMap's entry() API does the equivalent in one).
+    //
+    // `path_types` is only consulted inside `or_insert_with` -- i.e. only on a
+    // node's first visit -- rather than unconditionally on every call. Once a
+    // container exists its Array/Object shape is fixed; every subsequent flat
+    // key that shares this prefix (the common case: siblings under the same
+    // nested object) would otherwise re-look-up a classification that was
+    // already decided and baked into the existing node.
     let entry = current.entry(CompactString::from(part)).or_insert_with(|| {
+        let should_be_array = path_types
+            .get(path_buffer.as_str())
+            .copied()
+            .unwrap_or(false);
         if should_be_array {
             UnflatNode::Array(Vec::with_capacity(NESTED_CONTAINER_CAPACITY_HINT))
         } else {
@@ -817,12 +823,15 @@ fn set_nested_value_recursive<'a>(
                 } else {
                     path_buffer.push_str(separator);
                     path_buffer.push_str(next_part);
-                    let next_should_be_array = path_types
-                        .get(path_buffer.as_str())
-                        .copied()
-                        .unwrap_or(false);
 
+                    // Same reasoning as the Object branch above: only consult
+                    // `path_types` when actually creating the node (first visit
+                    // to this array slot), not on every revisit.
                     if matches!(arr[array_index], UnflatNode::Null) {
+                        let next_should_be_array = path_types
+                            .get(path_buffer.as_str())
+                            .copied()
+                            .unwrap_or(false);
                         arr[array_index] = if next_should_be_array {
                             UnflatNode::Array(Vec::with_capacity(NESTED_CONTAINER_CAPACITY_HINT))
                         } else {

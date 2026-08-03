@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Performance
+- **`unflatten()` no longer re-looks-up a container's array-vs-object
+  classification on every visit to an already-created node.**
+  `set_nested_value_recursive` (`src/unflatten.rs`) queried the precomputed
+  `path_types` map unconditionally on every recursive call, even though the
+  result is only needed once -- at the moment a container is first created
+  -- and is irrelevant on every subsequent visit (the node's Array/Object
+  shape is already fixed by then). Since flat keys sharing a nested prefix
+  (the common case: sibling fields under the same object) repeatedly revisit
+  the same intermediate container, most calls were paying for a lookup whose
+  result they never used. Found via `benches/history.csv` (this project's
+  own tracked CI benchmark data): `unflatten baseline medium` has run
+  ~4-5x slower than `flatten baseline medium` on the *same* underlying
+  document, consistently across all 72 tracked commits -- a live `sample`
+  profile of that exact scenario then pointed at this specific redundant
+  lookup as a real, addressable piece of that gap. Moved the lookup inside
+  the create-only branch, in both the object and array cases. **Confirmed
+  ~9-10% faster** for realistic nested documents (Criterion's own
+  `medium_json` fixture, 81 flattened keys), across 3 interleaved A/B
+  rounds. No behavior change.
+
 ## [0.9.23] - 2026-08-02
 
 ### Performance

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Performance
+`unflatten()` no longer re-checks a container's array-vs-object classification on every visit to an already-created node -- only needed once, at creation, but was queried on every recursive call `set_nested_value_recursive` made (`src/unflatten.rs`). Found by looking at this project's own tracked CI benchmark history (`benches/history.csv`): `unflatten baseline medium` has consistently run ~4-5x slower than `flatten baseline medium` on the same document, across all 72 tracked commits; a live profile of that exact scenario pointed at this redundant lookup specifically. **Confirmed ~9-10% faster** across 3 interleaved A/B rounds. No behavior change.
+
 ## v0.9.23 (2026-08-02)
 
 ### Performance
