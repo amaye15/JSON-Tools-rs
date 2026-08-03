@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.9.24 (2026-08-03)
+
 ### Performance
 `execute(df)` on a pandas/Polars/PyArrow DataFrame with no nested columns now skips the JSON-text round trip entirely (serialize -> parse+flatten -> deserialize -> reconstruct), reading column values directly and applying the same per-cell transform logic natively instead. Measured: the old round trip cost ~90-99ms for a 20K-row x 20-col DataFrame with no nesting, of which this crate's own flatten logic was only ~6.5ms -- the round trip itself was the cost. Strict whole-DataFrame fallback discipline (any nested column, embedded-JSON-string column, `remove_nulls`/`value_exclusions`, or a rename-induced key collision falls through to the existing pipeline unchanged) -- pure optimization, no second behavior to maintain. Scoped to plain `.flatten().execute(df)` (`normalise=True` already has its own Arrow-native path). **Confirmed via interleaved A/B**: Polars ~2.7-3.7x faster, PyArrow ~4.2-5.6x faster, pandas ~1.5-2.2x faster (up to ~345x for the pure column-rename case). No behavior change -- differential-tested against the existing pipeline's actual output across 10-11 cases per backend.
 

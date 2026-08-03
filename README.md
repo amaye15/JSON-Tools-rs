@@ -380,7 +380,13 @@ Dual-licensed under either [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), a
 
 ## Changelog
 
-### v0.9.23 (Current)
+### v0.9.24 (Current)
+
+* **Performance**: `execute(df)` on a pandas/Polars/PyArrow DataFrame with no nested columns now skips the JSON-text round trip entirely -- reads column values directly and applies the same per-cell transform logic natively instead of serialize/parse/deserialize/reconstruct. Measured ~90-99ms of old-path overhead for a 20K-row x 20-col DataFrame down to a fraction of that. Confirmed via interleaved A/B: Polars ~2.7-3.7x faster, PyArrow ~4.2-5.6x faster, pandas ~1.5-2.2x faster (up to ~345x for the pure column-rename case). Strict whole-DataFrame fallback to the existing pipeline for anything nested/uncertain -- no behavior change, differential-tested across 10-11 cases per backend. Also: `unflatten()` no longer re-checks a container's array-vs-object classification on every visit to an already-created node, found via this project's own tracked CI benchmark history -- ~9-10% faster.
+
+See [CHANGELOG.md](CHANGELOG.md) for the full, itemized list.
+
+### v0.9.23
 
 * **Performance**: follow-up zero-copy audit of `convert.rs`/`flatten.rs`/`unflatten.rs`/`python.rs`. `auto_convert_types`'s converted-value chain switched from `Cow<str>` to a new `ConvertedStr` type backed by `CompactString`, so short converted values (bools, small numbers) stay on the stack instead of heap-allocating; `flatten.rs`'s/`unflatten.rs`'s collision-handling value storage got the same treatment. Measured ~11-13% faster for `.flatten()` with a key transform configured, ~3-9% faster for `.normal()` mode alone, both via interleaved A/B. A third change (Arrow JSON-string-column extraction in `python.rs`, same idea) showed no consistent signal under the same measurement and is kept as correct but not claimed as a win. No behavior changes.
 

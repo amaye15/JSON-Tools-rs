@@ -1,6 +1,6 @@
 [package]
 name = "json-tools-rs"
-version = "0.9.23"
+version = "0.9.24"
 edition = "2021"
 rust-version = "1.85"
 description = "A high-performance Rust library for advanced JSON manipulation with SIMD-accelerated parsing, Rayon parallelism, and Python bindings with DataFrame/Series support"

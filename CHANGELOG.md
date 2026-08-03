@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.24] - 2026-08-03
+
 ### Performance
 - **`execute(df)` on a pandas/Polars/PyArrow DataFrame with no nested
   columns skips the JSON-text round trip entirely.** Every call previously
