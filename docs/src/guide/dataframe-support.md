@@ -231,6 +231,13 @@ flatten, an embedded JSON-string column, `.remove_nulls()`/`.exclude_value()`
 configured, or a key-transform-induced column name collision -- in every one
 of those cases `execute(df)` behaves exactly as it always has.
 
+The fast path's computation also releases Python's GIL while it runs, same
+as every other `execute()` call -- so it doesn't stall other Python threads
+in your process (a multi-threaded web server, a `ThreadPoolExecutor`) for
+the duration of a large DataFrame call. This doesn't change how long a
+single `execute(df)` call takes; it changes whether *other* threads can make
+progress while it runs.
+
 ## Normalise: Always Get a Wide DataFrame
 
 `.execute()` normally mirrors the input's own type (str→str, dict→dict, DataFrame→

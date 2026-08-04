@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Performance
+The flat-DataFrame fast path (`.flatten().execute(df)` on pandas/Polars/PyArrow, added in 0.9.24) now releases the GIL for its computation, matching every other execution path -- it was the one path that held the GIL for its entire duration. This is a concurrency fix, not a latency optimization: a single call takes the same wall-clock time (confirmed, no regression), but other Python threads in the process can now make progress while it runs instead of stalling. Measured via a background pure-Python counting thread run concurrently with `execute(df)` (ratio of concurrent to solo throughput, 20K x 20 DataFrame): **Polars 0.21 -> 1.00**, **PyArrow 0.14 -> 0.97**, **pandas 0.73 -> 0.76** (a smaller, real win -- pandas still builds one Python object per cell with the GIL held, unlike Arrow's zero-copy array construction). New benchmarks: `bench_fastpath_gil.py`, `bench_fastpath_latency.py`.
+
+`JSONTools::default()` no longer allocates a `String` for the default separator, which `SeparatorCache` immediately special-cases into a borrowed constant anyway -- internal field is now `Cow<'static, str>`, no public API change.
+
+### Fixed
+Pandas flat-DataFrame fast path: a column with both a genuine null and a `remove_empty_strings`-filtered-to-empty cell now matches the slow path's reconstruction exactly (`None` for the genuine null, `NaN` for the filtered cell, matching pandas' own missing-key behavior) -- previously both collapsed to `None`. A narrow, pre-existing 0.9.24 gap caught by a new differential test while implementing the GIL-release fix above. Polars/PyArrow were never affected.
+
 ## v0.9.24 (2026-08-03)
 
 ### Performance

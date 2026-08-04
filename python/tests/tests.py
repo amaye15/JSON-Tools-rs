@@ -3825,6 +3825,72 @@ class TestDataFrameAndSeriesSupport:
             assert isinstance(result, list)
             assert len(result) == 2
 
+    def test_pandas_fastpath_null_and_filtered_empty_same_column(self):
+        """Flat-DataFrame fast path (pandas): a StringTransform column with
+        both a genuine null and a value_replacement-filtered-to-empty cell
+        (remove_empty_strings) in the *same* column, on different rows, must
+        match the slow/JSON-text path's own reconstruction exactly: a
+        genuine null keeps the row's dict key present (-> real `None`), but
+        `remove_empty_strings` omits the key entirely from that row's dict,
+        and pandas fills a key missing from only some rows with `NaN` (a
+        float) -- a different Python object/type than `None`, even though
+        both are "null-ish" for isna()/fillna()/arithmetic purposes.
+
+        This distinction was originally missing (both reasons collapsed to a
+        bare `None`, verified directly against the pre-fix code) -- caught by
+        this test during this round's GIL-release refactor and fixed
+        alongside it (`PandasStringCell::Null` vs `::Omitted` in
+        src/python.rs). Polars/PyArrow are unaffected: Arrow string arrays
+        have no separate NaN-vs-null representation, so both reasons already
+        reconstruct as `None` on both the fast and slow path there."""
+        if not self.has_pandas:
+            pytest.skip("pandas not installed")
+
+        records = [
+            {"id": 1, "note": "DELETE_ME", "nested": {"x": 1}},
+            {"id": 2, "note": None, "nested": {"x": 1}},
+            {"id": 3, "note": "keep", "nested": {"x": 1}},
+        ]
+
+        def build_tools():
+            return (
+                json_tools_rs.JSONTools()
+                .flatten()
+                .value_replacement("DELETE_ME", "")
+                .remove_empty_strings(True)
+            )
+
+        # Oracle: the real slow/JSON-text DataFrame path, forced by a
+        # disqualifying nested column (dropped afterward, only used to
+        # steer eligibility).
+        slow_result = build_tools().execute(self.pd.DataFrame(records))
+        slow_note = slow_result["note"].tolist()
+
+        # Fast path: same logical rows, but a flat (all-scalar) DataFrame.
+        flat_records = [{"id": r["id"], "note": r["note"]} for r in records]
+        fast_result = build_tools().execute(self.pd.DataFrame(flat_records))
+
+        assert isinstance(fast_result, self.pd.DataFrame)
+        assert "note" in fast_result.columns
+        fast_note = fast_result["note"].tolist()
+
+        assert len(fast_note) == len(slow_note) == 3
+        for fast_v, slow_v, label in zip(fast_note, slow_note, ["row0", "row1", "row2"]):
+            assert type(fast_v) is type(slow_v), (
+                f"{label}: fast={fast_v!r} ({type(fast_v).__name__}) vs "
+                f"slow={slow_v!r} ({type(slow_v).__name__})"
+            )
+            if isinstance(fast_v, float) and self.pd.isna(fast_v):
+                assert self.pd.isna(slow_v)
+            else:
+                assert fast_v == slow_v
+
+        # Pin down the exact expected shape too, not just fast==slow parity.
+        assert fast_note[1] is None  # genuine null
+        assert isinstance(fast_note[0], float) and self.pd.isna(fast_note[0])  # filtered-empty -> NaN
+        assert fast_note[2] == "keep"
+        assert fast_result["id"].tolist() == [1, 2, 3]
+
     def test_series_with_none_values(self):
         """Test Series with None values - should raise error"""
         if not self.has_pandas:

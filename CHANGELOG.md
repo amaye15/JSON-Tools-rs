@@ -7,6 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Performance
+- **The flat-DataFrame fast path (`.flatten().execute(df)` on pandas/Polars/
+  PyArrow, added in 0.9.24) now releases the GIL for its computation**,
+  matching every other execution path in `python.rs`. It was the one
+  remaining path that held the GIL for its entire duration -- for a large
+  DataFrame, potentially tens of milliseconds of pure-Rust work stalling
+  every other Python thread in the process (a multi-threaded web server, a
+  `ThreadPoolExecutor`) even though that work touches zero Python objects.
+  **This is a concurrency fix, not a latency optimization** -- a single
+  `execute(df)` call takes the same wall-clock time as before (confirmed: no
+  measurable latency regression across small/medium/large scenarios, all
+  three backends). What changes is whether *other* Python threads can make
+  progress while it runs. Measured via a background pure-Python counting
+  thread running concurrently with `execute(df)` (ratio of concurrent to
+  solo/uncontended throughput; 20K rows x 20 cols, macOS aarch64): **Polars
+  0.21 -> 1.00**, **PyArrow 0.14 -> 0.97** (both now on par with or exceeding
+  the already-GIL-friendly old DataFrame path's own ~0.20-0.38 ratio, since
+  the fast path's per-column build touches Python objects even less than the
+  old path's own serialize/deserialize/reconstruct steps do); **pandas 0.73
+  -> 0.76**, a smaller, real win bounded by pandas' own architecture (each
+  transformed cell still needs its own Python object built with the GIL
+  held -- there's no zero-copy array construction path like Arrow's). New
+  benchmarks: `python/benchmarks/bench_fastpath_gil.py` (this measurement)
+  and `bench_fastpath_latency.py` (the regression check).
+- `JSONTools::default()` no longer allocates a `String` for the separator
+  (`"."`) that `SeparatorCache` immediately special-cases into a borrowed
+  constant anyway -- the internal field is now `Cow<'static, str>`. Saves one
+  allocation per `JSONTools` construction; no public API change.
+
+### Fixed
+- **Pandas flat-DataFrame fast path: a column with both a genuine null and a
+  `remove_empty_strings`-filtered-to-empty cell (in different rows of the
+  same column) now matches the slow/JSON-text path's reconstruction
+  exactly.** Previously both collapsed to a plain `None`; the slow path
+  actually distinguishes them (a genuine null keeps the row's dict key
+  present -> real `None`; a filtered value omits the key entirely, and
+  pandas fills a key missing from only some rows with `NaN`, a `float`, not
+  `None`) -- a narrow, pre-existing gap from 0.9.24 caught by a new
+  differential test while implementing the GIL-release fix above. Both
+  count as null for `isna()`/`fillna()`/arithmetic, so most usage was
+  unaffected, but exact equality/type checks would have seen the
+  difference. Polars/PyArrow were never affected (Arrow string arrays have
+  no separate NaN-vs-null representation).
+
 ## [0.9.24] - 2026-08-03
 
 ### Performance
