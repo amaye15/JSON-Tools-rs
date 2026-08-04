@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.26] - 2026-08-05
+
 ### Maintenance
 - **Dependency freshness pass** (round 11 of this project's ongoing
   performance-optimization effort -- researched and A/B tested several

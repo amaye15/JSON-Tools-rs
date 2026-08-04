@@ -380,7 +380,13 @@ Dual-licensed under either [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), a
 
 ## Changelog
 
-### v0.9.25 (Current)
+### v0.9.26 (Current)
+
+* **Maintenance**: round 11 of this project's ongoing performance-optimization effort researched and A/B tested several candidates (sonic-rs vs simd-json, simdutf8, mimalloc vs jemalloc, PyO3 free-threaded Python), but profiling confirmed the hot path is already at the ceiling reached by the prior 10 rounds -- nothing measurable to ship. Lifted two dependency pins left artificially stale by the 2026-07-30 MSRV bump to 1.85: `sonic-rs` `0.5.7` -> `0.5.8`, `indexmap` `<2.12` -> `<2.15`. Verified clean on stable and MSRV 1.85; no measurable latency change (neither dependency sits on this crate's hot path).
+
+See [CHANGELOG.md](CHANGELOG.md) for the full, itemized list.
+
+### v0.9.25
 
 * **Concurrency**: the flat-DataFrame fast path (`.flatten().execute(df)` on pandas/Polars/PyArrow, added in 0.9.24) now releases the GIL for its computation, matching every other execution path -- it was the one path that held the GIL for its entire duration, stalling other Python threads in the process for no reason during a large-DataFrame call. Not a latency change (confirmed no regression) -- other Python threads can now make progress while it runs. Measured via a background pure-Python counting thread run concurrently with `execute(df)` (ratio of concurrent to solo throughput, 20K x 20 DataFrame): Polars 0.21 -> 1.00, PyArrow 0.14 -> 0.97, pandas 0.73 -> 0.76 (smaller, bounded by pandas' own per-cell object construction).
 * **Fixed**: pandas flat-DataFrame fast path -- a column with both a genuine null and a `remove_empty_strings`-filtered-to-empty cell now matches the slow path's reconstruction exactly (`None` vs pandas' own `NaN`-for-missing-key behavior), a narrow pre-existing 0.9.24 gap caught while implementing the fix above. Polars/PyArrow were never affected.

@@ -632,7 +632,7 @@ dependencies = [
 
 [[package]]
 name = "json-tools-rs"
-version = "0.9.25"
+version = "0.9.26"
 dependencies = [
  "arrow-array",
  "arrow-buffer",

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.9.26 (2026-08-05)
+
 ### Maintenance
 Round 11 of this project's ongoing performance-optimization effort: researched and A/B tested several candidates (sonic-rs vs simd-json, simdutf8, mimalloc vs jemalloc, PyO3 free-threaded/no-GIL Python), but profiling confirmed the hot path is already at the ceiling reached by the prior 10 rounds -- nothing measurable to ship. The one concrete outcome is a dependency freshness pass: lifted two pins left artificially stale by the 2026-07-30 MSRV bump to 1.85, `sonic-rs` `=0.5.7` -> `=0.5.8` and `indexmap` `>=2.11, <2.12` -> `>=2.11, <2.15`, both of which needed a newer rustc than the then-MSRV of 1.80. Verified clean on stable and MSRV 1.85; A/B benchmarked with no measurable latency change, as expected -- neither dependency sits on this crate's hot path.
 
