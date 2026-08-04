@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.25] - 2026-08-04
+
 ### Performance
 - **The flat-DataFrame fast path (`.flatten().execute(df)` on pandas/Polars/
   PyArrow, added in 0.9.24) now releases the GIL for its computation**,
