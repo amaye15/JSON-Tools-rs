@@ -1040,12 +1040,12 @@ fn extract_arrow_string_values_from_chunked(
             for i in 0..arr.len() {
                 out.push(arr.is_valid(i).then(|| CompactString::from(arr.value(i))));
             }
-        } else if let Some(arr) = chunk.as_any().downcast_ref::<StringViewArray>() {
+        } else {
+            // Not a string array (int/float/bool/struct/...).
+            let arr = chunk.as_any().downcast_ref::<StringViewArray>()?;
             for i in 0..arr.len() {
                 out.push(arr.is_valid(i).then(|| CompactString::from(arr.value(i))));
             }
-        } else {
-            return None; // not a string array (int/float/bool/struct/...)
         }
     }
     Some(out)
@@ -4086,7 +4086,20 @@ fn execute_pandas_fastpath(
                         out_list.append(converted)?;
                     }
                 }
-                out_dict.set_item(name, out_list)?;
+                // Build an explicit dtype=object Series rather than handing
+                // pandas a raw list: `pd.DataFrame(dict_of_lists)`'s own type
+                // inference for a column mixing None/NaN/str was observed to
+                // differ across pandas/numpy versions (a column with both a
+                // genuine None and a float NaN got its None silently
+                // coerced to NaN on some CI legs, not reproducible locally).
+                // `dtype=object` is pandas' documented no-inference
+                // construction path -- every element stays the exact Python
+                // object it already is, no coercion possible.
+                let pandas = cached_import(py, &PANDAS_MODULE, "pandas")?;
+                let dtype_kwargs = PyDict::new(py);
+                dtype_kwargs.set_item("dtype", "object")?;
+                let series = pandas.call_method("Series", (out_list,), Some(&dtype_kwargs))?;
+                out_dict.set_item(name, series)?;
             }
         }
     }

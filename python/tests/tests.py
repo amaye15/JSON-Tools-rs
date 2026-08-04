@@ -3875,7 +3875,9 @@ class TestDataFrameAndSeriesSupport:
         fast_note = fast_result["note"].tolist()
 
         assert len(fast_note) == len(slow_note) == 3
-        for fast_v, slow_v, label in zip(fast_note, slow_note, ["row0", "row1", "row2"]):
+        for fast_v, slow_v, label in zip(
+            fast_note, slow_note, ["row0", "row1", "row2"]
+        ):
             assert type(fast_v) is type(slow_v), (
                 f"{label}: fast={fast_v!r} ({type(fast_v).__name__}) vs "
                 f"slow={slow_v!r} ({type(slow_v).__name__})"
@@ -3887,7 +3889,9 @@ class TestDataFrameAndSeriesSupport:
 
         # Pin down the exact expected shape too, not just fast==slow parity.
         assert fast_note[1] is None  # genuine null
-        assert isinstance(fast_note[0], float) and self.pd.isna(fast_note[0])  # filtered-empty -> NaN
+        assert isinstance(fast_note[0], float) and self.pd.isna(
+            fast_note[0]
+        )  # filtered-empty -> NaN
         assert fast_note[2] == "keep"
         assert fast_result["id"].tolist() == [1, 2, 3]
 

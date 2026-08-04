@@ -84,7 +84,10 @@ def main() -> None:
         "--csv", action="store_true", help="Print CSV instead of a table"
     )
     parser.add_argument(
-        "--duration", type=float, default=2.0, help="Seconds per condition (default: 2.0)"
+        "--duration",
+        type=float,
+        default=2.0,
+        help="Seconds per condition (default: 2.0)",
     )
     args = parser.parse_args()
 
