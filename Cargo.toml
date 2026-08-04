@@ -96,7 +96,7 @@ arrow-buffer = { version = "59", optional = true }
 # at all). Pinned <7.2 (7.1.x's own MSRV is 1.64) until upstream fixes their
 # rust-version metadata or this crate's MSRV moves past whatever 7.2.x
 # actually needs.
-comfy-table = { version = "<7.2", optional = true }
+comfy-table = { version = "<7.3", optional = true }
 memchr = "2.8.0"  # SIMD-optimized byte searching
 smallvec = "1.15.1"  # Stack-allocated vectors for small buffers
 # Small-string optimization for JSON object keys (inlines up to 24 bytes, no heap
