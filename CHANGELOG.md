@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Maintenance
+- **Dependency freshness pass** (round 11 of this project's ongoing
+  performance-optimization effort -- researched and A/B tested several
+  candidates; profiling confirmed the hot path is already at the ceiling
+  reached by the prior 10 rounds, so this round's only concrete outcome is
+  cleanup, not a speed change). Lifted two dependency pins that were left
+  artificially stale by the 2026-07-30 MSRV bump to 1.85 (for `pyo3-arrow`):
+  `sonic-rs` `=0.5.7` -> `=0.5.8` (was pinned below a version that needed
+  `exposed_provenance`/`strict_provenance`, unavailable on the then-MSRV of
+  1.80) and `indexmap` `>=2.11, <2.12` -> `>=2.11, <2.15` (`2.12.0`/`2.14.0`
+  both need rustc 1.82+/1.85, also unavailable then). Both now build clean
+  on stable and on `+1.85.0 check --locked --all-features`; A/B benchmarked
+  (`bench_quick`, before/after) with no measurable latency change, as
+  expected -- neither dependency sits on this crate's hot path (the
+  flatten/unflatten walker uses its own hand-rolled scanner, not sonic-rs's
+  parser).
+
 ## [0.9.25] - 2026-08-04
 
 ### Performance
