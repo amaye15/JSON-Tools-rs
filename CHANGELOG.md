@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.27] - 2026-08-06
+
 ### Performance
 - **Round 13: DataFrame/normalise layer algorithmic audit.** Rounds 11-12
   found the core Rust engine already at its ceiling after 10 prior rounds

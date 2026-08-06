@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.9.27 (2026-08-06)
+
 ### Performance
 Round 13: with the core Rust engine already at its ceiling after 10 prior rounds (round 11: dependency freshness only; round 12: mimalloc-for-wheels re-confirmed already-rejected, a pure-Rust `talc` allocator tested and rejected -- regresses 4-5x under `rayon`'s parallel path), an algorithmic audit focused on `python.rs`'s DataFrame/normalise layer found two real issues. **Eliminated duplicate Arrow string-column extraction** on the flat-DataFrame fast-path fallback (`.flatten().execute(df)` with an embedded-JSON string column used to extract every string column twice); verified via code tracing, though end-to-end benchmarking showed no consistent wall-clock signal, so this is reported as a confirmed redundant-work fix, not a speed claim. **`normalise()`'s per-batch allocation reduced from O(n_keys) separate heap allocations to one** -- for a batch with mostly-disjoint keys (the same pattern that caused a real O(n^2) bug, already fixed, in `unflatten.rs`), confirmed ~30-35% faster median and, more strikingly, eliminates the wide run-to-run variance the many-allocations version showed. Also a small free memoization fix in `unflatten.rs` (a value-exclusion check recomputed per array-gap node instead of once per call).
 
