@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.9.28 (2026-08-07)
+
 ### Performance
 Round 14: continuing round 13's audit into the parts it hadn't covered (pandas fast path, general splice/unnest pipeline, `arrow_columnar.rs`, `cache.rs`, `config.rs`) found two more real issues, both in `python.rs`. **Pandas fast-path eligibility now samples before fully extracting a column** -- deciding whether an `object`-dtype column secretly holds embedded JSON used to extract the *entire* column via `.tolist()` + per-cell `.extract::<String>()` before sampling just the first 20 non-null values; now decoding stops as soon as the sample disqualifies. Confirmed ~2.1x faster (30K-row pandas DataFrame with an embedded-JSON column). **Splicing and un-nesting fused into one parse+reconstruct pass instead of two** -- every row with an embedded-JSON string column used to be parsed and serialized twice (once to splice, again to un-nest the freshly-spliced field). Confirmed ~2x faster (pandas) / ~2.3x faster (Polars). Caught a real regression during this change via the existing test suite: a second call site (`normalise=True` on DataFrame input) needed the same fix or it would have double-un-nested.
 

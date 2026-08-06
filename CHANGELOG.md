@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.28] - 2026-08-07
+
 ### Performance
 - **Round 14: two more algorithmic fixes in the DataFrame pipeline**, found
   by continuing round 13's audit into the parts it hadn't covered (the

@@ -380,7 +380,13 @@ Dual-licensed under either [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), a
 
 ## Changelog
 
-### v0.9.27 (Current)
+### v0.9.28 (Current)
+
+* **Performance**: round 14 algorithmic audit, continuing round 13 into the pandas fast path and general splice/unnest pipeline. Pandas fast-path eligibility now samples before fully extracting an object-dtype column (~2.1x faster for a disqualifying embedded-JSON column at scale). Splicing and un-nesting fused into one parse+reconstruct pass instead of two (~2x faster pandas / ~2.3x faster Polars for a DataFrame with an embedded-JSON string column) -- caught and fixed a real double-un-nesting regression in a second call site (`normalise=True` on DataFrame input) via the existing test suite before shipping.
+
+See [CHANGELOG.md](CHANGELOG.md) for the full, itemized list.
+
+### v0.9.27
 
 * **Performance**: round 13 algorithmic audit of the DataFrame/normalise layer. Eliminated duplicate Arrow string-column extraction on the flat-DataFrame fast-path fallback (`.flatten().execute(df)` with an embedded-JSON string column used to extract every string column twice) -- verified via code tracing; no consistent end-to-end wall-clock signal, reported as a redundant-work fix rather than a speed claim. `normalise()`'s per-batch column-slot allocation reduced from n_keys separate heap allocations to one, for batches with mostly-disjoint keys -- confirmed ~30-35% faster median and eliminates the wide run-to-run variance the many-allocations version showed. Also a small free memoization fix in `unflatten.rs`.
 
