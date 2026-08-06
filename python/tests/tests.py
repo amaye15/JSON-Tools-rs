@@ -5447,6 +5447,56 @@ class TestJsonStringColumnExpansion:
         assert result.loc[result["id"] == 1, "a"].iloc[0] == 1
         assert result.loc[result["id"] == 3, "a"].iloc[0] == 3
 
+    def test_polars_mixed_json_and_plain_string_column_not_expanded(self):
+        """Polars/PyArrow-specific regression coverage for the round-13 fix
+        threading check_arrow_fastpath_eligibility's already-extracted string
+        data into detect_and_extract_json_columns_zerocopy instead of
+        re-extracting: this column trips eligibility's "any sampled value
+        looks like JSON" disqualification (mixed_col has one), but must NOT
+        become a splice target under detect_and_extract_json_columns_
+        zerocopy's stricter "all sampled values look like JSON" rule -- the
+        reused data has to feed both criteria correctly, not just the one
+        that happened to extract it. Mirrors
+        test_column_only_sometimes_json_not_expanded (pandas-only, doesn't
+        touch this code path at all)."""
+        if not self.has_polars:
+            pytest.skip("polars not installed")
+        tools = json_tools_rs.JSONTools().flatten()
+        df = self.pl.DataFrame(
+            {
+                "id": [1, 2, 3],
+                "mixed_col": ['{"a": 1}', "just plain text", '{"b": 2}'],
+            }
+        )
+        result = tools.execute(df)
+        assert result.columns == ["id", "mixed_col"]
+        assert result["mixed_col"].to_list() == [
+            '{"a": 1}',
+            "just plain text",
+            '{"b": 2}',
+        ]
+
+    def test_pyarrow_mixed_json_and_plain_string_column_not_expanded(self):
+        """PyArrow twin of test_polars_mixed_json_and_plain_string_column_not_expanded --
+        see that test's docstring for why this exercises the round-13 fix
+        specifically."""
+        if not self.has_pyarrow:
+            pytest.skip("pyarrow not installed")
+        tools = json_tools_rs.JSONTools().flatten()
+        table = self.pa.table(
+            {
+                "id": [1, 2, 3],
+                "mixed_col": ['{"a": 1}', "just plain text", '{"b": 2}'],
+            }
+        )
+        result = tools.execute(table)
+        assert result.column_names == ["id", "mixed_col"]
+        assert result["mixed_col"].to_pylist() == [
+            '{"a": 1}',
+            "just plain text",
+            '{"b": 2}',
+        ]
+
     def test_json_string_array_column_expands_into_indexed_columns(self):
         """A JSON-string-encoded array expands into indexed sub-columns the
         same way an already-list-typed column does today."""

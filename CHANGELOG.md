@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Performance
+- **Round 13: DataFrame/normalise layer algorithmic audit.** Rounds 11-12
+  found the core Rust engine already at its ceiling after 10 prior rounds
+  (dependency freshness only, plus two dead ends: mimalloc-for-wheels
+  re-confirmed as already-rejected on build-matrix-fragmentation grounds, and
+  a pure-Rust `talc` allocator that matched mimalloc single-threaded but
+  regressed 4-5x under `rayon`'s parallel batch path due to its global
+  spinlock). Asked to focus on algorithmic improvements specifically, an
+  audit turned up two real issues in `python.rs` -- newer and less scrutinized
+  than the core engine:
+  - **Eliminated duplicate Arrow string-column extraction on the flat-
+    DataFrame fast-path fallback.** `.flatten().execute(df)` on a Polars/
+    PyArrow DataFrame with an embedded-JSON string column (the issues
+    #30/#31/#33 scenario) used to extract every string column's full
+    contents twice: once while checking flat-fast-path eligibility (which
+    then discarded the data on disqualifying), and again from scratch in the
+    zero-copy JSON-column detector that runs next. The already-extracted
+    data is now threaded through and reused instead. Verified via direct
+    code tracing (not just profiling) as the same class of redundant work as
+    the earlier scanner double-scan fix; end-to-end wall-clock benchmarking
+    showed no consistent signal in this pipeline shape (the eliminated work
+    is a small fraction of the surrounding JSON serialize/parse round trip),
+    so this is reported as a confirmed redundant-work elimination, not a
+    claimed speedup.
+  - **`normalise()`'s per-batch column-slot allocation reduced from O(n_keys)
+    separate heap allocations to one.** A batch of documents with mostly-
+    disjoint keys (e.g. many distinct `user_<id>.field`-shaped top-level
+    keys -- the same realistic pattern that caused a real, previously-fixed
+    O(n^2) issue in `unflatten.rs`'s own `ObjectMap`) turns `n_keys` into a
+    large number, and `build_normalise_table` was allocating that many
+    separate `Vec`s instead of one contiguous buffer. **Confirmed ~30-35%
+    faster median** for a 5,000-row batch of disjoint-key documents
+    (interleaved A/B, `normalise=True`), and -- more strikingly --
+    eliminates the wide run-to-run variance the many-small-allocations
+    version showed (worst case ~1.7x the median; the fix's worst case was
+    within 5% of its own median).
+  - Also: a small, free memoization in `unflatten.rs` (a value-exclusion
+    check against the literal string `"null"` was recomputed per array-gap
+    `Null` node instead of once per call) -- zero-risk, no behavior change,
+    narrow real-world impact.
+
 ## [0.9.26] - 2026-08-05
 
 ### Maintenance
