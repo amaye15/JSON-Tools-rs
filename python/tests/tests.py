@@ -5586,6 +5586,43 @@ class TestJsonStringColumnExpansion:
         result = tools.execute(df)
         assert result.columns.tolist() == ["id", "x", "y"]
 
+    def test_polars_struct_and_json_string_columns_both_expand(self):
+        """Round-14 regression coverage for the fused splice+unnest pass
+        (splice_zerocopy_columns): a genuine Struct-typed column (needs
+        plain un-nesting, no splicing) and an embedded-JSON-string column
+        (needs splicing then un-nesting) in the *same* row, both resolved
+        by the same reconstruction loop -- Polars twin of
+        test_mixed_dict_and_json_string_columns_both_expand."""
+        if not self.has_polars:
+            pytest.skip("polars not installed")
+        tools = json_tools_rs.JSONTools().flatten()
+        df = self.pl.DataFrame(
+            [
+                {"id": 1, "struct_col": {"x": 1}, "json_col": '{"y": 10}'},
+                {"id": 2, "struct_col": {"x": 2}, "json_col": '{"y": 20}'},
+            ]
+        )
+        result = tools.execute(df)
+        assert result.columns == ["id", "x", "y"]
+        assert result["x"].to_list() == [1, 2]
+        assert result["y"].to_list() == [10, 20]
+
+    def test_pyarrow_struct_and_json_string_columns_both_expand(self):
+        """PyArrow twin of test_polars_struct_and_json_string_columns_both_expand."""
+        if not self.has_pyarrow:
+            pytest.skip("pyarrow not installed")
+        tools = json_tools_rs.JSONTools().flatten()
+        table = self.pa.Table.from_pylist(
+            [
+                {"id": 1, "struct_col": {"x": 1}, "json_col": '{"y": 10}'},
+                {"id": 2, "struct_col": {"x": 2}, "json_col": '{"y": 20}'},
+            ]
+        )
+        result = tools.execute(table)
+        assert result.column_names == ["id", "x", "y"]
+        assert result["x"].to_pylist() == [1, 2]
+        assert result["y"].to_pylist() == [10, 20]
+
     def test_json_string_column_with_normalise(self):
         if not (self.has_pandas and self.has_pyarrow):
             pytest.skip("pandas and pyarrow not installed")

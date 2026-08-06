@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Performance
+- **Round 14: two more algorithmic fixes in the DataFrame pipeline**, found
+  by continuing round 13's audit into the parts it hadn't covered (the
+  pandas fast path, the general splice/unnest pipeline, `arrow_columnar.rs`,
+  `cache.rs`, `config.rs` -- only the two below turned out to be genuine;
+  everything else was already dense with measurement-backed, deliberate
+  optimizations).
+  - **Pandas fast-path eligibility now samples before fully extracting a
+    column.** To decide whether an `object`-dtype column secretly holds
+    embedded JSON, it used to call `.tolist()` + per-cell
+    `.extract::<String>()` on the *entire* column, then only look at the
+    first 20 non-null values to decide -- meaning a disqualifying column
+    (the common case for a DataFrame with an embedded-JSON-string column)
+    paid for extracting every remaining row for nothing. Now decoding stops
+    as soon as the first-20-non-null sample is complete and disqualifies.
+    **Confirmed ~2.1x faster** (interleaved A/B, 30K-row pandas DataFrame
+    with an embedded-JSON `object` column, `.flatten().execute(df)`).
+  - **Splicing and un-nesting are now one parse+reconstruct pass instead of
+    two.** Whenever a DataFrame has an embedded-JSON string column, every
+    row used to be parsed and serialized twice: once by the splice step
+    (substituting the spliced-in value), and again immediately after by a
+    separate un-nesting step that re-parsed the same row from scratch --
+    including the field that was just spliced in. Both the Arrow zero-copy
+    splice path and the text-detection (pandas/generic) splice path now
+    un-nest inline in their own existing reconstruction loop. **Confirmed
+    ~2x faster (pandas) and ~2.3x faster (Polars)** (interleaved A/B,
+    20K-row DataFrame with an embedded-JSON string column,
+    `.flatten().execute(df)`). Caught and fixed a real regression during
+    this change via the existing test suite: a second, separate call site
+    (`normalise=True` on DataFrame input) was still doing its own redundant
+    un-nesting pass on top of the now-already-un-nested rows, which would
+    have double-un-nested a nested object one level too far -- the full
+    existing `TestJsonStringColumnExpansion` suite caught this immediately.
+
 ## [0.9.27] - 2026-08-06
 
 ### Performance

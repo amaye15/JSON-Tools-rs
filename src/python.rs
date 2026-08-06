@@ -810,12 +810,17 @@ fn detect_json_string_columns(rows: &[String]) -> Vec<String> {
 }
 
 /// Splice `target_keys`' string values into parsed nested JSON within a single
-/// row. Returns `None` if the row doesn't parse as a JSON object at all, or if
-/// none of `target_keys` actually needed splicing in this row -- both cases
-/// left unchanged by the caller (cheaper than a no-op reserialize). Increments
-/// `failure_counts[key]` for any target key present as a string in this row
-/// whose value fails to re-parse as an object/array here (the sample that
-/// drove detection can still be wrong for a specific later row).
+/// row, also un-nesting any resulting (or already-present) object-valued
+/// top-level field inline via `write_field_unnested` -- fusing what used to
+/// be a second full parse+reconstruct pass (`unnest_object_valued_columns`,
+/// run on this function's own output) into the same reconstruction loop.
+/// Returns `None` only if the row doesn't parse as a JSON object at all, or
+/// if there's truly nothing to do (no splice substitution *and* no
+/// object-valued field to un-nest) -- both cases left unchanged by the
+/// caller (cheaper than a no-op reserialize). Increments `failure_counts[key]`
+/// for any target key present as a string in this row whose value fails to
+/// re-parse as an object/array here (the sample that drove detection can
+/// still be wrong for a specific later row).
 ///
 /// Deliberately avoids building a full `serde_json::Value` tree for the target
 /// field's content (github.com/amaye15/JSON-Tools-rs/issues/31): an earlier
@@ -871,13 +876,31 @@ fn splice_row(
             }
         }
     }
-    if !changed {
+    // Also check whether any field's *final* (post-substitution) value is
+    // itself a JSON object -- if so, this row needs the unnest transform
+    // fused into Pass 2 below even when no splice substitution happened at
+    // all (a genuinely dict-typed column can sit alongside a JSON-string
+    // column in the same row). Matches unnest_object_valued_columns's own
+    // "any top-level field starts with `{`" check exactly, just applied to
+    // the already-substituted value where one exists -- cheap: only
+    // inspects each field's already-parsed first byte, no new parsing.
+    let needs_unnest = fields.iter().any(|(key, raw)| {
+        let text = substitutions
+            .get(key.as_ref())
+            .map(String::as_str)
+            .unwrap_or_else(|| raw.get());
+        text.as_bytes().first() == Some(&b'{')
+    });
+    if !changed && !needs_unnest {
         return None;
     }
 
-    // Pass 2: reconstruct the row, splicing `substitutions` for detected keys
-    // and copying every other field's exact source bytes verbatim. Key
-    // escaping reuses `write_json_escaped_key` (flatten.rs) instead of
+    // Pass 2: reconstruct the row, splicing `substitutions` for detected keys,
+    // un-nesting any object-valued field inline (fusing what used to be a
+    // second parse+reconstruct pass over this function's own output --
+    // unnest_object_valued_columns -- into this same loop), and copying
+    // every other field's exact source bytes verbatim. Key escaping reuses
+    // `write_json_escaped_key` (flatten.rs) instead of
     // `serde_json::to_string(key)` -- the latter allocates a fresh
     // `Vec::with_capacity(128)` per key (via serde_json's `Serializer`/
     // `Formatter`/`io::Write` machinery) just to produce a quoted string
@@ -887,17 +910,13 @@ fn splice_row(
     // already proven in this exact role at flatten.rs:1469/unflatten.rs:1059.
     let mut out = String::with_capacity(row.len() + 64);
     out.push('{');
-    for (i, (key, raw)) in fields.iter().enumerate() {
-        if i > 0 {
-            out.push(',');
-        }
-        out.push('"');
-        write_json_escaped_key(&mut out, key);
-        out.push_str("\":");
-        match substitutions.get(key.as_ref()) {
-            Some(inner) => out.push_str(inner),
-            None => out.push_str(raw.get()),
-        }
+    let mut first = true;
+    for (key, raw) in &fields {
+        let text = substitutions
+            .get(key.as_ref())
+            .map(String::as_str)
+            .unwrap_or_else(|| raw.get());
+        write_field_unnested(&mut out, key, text, &mut first);
     }
     out.push('}');
     Some(out)
@@ -917,11 +936,22 @@ fn splice_row(
 /// just that one row. Rows with none of the detected columns present pass
 /// through completely unchanged (zero parse/reserialize cost) -- the common
 /// case for a DataFrame with no JSON-string columns at all.
+///
+/// Every row this function returns is already fully un-nested (a genuinely
+/// dict-typed column, unrelated to JSON-string splicing, gets the same
+/// treatment) -- `splice_row` does this inline for rows it actually
+/// processes (see its own doc comment), and the `target_keys.is_empty()`
+/// fallback below does it directly since `splice_row` is never called in
+/// that case. This means the caller never needs a separate un-nesting pass
+/// over this function's output.
 #[cfg(feature = "python")]
 fn expand_json_string_columns(py: Python<'_>, rows: Vec<String>) -> PyResult<Vec<String>> {
     let target_keys = detect_json_string_columns(&rows);
     if target_keys.is_empty() {
-        return Ok(rows);
+        return Ok(rows
+            .into_iter()
+            .map(|row| unnest_object_valued_columns(&row).unwrap_or(row))
+            .collect());
     }
 
     let mut failure_counts: IndexMap<String, usize> = IndexMap::new();
@@ -1190,32 +1220,34 @@ fn splice_zerocopy_columns(
         row_out.push('{');
         let mut first = true;
         for key in column_order {
-            if !first {
-                row_out.push(',');
-            }
-            first = false;
-            row_out.push('"');
-            write_json_escaped_key(&mut row_out, key);
-            row_out.push_str("\":");
-
-            if target_set.contains(key.as_str()) {
+            // Resolve this key's final value text first (target substitution,
+            // then a plain base-row lookup), then write it via
+            // write_field_unnested -- which also un-nests it inline if the
+            // resolved value is itself a JSON object, fusing what used to be
+            // a second full parse+reconstruct pass (unnest_object_valued_
+            // columns, called on this function's own output) into this same
+            // reconstruction loop.
+            let text: Cow<'_, str> = if target_set.contains(key.as_str()) {
                 match target_values.get(key).and_then(|col| col.get(row_idx)) {
                     Some(Some(text)) if is_json_object_or_array_text(text) => {
-                        row_out.push_str(text);
+                        Cow::Borrowed(text.as_str())
                     }
                     Some(Some(text)) => {
-                        row_out.push('"');
-                        write_json_escaped_key(&mut row_out, text);
-                        row_out.push('"');
+                        let mut buf = String::with_capacity(text.len() + 2);
+                        buf.push('"');
+                        write_json_escaped_key(&mut buf, text);
+                        buf.push('"');
                         *failure_counts.entry(key.clone()).or_insert(0) += 1;
+                        Cow::Owned(buf)
                     }
-                    _ => row_out.push_str("null"),
+                    _ => Cow::Borrowed("null"),
                 }
             } else if let Some(raw) = base_fields.get(key.as_str()) {
-                row_out.push_str(raw.get());
+                Cow::Borrowed(raw.get())
             } else {
-                row_out.push_str("null");
-            }
+                Cow::Borrowed("null")
+            };
+            write_field_unnested(&mut row_out, key, &text, &mut first);
         }
         row_out.push('}');
         out.push(row_out);
@@ -1375,6 +1407,45 @@ fn unnest_object_valued_columns(row: &str) -> Option<String> {
     }
     out.push('}');
     Some(out)
+}
+
+/// Write one top-level field to `out`, un-nesting it first if its resolved
+/// value (`text` -- always the *final* value, i.e. already substituted for
+/// a splice target if this key is one) is itself a JSON object -- exactly
+/// [`unnest_object_valued_columns`]'s own transform, fused into a splice
+/// function's existing reconstruction pass instead of a second parse of
+/// the same row afterward. `first` is the caller's running comma-placement
+/// state, shared across every field written for a row (an unnested field
+/// can write 0+ sub-fields in one call).
+#[cfg(feature = "python")]
+fn write_field_unnested(out: &mut String, key: &str, text: &str, first: &mut bool) {
+    if text.as_bytes().first() == Some(&b'{') {
+        // RawValue-sourced `text` is always well-formed JSON when it starts
+        // with `{`, so `parse_object_fields` structurally cannot fail here
+        // -- same reasoning as `unnest_object_valued_columns`'s own
+        // (unreachable in practice) fallback.
+        if let Some(inner_fields) = parse_object_fields(text) {
+            for (inner_key, inner_raw) in &inner_fields {
+                if !*first {
+                    out.push(',');
+                }
+                *first = false;
+                out.push('"');
+                write_json_escaped_key(out, inner_key);
+                out.push_str("\":");
+                out.push_str(inner_raw.get());
+            }
+            return;
+        }
+    }
+    if !*first {
+        out.push(',');
+    }
+    *first = false;
+    out.push('"');
+    write_json_escaped_key(out, key);
+    out.push_str("\":");
+    out.push_str(text);
 }
 
 /// Convert a Python list of dicts to per-item JSON strings via Python's own
@@ -2595,14 +2666,13 @@ fn extract_normalise_json_strings(
                 // Unconditional here (no is_flatten_mode() check needed): the only
                 // caller, execute_normalise, already hard-requires flatten mode
                 // before reaching this function at all -- see its doc comment.
-                let rows = expand_json_string_columns(py, rows)?;
-                // See `unnest_object_valued_columns`'s doc comment -- same
-                // column-name-prefix removal `execute_dataframe` applies,
-                // needed here too since normalise=True has its own separate
-                // DataFrame-to-json_strings path rather than sharing that one.
-                rows.into_iter()
-                    .map(|row| unnest_object_valued_columns(&row).unwrap_or(row))
-                    .collect()
+                // expand_json_string_columns's own rows are already fully
+                // un-nested (see its doc comment) -- same column-name-prefix
+                // removal `execute_dataframe` applies, needed here too since
+                // normalise=True has its own separate DataFrame-to-json_strings
+                // path rather than sharing that one, but no separate pass over
+                // its output required anymore.
+                expand_json_string_columns(py, rows)?
             }
             DataStructureType::Series(series_type) => {
                 let list = series_to_list(json_input, series_type)?;
@@ -3827,34 +3897,77 @@ fn classify_pandas_dtype(dtype_str: &str) -> Option<PandasColKind> {
     }
 }
 
+/// Decode one pandas `object`-dtype cell into `Option<String>` -- `None`
+/// (outer) means the cell holds neither a string nor a null-equivalent
+/// value, disqualifying the whole column (mixed Python objects: dicts,
+/// lists, numbers already mixed into an object column, ...); `Some(None)`
+/// is a genuine null (`None`, or float NaN -- pandas represents a missing
+/// value in an object column as NaN as often as it does `None`);
+/// `Some(Some(s))` is a string cell.
+#[cfg(feature = "python")]
+fn decode_pandas_object_cell(item: &Bound<'_, PyAny>) -> Option<Option<String>> {
+    if item.is_none() {
+        return Some(None);
+    }
+    if let Ok(s) = item.extract::<String>() {
+        return Some(Some(s));
+    }
+    if let Ok(f) = item.extract::<f64>() {
+        if f.is_nan() {
+            return Some(None);
+        }
+    }
+    None
+}
+
 /// Extract an `object`-dtype pandas column's values as `Option<String>` per
 /// cell -- `Ok(None)` (not an error) if any cell is neither `None`/`NaN` nor
 /// a `str`, since that means this column genuinely holds mixed Python
-/// objects (dicts, lists, numbers already mixed into an object column,
-/// ...), not the plain-string-with-nulls shape this fast path handles.
+/// objects, not the plain-string-with-nulls shape this fast path handles.
+///
+/// `sample_check` is called exactly once, as soon as the first
+/// `JSON_COLUMN_DETECTION_SAMPLE_SIZE` non-null cells have been decoded (or
+/// once at the end, if the column has fewer non-null cells than that) --
+/// the same "first N non-null values" sample `check_arrow_fastpath_
+/// eligibility`'s Arrow twin uses, just computed inline instead of after a
+/// full extraction. If it returns `true`, decoding stops immediately and
+/// this returns `Ok(None)` without ever touching the remaining cells.
+/// `tolist()` itself is one bulk pandas-internal call regardless of sample
+/// size (unavoidable: pandas has no cheaper way to expose "the first N
+/// non-null cells" without scanning for them) -- what this bounds is the
+/// per-cell `.extract::<String>()`/`.extract::<f64>()` FFI crossing this
+/// loop does for every cell, the part with real per-element cost (pandas'
+/// per-cell PyObject boxing is more expensive than Arrow's zero-copy
+/// extraction, per this module's other DataFrame-fast-path comments) --
+/// avoiding it for every cell beyond the sample in a possibly tens-of-
+/// thousands-row disqualifying column.
 #[cfg(feature = "python")]
-fn extract_pandas_object_column(col: &Bound<'_, PyAny>) -> PyResult<Option<Vec<Option<String>>>> {
+fn extract_pandas_object_column(
+    col: &Bound<'_, PyAny>,
+    sample_check: impl Fn(&[Option<String>]) -> bool,
+) -> PyResult<Option<Vec<Option<String>>>> {
     let list = col.call_method0("tolist")?;
     let list = list.cast::<PyList>()?;
     let mut out = Vec::with_capacity(list.len());
+    let mut sample_non_null = 0usize;
+    let mut sample_checked = false;
     for item in list.iter() {
-        if item.is_none() {
-            out.push(None);
-            continue;
+        let Some(decoded) = decode_pandas_object_cell(&item) else {
+            return Ok(None);
+        };
+        if decoded.is_some() {
+            sample_non_null += 1;
         }
-        if let Ok(s) = item.extract::<String>() {
-            out.push(Some(s));
-            continue;
-        }
-        // pandas represents a missing value in an object column as float
-        // NaN as often as it does None -- both mean "null" here.
-        if let Ok(f) = item.extract::<f64>() {
-            if f.is_nan() {
-                out.push(None);
-                continue;
+        out.push(decoded);
+        if !sample_checked && sample_non_null >= JSON_COLUMN_DETECTION_SAMPLE_SIZE {
+            sample_checked = true;
+            if sample_check(&out) {
+                return Ok(None);
             }
         }
-        return Ok(None); // some other Python type -- not eligible
+    }
+    if !sample_checked && sample_check(&out) {
+        return Ok(None);
     }
     Ok(Some(out))
 }
@@ -3956,17 +4069,15 @@ fn check_pandas_fastpath_eligibility<'py>(
         if !matches!(kind, PandasColKind::String) {
             continue;
         }
-        let Some(values) = extract_pandas_object_column(&columns[i])? else {
+        let Some(values) = extract_pandas_object_column(&columns[i], |sample| {
+            sample
+                .iter()
+                .flatten()
+                .any(|v| is_json_object_or_array_text(v))
+        })?
+        else {
             return Ok(None);
         };
-        let sampled_json = values
-            .iter()
-            .flatten()
-            .take(JSON_COLUMN_DETECTION_SAMPLE_SIZE)
-            .any(|v| is_json_object_or_array_text(v));
-        if sampled_json {
-            return Ok(None);
-        }
         string_values[i] = Some(values);
     }
 
@@ -4287,36 +4398,44 @@ impl PyJSONTools {
         // spliced back in from the zero-copy values afterward. See that
         // function's doc comment for the measured win and why this is
         // scoped to just those two DataFrame types.
+        // Every arm below returns rows that are already fully un-nested --
+        // `splice_zerocopy_columns` and `expand_json_string_columns` both
+        // fuse un-nesting into their own reconstruction pass now (see their
+        // doc comments), so only the `Some(_)` arm (rows fresh from the
+        // native writer, never parsed by anything yet) still needs its own
+        // explicit un-nesting pass. Previously all three arms shared one
+        // `.map(unnest_object_valued_columns)` after this match, which
+        // re-parsed every row a second time for the other two arms.
         let json_strings = if is_flatten_mode {
-            let rows =
-                match detect_and_extract_json_columns_zerocopy(df, df_type, &arrow_extracted_hint)?
-                {
-                    Some((target_cols, target_values, column_order)) if !target_cols.is_empty() => {
-                        let df_reduced = dataframe_drop_columns(df, df_type, &target_cols)?;
-                        let base_rows = dataframe_to_json_strings(&df_reduced, df_type)?;
-                        splice_zerocopy_columns(
-                            py,
-                            base_rows,
-                            &column_order,
-                            &target_cols,
-                            &target_values,
-                        )?
-                    }
-                    Some(_) => {
-                        // Polars/PyArrow input, but sampling found no embedded-JSON
-                        // columns -- nothing to splice, use the plain path.
-                        dataframe_to_json_strings(df, df_type)?
-                    }
-                    None => {
-                        // pandas/PySpark/generic: not Arrow-backed by default, use
-                        // the existing text-based detect-then-splice path.
-                        let rows = dataframe_to_json_strings(df, df_type)?;
-                        expand_json_string_columns(py, rows)?
-                    }
-                };
-            rows.into_iter()
-                .map(|row| unnest_object_valued_columns(&row).unwrap_or(row))
-                .collect()
+            match detect_and_extract_json_columns_zerocopy(df, df_type, &arrow_extracted_hint)? {
+                Some((target_cols, target_values, column_order)) if !target_cols.is_empty() => {
+                    let df_reduced = dataframe_drop_columns(df, df_type, &target_cols)?;
+                    let base_rows = dataframe_to_json_strings(&df_reduced, df_type)?;
+                    splice_zerocopy_columns(
+                        py,
+                        base_rows,
+                        &column_order,
+                        &target_cols,
+                        &target_values,
+                    )?
+                }
+                Some(_) => {
+                    // Polars/PyArrow input, but sampling found no embedded-JSON
+                    // columns -- nothing to splice, use the plain path. These
+                    // rows have never been parsed, so they still need their
+                    // own un-nesting pass.
+                    dataframe_to_json_strings(df, df_type)?
+                        .into_iter()
+                        .map(|row| unnest_object_valued_columns(&row).unwrap_or(row))
+                        .collect()
+                }
+                None => {
+                    // pandas/PySpark/generic: not Arrow-backed by default, use
+                    // the existing text-based detect-then-splice path.
+                    let rows = dataframe_to_json_strings(df, df_type)?;
+                    expand_json_string_columns(py, rows)?
+                }
+            }
         } else {
             dataframe_to_json_strings(df, df_type)?
         };
