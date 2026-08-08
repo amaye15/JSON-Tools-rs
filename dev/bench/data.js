@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786072366032,
+  "lastUpdate": 1786186823934,
   "repoUrl": "https://github.com/amaye15/JSON-Tools-rs",
   "entries": {
     "Benchmark": [
@@ -123177,6 +123177,82 @@ window.BENCHMARK_DATA = {
             "name": "stress_10_parallel_thresholds/nested_parallel/threshold_1000",
             "value": 347834,
             "range": "± 965",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "andrewmayes@Andrews-MacBook-Air.local",
+            "name": "Andrew Mayes"
+          },
+          "committer": {
+            "email": "andrewmayes@Andrews-MacBook-Air.local",
+            "name": "Andrew Mayes"
+          },
+          "distinct": true,
+          "id": "07ce8699428f716e1b23d0f135decc1bb2f191eb",
+          "message": "Bump version to 0.9.29\n\nCo-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>",
+          "timestamp": "2026-08-08T20:07:52+10:00",
+          "tree_id": "bf1b2494db121b7cde21910c590c28d9a594f596",
+          "url": "https://github.com/amaye15/JSON-Tools-rs/commit/07ce8699428f716e1b23d0f135decc1bb2f191eb"
+        },
+        "date": 1786186822252,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "08b_normal_mode_key_transforms/no_transforms/large",
+            "value": 14382,
+            "range": "± 93",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "08b_normal_mode_key_transforms/lowercase_keys/large",
+            "value": 17383,
+            "range": "± 86",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "08b_normal_mode_key_transforms/collision_handling_no_collisions/large",
+            "value": 17546,
+            "range": "± 347",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "08b_normal_mode_key_transforms/collision_handling_with_collisions/large",
+            "value": 26950,
+            "range": "± 274",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "08b_normal_mode_key_transforms/no_transforms/xlarge",
+            "value": 1551121,
+            "range": "± 13090",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "08b_normal_mode_key_transforms/lowercase_keys/xlarge",
+            "value": 2108506,
+            "range": "± 12424",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "08b_normal_mode_key_transforms/collision_handling_no_collisions/xlarge",
+            "value": 2101573,
+            "range": "± 11962",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "08b_normal_mode_key_transforms/collision_handling_with_collisions/xlarge",
+            "value": 3766959,
+            "range": "± 65466",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "iso_10_unflatten_only/array_to_object_conversion",
+            "value": 197688,
+            "range": "± 3636",
             "unit": "ns/iter"
           }
         ]
