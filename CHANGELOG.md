@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.29] - 2026-08-08
+
 ### Performance
 - **Round 15: two algorithmic fixes in the core "normal" (non-flatten/
   unflatten) processing path and the unflatten array-conversion path.**
