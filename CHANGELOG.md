@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Performance
+- **Round 15: two algorithmic fixes in the core "normal" (non-flatten/
+  unflatten) processing path and the unflatten array-conversion path.**
+  Rounds 13-14 covered `python.rs`'s DataFrame layer three rounds running;
+  this round's audit turned to the core engine underneath it
+  (`flatten.rs`, `unflatten.rs`, `convert.rs`, `transform.rs`).
+  - **Normal mode's key-transform/collision path no longer allocates a new
+    `String` for every key.** Whenever `lowercase_keys`, key replacement, or
+    `handle_key_collision(true)` is used *without* `.flatten()`/
+    `.unflatten()`, every object key at every nesting depth used to be
+    unconditionally copied into a freshly heap-allocated `String`, even when
+    the key had no escapes, matched no replacement pattern, was already
+    lowercase, and never collided. Key storage switched from `String` to
+    `Cow<'a, str>`, only allocating when a transform actually changed the
+    key -- the same allocation-avoidance idiom already used throughout the
+    rest of the codebase. Also removed a redundant hashmap lookup in
+    collision serialization (a second `key_indices[key]` lookup for
+    something the insertion loop just computed), matching the
+    `ordered`/`key_positions` pattern `flatten.rs`'s `resolve_and_write`
+    already used. **Confirmed 1.4x-1.85x faster** (interleaved A/B, ~500KB
+    nested JSON in normal mode, `lowercase_keys`/`handle_key_collision`).
+  - **Unflatten's array-to-object conversion now pre-sizes the new map.**
+    When a flattened array path is later found to contain a key that fails
+    to parse as a valid array index, the array is rebuilt as an object --
+    this used to start from zero capacity and grow one insert at a time
+    instead of pre-sizing to the array's length, the same `IndexMap`
+    doubling-growth pattern already fixed at three other sites in the same
+    file. **Confirmed 1.54x faster** (interleaved A/B, 1000-element array
+    converted to an object).
+
 ## [0.9.28] - 2026-08-07
 
 ### Performance

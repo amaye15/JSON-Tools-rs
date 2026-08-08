@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Performance
+Round 15: continuing the algorithmic focus from rounds 13-14 (which covered `python.rs`'s DataFrame layer three rounds running), this round's audit turned to the core engine underneath it (`flatten.rs`, `unflatten.rs`, `convert.rs`, `transform.rs`) and found two real issues. **Normal mode's (non-`.flatten()`/`.unflatten()`) key-transform/collision path no longer allocates a `String` for every key.** Using `lowercase_keys`, key replacement, or `handle_key_collision(true)` without flattening/unflattening used to unconditionally copy every object key at every nesting depth into a fresh heap-allocated `String`, even when nothing about the key actually changed; key storage switched from `String` to `Cow<'a, str>`, matching the allocation-avoidance idiom used everywhere else in this codebase. Also removed a redundant hashmap lookup in collision serialization. Confirmed 1.4x-1.85x faster (interleaved A/B, ~500KB nested JSON, `lowercase_keys`/`handle_key_collision`). **Unflatten's array-to-object conversion now pre-sizes the new map** instead of starting from zero capacity -- the same `IndexMap` doubling-growth fix already applied at three other sites in the same file, just missed at this one (a narrow but genuine path: a digit-only flattened key that overflows `usize` while sharing a parent with legitimate array indices). Confirmed 1.54x faster (interleaved A/B, 1000-element array converted to an object).
+
 ## v0.9.28 (2026-08-07)
 
 ### Performance
