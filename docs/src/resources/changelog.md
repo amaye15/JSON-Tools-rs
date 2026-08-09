@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.9.30 (2026-08-09)
+
 ### Performance
 Round 16: continuing the algorithmic audit into territory prior rounds hadn't fully covered (`builder.rs`, every `rayon`/parallel-dispatch call site), found that whenever `.num_threads(Some(n))` is set explicitly and a batch of documents is processed where individual documents are also wide enough to trigger nested parallelism, every worker thread of the batch-level thread pool independently built another fresh `n`-thread pool per qualifying document instead of reusing the pool it was already running inside -- up to `O(batch_size)` pool constructions instead of one. `flatten_collecting_parallel` now detects when the ambient pool already matches the requested thread count and reuses it instead of rebuilding. Confirmed 1.77x-2.09x faster (interleaved A/B, batches of 10/50/100 150-key documents, `num_threads(Some(4))`). Also cached `std::thread::available_parallelism()` (previously re-queried on every document qualifying for nested parallelism with no explicit `num_threads` override) -- a small, real, but modest win.
 
