@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Performance
+- **Round 16: eliminated redundant thread-pool construction in nested
+  parallelism.** Continuing the algorithmic audit into territory prior
+  rounds hadn't fully covered (`builder.rs`, every `rayon`/parallel-dispatch
+  call site), found that whenever `.num_threads(Some(n))` is set explicitly
+  *and* a batch of documents is processed where individual documents are
+  also wide enough to trigger nested parallelism
+  (`nested_parallel_threshold`), every worker thread of the batch-level
+  thread pool independently built *another* fresh `n`-thread pool per
+  qualifying document instead of reusing the pool it was already running
+  inside -- up to `O(batch_size)` pool constructions (and transient thread
+  oversubscription) instead of one. `flatten_collecting_parallel` now
+  detects when the ambient pool already matches the requested thread count
+  (`rayon::current_num_threads() == n`) and reuses it instead of rebuilding.
+  **Confirmed 1.77x-2.09x faster** (interleaved A/B, batches of 10/50/100
+  150-key documents, `num_threads(Some(4))`). Also cached
+  `std::thread::available_parallelism()` (a syscall, previously re-queried
+  on every document qualifying for nested parallelism when no explicit
+  `num_threads` override is set) -- a small, real, but modest win compared
+  to the fix above.
+
 ## [0.9.29] - 2026-08-08
 
 ### Performance
