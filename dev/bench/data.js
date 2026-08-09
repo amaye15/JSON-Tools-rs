@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786186823934,
+  "lastUpdate": 1786268554929,
   "repoUrl": "https://github.com/amaye15/JSON-Tools-rs",
   "entries": {
     "Benchmark": [
@@ -123253,6 +123253,118 @@ window.BENCHMARK_DATA = {
             "name": "iso_10_unflatten_only/array_to_object_conversion",
             "value": 197688,
             "range": "± 3636",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "andrewmayes@Andrews-MacBook-Air.local",
+            "name": "Andrew Mayes"
+          },
+          "committer": {
+            "email": "andrewmayes@Andrews-MacBook-Air.local",
+            "name": "Andrew Mayes"
+          },
+          "distinct": true,
+          "id": "e385dac7d20bcc4f9bcec783c839086e8991b89b",
+          "message": "Bump version to 0.9.30\n\nCo-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>",
+          "timestamp": "2026-08-09T18:48:06+10:00",
+          "tree_id": "f467dd31c313372206f47a0ee74c912f740fa2ad",
+          "url": "https://github.com/amaye15/JSON-Tools-rs/commit/e385dac7d20bcc4f9bcec783c839086e8991b89b"
+        },
+        "date": 1786268553393,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "08b_normal_mode_key_transforms/no_transforms/large",
+            "value": 18060,
+            "range": "± 282",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "08b_normal_mode_key_transforms/lowercase_keys/large",
+            "value": 19706,
+            "range": "± 373",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "08b_normal_mode_key_transforms/collision_handling_no_collisions/large",
+            "value": 21980,
+            "range": "± 243",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "08b_normal_mode_key_transforms/collision_handling_with_collisions/large",
+            "value": 32537,
+            "range": "± 220",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "08b_normal_mode_key_transforms/no_transforms/xlarge",
+            "value": 1800417,
+            "range": "± 45290",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "08b_normal_mode_key_transforms/lowercase_keys/xlarge",
+            "value": 2449388,
+            "range": "± 48362",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "08b_normal_mode_key_transforms/collision_handling_no_collisions/xlarge",
+            "value": 2552273,
+            "range": "± 53038",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "08b_normal_mode_key_transforms/collision_handling_with_collisions/xlarge",
+            "value": 4774224,
+            "range": "± 100492",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "16_num_threads_batch_nested/num_threads_4/10",
+            "value": 209961,
+            "range": "± 1498",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "16_num_threads_batch_nested/num_threads_default/10",
+            "value": 51116,
+            "range": "± 707",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "16_num_threads_batch_nested/num_threads_4/50",
+            "value": 347937,
+            "range": "± 4954",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "16_num_threads_batch_nested/num_threads_default/50",
+            "value": 189464,
+            "range": "± 1268",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "16_num_threads_batch_nested/num_threads_4/100",
+            "value": 520686,
+            "range": "± 4405",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "16_num_threads_batch_nested/num_threads_default/100",
+            "value": 357200,
+            "range": "± 2523",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "iso_10_unflatten_only/array_to_object_conversion",
+            "value": 231107,
+            "range": "± 1891",
             "unit": "ns/iter"
           }
         ]
