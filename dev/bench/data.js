@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786342468440,
+  "lastUpdate": 1786944553319,
   "repoUrl": "https://github.com/amaye15/JSON-Tools-rs",
   "entries": {
     "Benchmark": [
@@ -123477,6 +123477,118 @@ window.BENCHMARK_DATA = {
             "name": "iso_10_unflatten_only/array_to_object_conversion",
             "value": 232238,
             "range": "± 2116",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "github-actions[bot]",
+            "username": "github-actions[bot]",
+            "email": "github-actions[bot]@users.noreply.github.com"
+          },
+          "committer": {
+            "name": "github-actions[bot]",
+            "username": "github-actions[bot]",
+            "email": "github-actions[bot]@users.noreply.github.com"
+          },
+          "id": "dca1217a5ac50e9570fe224524895b9a65b4dc98",
+          "message": "chore: append CI benchmark history for e385dac7 [skip ci]",
+          "timestamp": "2026-08-09T08:52:16Z",
+          "url": "https://github.com/amaye15/JSON-Tools-rs/commit/dca1217a5ac50e9570fe224524895b9a65b4dc98"
+        },
+        "date": 1786944551971,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "08b_normal_mode_key_transforms/no_transforms/large",
+            "value": 17780,
+            "range": "± 49",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "08b_normal_mode_key_transforms/lowercase_keys/large",
+            "value": 21240,
+            "range": "± 758",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "08b_normal_mode_key_transforms/collision_handling_no_collisions/large",
+            "value": 21723,
+            "range": "± 123",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "08b_normal_mode_key_transforms/collision_handling_with_collisions/large",
+            "value": 32261,
+            "range": "± 1125",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "08b_normal_mode_key_transforms/no_transforms/xlarge",
+            "value": 1682397,
+            "range": "± 14134",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "08b_normal_mode_key_transforms/lowercase_keys/xlarge",
+            "value": 2347719,
+            "range": "± 30202",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "08b_normal_mode_key_transforms/collision_handling_no_collisions/xlarge",
+            "value": 2656499,
+            "range": "± 102891",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "08b_normal_mode_key_transforms/collision_handling_with_collisions/xlarge",
+            "value": 4528493,
+            "range": "± 31092",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "16_num_threads_batch_nested/num_threads_4/10",
+            "value": 176966,
+            "range": "± 925",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "16_num_threads_batch_nested/num_threads_default/10",
+            "value": 47895,
+            "range": "± 711",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "16_num_threads_batch_nested/num_threads_4/50",
+            "value": 298184,
+            "range": "± 1830",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "16_num_threads_batch_nested/num_threads_default/50",
+            "value": 172164,
+            "range": "± 1010",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "16_num_threads_batch_nested/num_threads_4/100",
+            "value": 454895,
+            "range": "± 4695",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "16_num_threads_batch_nested/num_threads_default/100",
+            "value": 323020,
+            "range": "± 2019",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "iso_10_unflatten_only/array_to_object_conversion",
+            "value": 258376,
+            "range": "± 2917",
             "unit": "ns/iter"
           }
         ]
