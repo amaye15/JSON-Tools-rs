@@ -11,6 +11,7 @@ src/
 ├── types.rs          Core types: JsonInput, JsonOutput
 ├── error.rs          Error types with codes E001-E008
 ├── config.rs         Configuration structs and operation modes
+├── config_json.rs    Config wire format for pickle / PySpark transport
 ├── cache.rs          Multi-tier regex pattern cache (compile-time table, sticky,
 │                     thread-local, global)
 ├── fxhash.rs         Custom FxHash-style Hasher/BuildHasher for FxHashMap/FxIndexMap
@@ -18,6 +19,7 @@ src/
 ├── transform.rs      Filtering, key/value replacements, collision handling
 ├── flatten.rs        Tape-based flattening engine (scan -> walk -> output)
 ├── unflatten.rs      Tape-based unflattening with SIMD separator detection
+├── arrow_columnar.rs Typed Arrow column builder for DataFrame output
 ├── builder.rs        Public JSONTools builder API and execute()
 ├── python.rs         Python bindings via PyO3
 ├── tests.rs          Unit tests
@@ -102,7 +104,15 @@ Reconstructs nested JSON from flat key-value pairs using the same tape scanner a
 
 ### `builder` -- Public API
 
-The `JSONTools` struct and its ~19 public methods (3 mode setters, 14 configuration methods, plus `new()` and `execute()`). Routes `execute()` calls to the appropriate processing function based on operation mode (flatten, unflatten, normal).
+The `JSONTools` struct and its 25+ public methods (3 mode setters, 14+ configuration methods including `exclude_*`, `always_array_keys`, and per-category `convert_*`, plus `new()` and `execute()`). Routes `execute()` calls to the appropriate processing function based on operation mode (flatten, unflatten, normal).
+
+### `config_json` -- Config Transport
+
+Wire format for `to_config_json()` / `from_config_json()`. Powers Python pickle support and PySpark `mapInPandas` transport. `builder.rs` stays the single source of truth for defaults.
+
+### `arrow_columnar` -- Arrow Output
+
+Shared JSON-fragment to typed Arrow column toolkit. Backs Arrow-native `normalise()` reconstruction and the flat-DataFrame fast path. No `serde_json::Value` tree; operates on fragment text.
 
 ### `python` -- Python Bindings
 

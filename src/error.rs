@@ -62,7 +62,7 @@ impl std::fmt::Display for JsonToolsError {
             } => {
                 write!(
                     f,
-                    "[E001] JSON parsing failed: {message}\n\u{1f4a1} Suggestion: {suggestion}"
+                    "[E001] JSON parsing failed: {message}\nSuggestion: {suggestion}"
                 )
             }
             Self::RegexError {
@@ -72,14 +72,17 @@ impl std::fmt::Display for JsonToolsError {
             } => {
                 write!(
                     f,
-                    "[E002] Regex pattern error: {message}\n\u{1f4a1} Suggestion: {suggestion}"
+                    "[E002] Regex pattern error: {message}\nSuggestion: {suggestion}"
                 )
             }
             Self::InvalidReplacementPattern {
                 message,
                 suggestion,
             } => {
-                write!(f, "[E003] Invalid replacement pattern: {message}\n\u{1f4a1} Suggestion: {suggestion}")
+                write!(
+                    f,
+                    "[E003] Invalid replacement pattern: {message}\nSuggestion: {suggestion}"
+                )
             }
             Self::InvalidJsonStructure {
                 message,
@@ -87,14 +90,17 @@ impl std::fmt::Display for JsonToolsError {
             } => {
                 write!(
                     f,
-                    "[E004] Invalid JSON structure: {message}\n\u{1f4a1} Suggestion: {suggestion}"
+                    "[E004] Invalid JSON structure: {message}\nSuggestion: {suggestion}"
                 )
             }
             Self::ConfigurationError {
                 message,
                 suggestion,
             } => {
-                write!(f, "[E005] Operation mode not configured: {message}\n\u{1f4a1} Suggestion: {suggestion}")
+                write!(
+                    f,
+                    "[E005] Configuration error: {message}\nSuggestion: {suggestion}"
+                )
             }
             Self::BatchProcessingError {
                 index,
@@ -102,7 +108,7 @@ impl std::fmt::Display for JsonToolsError {
                 suggestion,
                 ..
             } => {
-                write!(f, "[E006] Batch processing failed at index {index}: {message}\n\u{1f4a1} Suggestion: {suggestion}")
+                write!(f, "[E006] Batch processing failed at index {index}: {message}\nSuggestion: {suggestion}")
             }
             Self::InputValidationError {
                 message,
@@ -110,7 +116,7 @@ impl std::fmt::Display for JsonToolsError {
             } => {
                 write!(
                     f,
-                    "[E007] Input validation failed: {message}\n\u{1f4a1} Suggestion: {suggestion}"
+                    "[E007] Input validation failed: {message}\nSuggestion: {suggestion}"
                 )
             }
             Self::SerializationError {
@@ -118,7 +124,10 @@ impl std::fmt::Display for JsonToolsError {
                 suggestion,
                 ..
             } => {
-                write!(f, "[E008] JSON serialization failed: {message}\n\u{1f4a1} Suggestion: {suggestion}")
+                write!(
+                    f,
+                    "[E008] JSON serialization failed: {message}\nSuggestion: {suggestion}"
+                )
             }
         }
     }
@@ -162,6 +171,44 @@ impl JsonToolsError {
             JsonToolsError::BatchProcessingError { .. } => "E006",
             JsonToolsError::InputValidationError { .. } => "E007",
             JsonToolsError::SerializationError { .. } => "E008",
+        }
+    }
+
+    /// Get the human-readable message without the code prefix or suggestion.
+    /// Use with `error_code()` for assertions that avoid matching source errors.
+    pub fn message(&self) -> &str {
+        match self {
+            JsonToolsError::JsonParseError { message, .. }
+            | JsonToolsError::RegexError { message, .. }
+            | JsonToolsError::InvalidReplacementPattern { message, .. }
+            | JsonToolsError::InvalidJsonStructure { message, .. }
+            | JsonToolsError::ConfigurationError { message, .. }
+            | JsonToolsError::BatchProcessingError { message, .. }
+            | JsonToolsError::InputValidationError { message, .. }
+            | JsonToolsError::SerializationError { message, .. } => message,
+        }
+    }
+
+    /// Get the actionable suggestion attached to this error.
+    pub fn suggestion(&self) -> &str {
+        match self {
+            JsonToolsError::JsonParseError { suggestion, .. }
+            | JsonToolsError::RegexError { suggestion, .. }
+            | JsonToolsError::InvalidReplacementPattern { suggestion, .. }
+            | JsonToolsError::InvalidJsonStructure { suggestion, .. }
+            | JsonToolsError::ConfigurationError { suggestion, .. }
+            | JsonToolsError::BatchProcessingError { suggestion, .. }
+            | JsonToolsError::InputValidationError { suggestion, .. }
+            | JsonToolsError::SerializationError { suggestion, .. } => suggestion,
+        }
+    }
+
+    /// Get the batch index for `E006` errors, else `None`.
+    /// Helps tests assert batch context without matching the boxed source.
+    pub fn batch_index(&self) -> Option<usize> {
+        match self {
+            JsonToolsError::BatchProcessingError { index, .. } => Some(*index),
+            _ => None,
         }
     }
 
@@ -303,9 +350,11 @@ impl From<regex::Error> for JsonToolsError {
 }
 
 // Automatic conversion from pyo3::PyErr (needed for closures mixing PyResult and JsonToolsError)
+// Maps to E007, not E005: a Python interop failure is not a user
+// configuration error. The Python message stays in `message` so no detail is lost.
 #[cfg(feature = "python")]
 impl From<pyo3::PyErr> for JsonToolsError {
     fn from(err: pyo3::PyErr) -> Self {
-        JsonToolsError::configuration_error(format!("Python error: {err}"))
+        JsonToolsError::input_validation_error(format!("Python interop failure: {err}"))
     }
 }

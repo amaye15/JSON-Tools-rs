@@ -3,7 +3,7 @@ use std::borrow::Cow;
 use crate::error::JsonToolsError;
 
 /// Input type for JSON flattening operations with Cow optimization
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[repr(u8)] // OPTIMIZATION: Smaller discriminant for better cache locality
 pub enum JsonInput<'a> {
     /// Single JSON string with Cow for efficient memory usage
@@ -56,7 +56,7 @@ impl<'a> From<&'a [String]> for JsonInput<'a> {
 }
 
 /// Output type for JSON flattening operations
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[repr(u8)] // OPTIMIZATION: Smaller discriminant for better cache locality
 pub enum JsonOutput {
     /// Single flattened JSON string

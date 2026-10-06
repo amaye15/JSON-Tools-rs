@@ -93,4 +93,5 @@ __all__ = [
     "JSONTools",
     "JsonOutput",
     "JsonToolsError",
+    "__version__",
 ]

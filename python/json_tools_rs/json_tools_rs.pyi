@@ -1,6 +1,8 @@
 """Type stubs for the json_tools_rs native extension module."""
 
-from typing import Any, Optional, Sequence, Union
+from typing import Any, Literal, Optional, Sequence, Union
+
+NormaliseTarget = Literal["pandas", "polars", "pyarrow", "pyspark"]
 
 class JsonToolsError(Exception):
     """Exception raised by JSON Tools operations."""
@@ -103,11 +105,48 @@ class JSONTools:
         ...
 
     def always_array_keys(self, keys: Sequence[str]) -> "JSONTools":
-        """Flattened key names that must always render as an array, even with only one value -- keeps a key's shape consistent across documents/rows regardless of handle_key_collision. Matched against the final flattened key name."""
+        """Flattened key names that must always render as an array, even with only one value -- keeps a key's shape consistent across documents/rows regardless of handle_key_collision. Matched against the final flattened key name. Additive."""
         ...
 
     def auto_convert_types(self, enable: bool) -> "JSONTools":
         """Enable automatic type conversion from strings to numbers and booleans."""
+        ...
+
+    def convert_dates(
+        self,
+        enable: bool,
+        normalize_to_utc: Optional[bool] = None,
+        assume_utc_for_naive: Optional[bool] = None,
+    ) -> "JSONTools":
+        """Enable date conversion. Set options to override UTC defaults."""
+        ...
+
+    def convert_nulls(
+        self, enable: bool, extra_tokens: Optional[Sequence[str]] = None
+    ) -> "JSONTools":
+        """Enable null conversion. Set extra_tokens to recognize more null strings."""
+        ...
+
+    def convert_booleans(
+        self,
+        enable: bool,
+        extra_true_tokens: Optional[Sequence[str]] = None,
+        extra_false_tokens: Optional[Sequence[str]] = None,
+    ) -> "JSONTools":
+        """Enable boolean conversion. Set token lists to recognize more values."""
+        ...
+
+    def convert_numbers(
+        self,
+        enable: bool,
+        currency: Optional[bool] = None,
+        percent: Optional[bool] = None,
+        basis_points: Optional[bool] = None,
+        suffixes: Optional[bool] = None,
+        fractions: Optional[bool] = None,
+        radix: Optional[bool] = None,
+    ) -> "JSONTools":
+        """Enable number conversion. Set flags to disable specific sub-formats."""
         ...
 
     def parallel_threshold(self, threshold: int) -> "JSONTools":
@@ -130,7 +169,7 @@ class JSONTools:
         self,
         json_input: Any,
         normalise: bool = False,
-        target: Optional[str] = None,
+        target: Optional[NormaliseTarget] = None,
     ) -> Any:
         """Execute the configured JSON operation.
 

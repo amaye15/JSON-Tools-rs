@@ -1749,6 +1749,7 @@ impl PyJSONTools {
     ///
     /// Args:
     ///     keys: Iterable of flattened key names that must always be arrays.
+    ///         Additive -- each call adds more keys.
     #[pyo3(text_signature = "($self, keys)")]
     #[inline]
     pub fn always_array_keys(slf: PyRef<'_, Self>, keys: Vec<String>) -> PyResult<PyRef<'_, Self>> {

@@ -148,15 +148,16 @@ impl CollisionConfig {
         self
     }
 
-    /// Set the flattened key names that must always render as an array --
-    /// see `always_array_keys`'s own doc comment.
+    /// Add flattened key names that must always render as an array --
+    /// see `always_array_keys`'s own doc comment. Additive.
     #[must_use]
     pub fn always_array_keys<I, S>(mut self, keys: I) -> Self
     where
         I: IntoIterator<Item = S>,
         S: Into<String>,
     {
-        self.always_array_keys = keys.into_iter().map(Into::into).collect();
+        self.always_array_keys
+            .extend(keys.into_iter().map(Into::into));
         self
     }
 
@@ -686,7 +687,11 @@ impl ProcessingConfig {
 
     /// Resolve the thread count to use for a parallel workload of `item_count` items,
     /// honoring an explicit `num_threads` override and never exceeding `item_count`.
+    /// Returns 1 for empty workloads so callers never divide by zero.
     pub(crate) fn effective_thread_count(&self, item_count: usize) -> usize {
+        if item_count == 0 {
+            return 1;
+        }
         let base = self.num_threads.unwrap_or(*AVAILABLE_PARALLELISM);
         base.max(1).min(item_count)
     }
@@ -732,5 +737,14 @@ impl ProcessingConfig {
         self.type_conversion_mode = type_conversion.classify();
         self.type_conversion = type_conversion;
         self
+    }
+
+    /// Re-derive the cached `type_conversion_mode` after direct field writes.
+    /// `ProcessingConfig` exposes public fields for flexibility, so `config.type_conversion = ...`
+    /// bypasses `type_conversion()` and leaves the cached mode stale. Call this
+    /// after direct assignment. Builder `JSONTools` never needs it -- it
+    /// classifies once in `from_json_tools()`.
+    pub fn reclassify(&mut self) {
+        self.type_conversion_mode = self.type_conversion.classify();
     }
 }

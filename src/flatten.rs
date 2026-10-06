@@ -30,7 +30,7 @@ use crate::transform::{apply_replacement_patterns, matches_any_pattern};
 // ================================================================================================
 
 /// Cached separator information for operations with Cow optimization
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub(crate) struct SeparatorCache {
     pub(crate) separator: Cow<'static, str>,
     is_single_char: bool,
@@ -56,7 +56,7 @@ impl SeparatorCache {
             _ => Cow::Owned(separator.to_string()),
         };
 
-        let is_single_char = separator.len() == 1;
+        let is_single_char = separator.chars().count() == 1;
         let single_char = if is_single_char {
             separator.chars().next()
         } else {
@@ -1885,8 +1885,11 @@ fn flatten_collecting_parallel<'a>(
     ranges: &[(usize, usize, usize)],
     is_root_object: bool,
 ) -> Result<Vec<CollectedEntry<'a, CompactString>>, JsonToolsError> {
+    if ranges.is_empty() {
+        return Ok(Vec::new());
+    }
     let n_threads = config.effective_thread_count(ranges.len());
-    let chunk_size = ranges.len().div_ceil(n_threads);
+    let chunk_size = ranges.len().div_ceil(n_threads).max(1);
 
     let process_chunks = || -> Vec<CollectedEntry<'a, CompactString>> {
         ranges

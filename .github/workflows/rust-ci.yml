@@ -63,6 +63,12 @@ jobs:
             exit 1
           fi
           echo "Versions in sync: $CARGO_VER"
+          # Docs headers must match too (README current header and mdBook changelog).
+          for f in README.md docs/src/resources/changelog.md; do
+            if ! grep -q "$CARGO_VER" "$f"; then
+              echo "::warning::Version $CARGO_VER not found in $f; update the docs header to match the release."
+            fi
+          done
 
   msrv:
     name: MSRV Check (1.85)
@@ -76,7 +82,7 @@ jobs:
         with:
           key: msrv
       - name: Check MSRV
-        run: cargo check --locked --features test-assets-performance
+        run: cargo check --locked --all-features
 
   test:
     name: Test
@@ -217,6 +223,9 @@ jobs:
       - name: Install cargo-tarpaulin
         run: cargo install cargo-tarpaulin --locked
       - name: Run coverage
+        # src/python.rs is PyO3 glue covered by Python tests (pytest), not by
+        # Rust tarpaulin. src/main.rs is a CLI demo. Both stay excluded so the
+        # gate measures the Rust core engine only.
         run: cargo tarpaulin --verbose --workspace --timeout 120 --out xml --fail-under 60 --exclude-files "src/main.rs" --exclude-files "src/python.rs"
       - name: Upload to Codecov
         uses: codecov/codecov-action@v7
@@ -241,7 +250,9 @@ jobs:
       - name: Check isort ordering
         run: isort --check-only python/
       - name: Run mypy type checking
-        run: mypy python/json_tools_rs/__init__.py --ignore-missing-imports
+        run: |
+          mypy python/json_tools_rs/__init__.py --ignore-missing-imports
+          mypy python/json_tools_rs/json_tools_rs.pyi
 
   python-test:
     name: Python Tests (${{ matrix.python-version }})

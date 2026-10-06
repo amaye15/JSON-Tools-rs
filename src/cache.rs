@@ -17,6 +17,21 @@ use std::sync::{Arc, LazyLock, RwLock};
 /// over at most a few hundred entries).
 static CACHE_CLOCK: AtomicU64 = AtomicU64::new(0);
 
+/// Observability counters for the regex cache. Incremented with Relaxed
+/// ordering -- exact values may race under parallel load, but monotonic
+/// trends (hits grow on repeated patterns) stay valid for tests and tuning.
+static CACHE_HITS: AtomicU64 = AtomicU64::new(0);
+static CACHE_MISSES: AtomicU64 = AtomicU64::new(0);
+
+/// Return `(hits, misses)` for the regex cache across all tiers.
+#[allow(dead_code)]
+pub(crate) fn cache_stats() -> (u64, u64) {
+    (
+        CACHE_HITS.load(Ordering::Relaxed),
+        CACHE_MISSES.load(Ordering::Relaxed),
+    )
+}
+
 #[inline]
 fn next_tick() -> u64 {
     CACHE_CLOCK.fetch_add(1, Ordering::Relaxed)
@@ -233,6 +248,7 @@ fn insert_sticky(pattern: &str, regex: &Arc<Regex>) {
 /// literal -- there is no implicit "try regex, fall back to literal" behavior, so a pattern
 /// containing characters that happen to be regex metacharacters (`.`, `$`, `(`, etc.) always
 /// matches literally unless explicitly wrapped.
+#[derive(Debug, Clone, Copy)]
 pub(crate) enum ParsedPattern<'a> {
     Regex(&'a str),
     Literal(&'a str),
@@ -257,6 +273,7 @@ pub(crate) fn parse_pattern(pattern: &str) -> ParsedPattern<'_> {
 pub(crate) fn get_cached_regex(pattern: &str) -> Result<Arc<Regex>, regex::Error> {
     // TIER 1: Check pre-compiled common patterns (fastest path, no allocation)
     if let Some(regex) = COMMON_REGEX_PATTERNS.get(pattern) {
+        CACHE_HITS.fetch_add(1, Ordering::Relaxed);
         return Ok(Arc::clone(regex));
     }
 
@@ -269,6 +286,7 @@ pub(crate) fn get_cached_regex(pattern: &str) -> Result<Arc<Regex>, regex::Error
             .map(|(_, r)| Arc::clone(r))
     });
     if let Some(regex) = sticky_hit {
+        CACHE_HITS.fetch_add(1, Ordering::Relaxed);
         return Ok(regex);
     }
 
@@ -282,13 +300,18 @@ pub(crate) fn get_cached_regex(pattern: &str) -> Result<Arc<Regex>, regex::Error
     });
 
     if let Some(regex) = thread_local_result {
+        CACHE_HITS.fetch_add(1, Ordering::Relaxed);
         insert_sticky(pattern, &regex);
         return Ok(regex);
     }
 
-    // TIER 3: Try global cache under read lock
+    // TIER 3: Try global cache under read lock. Recover from poison instead
+    // of panicking: a poisoned lock means another thread panicked while
+    // holding it, but the map data stays valid for reads.
     {
-        if let Some((regex, tick)) = REGEX_CACHE.read().unwrap().get(pattern) {
+        let cache = REGEX_CACHE.read().unwrap_or_else(|e| e.into_inner());
+        if let Some((regex, tick)) = cache.get(pattern) {
+            CACHE_HITS.fetch_add(1, Ordering::Relaxed);
             tick.store(next_tick(), Ordering::Relaxed);
             let regex_arc = Arc::clone(regex);
             insert_thread_local(pattern, &regex_arc);
@@ -299,11 +322,13 @@ pub(crate) fn get_cached_regex(pattern: &str) -> Result<Arc<Regex>, regex::Error
 
     // NOT FOUND: Compile before taking the write lock (expensive operation)
     let regex = Arc::new(Regex::new(pattern)?);
+    CACHE_MISSES.fetch_add(1, Ordering::Relaxed);
 
     {
-        let mut cache = REGEX_CACHE.write().unwrap();
+        let mut cache = REGEX_CACHE.write().unwrap_or_else(|e| e.into_inner());
         // Another thread may have compiled the same pattern while we were waiting
         if let Some((existing, tick)) = cache.get(pattern) {
+            CACHE_HITS.fetch_add(1, Ordering::Relaxed);
             tick.store(next_tick(), Ordering::Relaxed);
             let existing_arc = Arc::clone(existing);
             insert_sticky(pattern, &existing_arc);

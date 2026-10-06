@@ -461,6 +461,7 @@ impl JSONTools {
     /// Matched against the *final* flattened key name (after separator-joining
     /// and any key transforms), the same name [`handle_key_collision`](Self::handle_key_collision)
     /// resolves collisions on. Works for all operations (flatten, unflatten, normal).
+    /// Additive -- call once per key set to add more keys.
     ///
     /// # Example
     ///
@@ -483,7 +484,8 @@ impl JSONTools {
         I: IntoIterator<Item = S>,
         S: Into<String>,
     {
-        self.always_array_keys = keys.into_iter().map(Into::into).collect();
+        self.always_array_keys
+            .extend(keys.into_iter().map(Into::into));
         self
     }
 
@@ -717,7 +719,8 @@ impl JSONTools {
     ///
     /// When processing multiple JSON documents, this threshold determines when to use
     /// parallel processing. Batches smaller than this threshold will be processed sequentially
-    /// to avoid the overhead of thread spawning.
+    /// to avoid the overhead of thread spawning. `0` means always parallel;
+    /// empty batches return empty without touching the pool.
     ///
     /// Default: 100 items (can be overridden with JSON_TOOLS_PARALLEL_THRESHOLD environment variable)
     ///
@@ -744,6 +747,8 @@ impl JSONTools {
     ///
     /// By default, the number of logical CPUs is used. This method allows you to override
     /// that behavior for specific workloads or resource constraints.
+    /// `Some(0)` is rejected at [`execute()`](Self::execute) time with a
+    /// configuration error. Use `None` for system default.
     ///
     /// # Arguments
     ///
@@ -878,6 +883,7 @@ impl JSONTools {
 
     /// Process a batch of items (parallel or sequential) using a shared processor function.
     /// Items must implement AsRef<str> + Sync, covering both &str slices and Cow<str> vecs.
+    /// An empty batch returns an empty vec without touching the thread pool.
     fn process_batch<I, F>(
         items: &[I],
         config: &ProcessingConfig,
@@ -887,6 +893,9 @@ impl JSONTools {
         I: AsRef<str> + Sync,
         F: Fn(&str, &ProcessingConfig) -> Result<String, JsonToolsError> + Sync + Send,
     {
+        if items.is_empty() {
+            return Ok(Vec::new());
+        }
         if items.len() >= config.parallel_threshold {
             let map_item = |(index, item): (usize, &I)| {
                 processor(item.as_ref(), config)
@@ -897,8 +906,17 @@ impl JSONTools {
             // across calls -- reuse it directly unless the caller explicitly overrode the
             // thread count, in which case a dedicated scoped pool is built for this call only
             // (that override is rare; the common None case stays on the fast persistent pool).
+            // If the ambient pool already matches the request (nested batch inside a
+            // matching pool, or an explicit count equal to the global size), reuse it
+            // instead of rebuilding -- same guard as flatten_collecting_parallel.
             return match config.num_threads {
                 None => items.par_iter().enumerate().map(map_item).collect(),
+                Some(0) => Err(JsonToolsError::configuration_error(
+                    "num_threads must be at least 1. Use None for system default",
+                )),
+                Some(n) if rayon::current_num_threads() == n => {
+                    items.par_iter().enumerate().map(map_item).collect()
+                }
                 Some(n) => {
                     let pool = rayon::ThreadPoolBuilder::new()
                         .num_threads(n)

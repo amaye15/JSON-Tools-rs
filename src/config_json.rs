@@ -22,7 +22,7 @@ use crate::error::JsonToolsError;
 /// duplicating them here. `Serialize` is also derived (`JSONTools::
 /// to_config_json` populates every field, so the two directions share one
 /// struct definition and can never drift apart on field names/shape).
-#[derive(Deserialize, Serialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 #[serde(deny_unknown_fields, rename_all = "snake_case")]
 pub(crate) struct Config {
     pub(crate) mode: Option<String>,
@@ -63,21 +63,21 @@ pub(crate) struct Config {
 /// directly) since `#[non_exhaustive]` blocks constructing those outside this
 /// crate, and because every field here is optional on the way in (unset =
 /// "don't override this knob"), unlike the public structs' plain bools.
-#[derive(Deserialize, Serialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 #[serde(deny_unknown_fields, rename_all = "snake_case")]
 pub(crate) struct DateConversionConfigWire {
     pub(crate) normalize_to_utc: Option<bool>,
     pub(crate) assume_utc_for_naive: Option<bool>,
 }
 
-#[derive(Deserialize, Serialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 #[serde(deny_unknown_fields, rename_all = "snake_case")]
 pub(crate) struct NullConversionConfigWire {
     #[serde(default)]
     pub(crate) extra_tokens: Vec<String>,
 }
 
-#[derive(Deserialize, Serialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 #[serde(deny_unknown_fields, rename_all = "snake_case")]
 pub(crate) struct BooleanConversionConfigWire {
     #[serde(default)]
@@ -86,7 +86,7 @@ pub(crate) struct BooleanConversionConfigWire {
     pub(crate) extra_false_tokens: Vec<String>,
 }
 
-#[derive(Deserialize, Serialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 #[serde(deny_unknown_fields, rename_all = "snake_case")]
 pub(crate) struct NumberConversionConfigWire {
     pub(crate) currency: Option<bool>,

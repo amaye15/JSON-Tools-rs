@@ -315,11 +315,14 @@ src/
 ├── types.rs          Core types: JsonInput, JsonOutput
 ├── error.rs          Error types with codes E001-E008
 ├── config.rs         Configuration structs and operation modes
+├── config_json.rs    Config wire format for pickle / PySpark transport
 ├── cache.rs          Tiered regex pattern caching (compile-time table, thread-local, global)
+├── fxhash.rs         Fast FxHash hasher for string keys
 ├── convert.rs        Type conversion: numbers, dates, booleans, nulls (SIMD-optimized)
 ├── transform.rs      Filtering, key/value replacements, collision handling
 ├── flatten.rs        Flattening algorithm with Rayon parallelism
 ├── unflatten.rs      Unflattening with SIMD separator detection
+├── arrow_columnar.rs Typed Arrow column builder for DataFrame output
 ├── builder.rs        Public JSONTools builder API and execute() entry point
 ├── python.rs         Python bindings via PyO3
 ├── tests.rs          Unit tests
@@ -345,7 +348,7 @@ The processing pipeline:
 | Large arrays (5,000 items) | ~406 µs | Arrays with many elements |
 | Parallel batch (10,000 items) | ~635 µs | Batch processing with Rayon (`nested_parallel_threshold`) |
 
-*Measured on Apple Silicon (M4) via `cargo bench --bench stress_benchmarks`, v0.9.5. Results may vary by platform and data shape.*
+*Measured on Apple Silicon (M4) via `cargo bench --bench stress_benchmarks`. Representative numbers only; results vary by platform and data shape. See `benches/history.csv` and the CI benchmark job for the current trend.*
 
 ### Optimization Techniques
 

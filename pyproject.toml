@@ -23,7 +23,6 @@ classifiers = [
     "License :: OSI Approved :: Apache Software License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.8",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
@@ -44,7 +43,7 @@ dynamic = ["version"]
 # amd64, macOS x86_64/arm64) plus Python 3.9 (via an older-but-current
 # release; pip resolves per-interpreter automatically), so this is safe as a
 # hard dependency rather than an opt-in extra.
-dependencies = ["orjson>=3.9"]
+dependencies = ["orjson>=3.9,<4"]
 
 [project.urls]
 Homepage = "https://github.com/amaye15/JSON-Tools-rs"
@@ -65,7 +64,7 @@ python_functions = ["test_*"]
 
 [tool.black]
 line-length = 88
-target-version = ['py38']
+target-version = ['py39']
 
 [tool.isort]
 profile = "black"

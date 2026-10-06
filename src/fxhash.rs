@@ -3,6 +3,7 @@ use std::hash::{BuildHasher, Hasher};
 
 const K: u64 = 0x517cc1b727220a95;
 
+#[derive(Debug)]
 pub(crate) struct FxHasher(u64);
 
 impl Default for FxHasher {
@@ -26,8 +27,20 @@ impl Hasher for FxHasher {
     }
 
     #[inline]
+    fn write_u16(&mut self, i: u16) {
+        self.0 = (self.0.rotate_left(5) ^ i as u64).wrapping_mul(K);
+    }
+
+    #[inline]
     fn write_u32(&mut self, i: u32) {
         self.0 = (self.0.rotate_left(5) ^ i as u64).wrapping_mul(K);
+    }
+
+    #[inline]
+    fn write_u128(&mut self, i: u128) {
+        // Fold 128 bits into 64 bits to keep hasher width stable.
+        let folded = (i as u64) ^ ((i >> 64) as u64);
+        self.0 = (self.0.rotate_left(5) ^ folded).wrapping_mul(K);
     }
 
     #[inline]
@@ -46,7 +59,7 @@ impl Hasher for FxHasher {
     }
 }
 
-#[derive(Clone, Default)]
+#[derive(Debug, Clone, Default)]
 pub(crate) struct FxBuildHasher;
 
 impl BuildHasher for FxBuildHasher {

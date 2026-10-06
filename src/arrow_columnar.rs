@@ -53,7 +53,7 @@ pub(crate) enum ScalarKind {
 /// `handle_key_collision(True)` array is deliberately left as plain text,
 /// a narrow, explicit scope boundary rather than doubling the number of
 /// `ColumnBuilder::List*` variants for a very rare combination.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ColumnPlan {
     Scalar(ScalarKind),
     List(ScalarKind),
@@ -65,7 +65,7 @@ pub(crate) enum ColumnPlan {
 /// this engine -- unlike a `PyAny`-based approach, which gets int/float
 /// distinction for free from Python's own object types -- must decide the
 /// exact Arrow type itself to pick the right builder.
-#[derive(Default, Clone, Copy)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct KindFlags {
     pub(crate) bool_: bool,
     pub(crate) int_: bool,
@@ -351,7 +351,7 @@ impl ColumnBuilder {
     /// converts an `#[pymethod]`-body panic into a Python exception rather
     /// than crashing.
     pub(crate) fn append_row(&mut self, text: Option<&str>) {
-        let is_null = text.is_none() || text.map(|t| t.as_bytes()[0]) == Some(b'n');
+        let is_null = text.is_none() || text.and_then(|t| t.as_bytes().first()) == Some(&b'n');
         match self {
             ColumnBuilder::Bool(b) => {
                 if is_null {

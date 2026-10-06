@@ -15,11 +15,7 @@ let result = JSONTools::new()
 result = jt.JSONTools().flatten().auto_convert_types(True).execute(data)
 ```
 
-```java
-try (JsonToolsHandle tools = JsonTools.builder().flatten().autoConvertTypes(true).build()) {
-    String result = tools.execute(json);
-}
-```
+> JVM/Java bindings were removed in v0.9.20. Rust core and Python bindings are unaffected.
 
 ## Fine-Grained Control
 
@@ -61,18 +57,6 @@ result = (
 )
 ```
 
-```java
-try (JsonToolsHandle tools = JsonTools.builder()
-        .flatten()
-        .convertDates(true)
-        .dateAssumeUtcForNaive(false)
-        .convertNulls(true)
-        .nullExtraToken("missing")
-        .build()) {
-    String result = tools.execute(json);
-}
-```
-
 Calling `auto_convert_types(bool)` only ever flips each category's own on/off
 switch -- it never resets a category's customization back to its own defaults. So
 `.convert_dates_config(...).auto_convert_types(true)` keeps the customization while
@@ -80,19 +64,19 @@ turning every category on, regardless of call order.
 
 ### Per-Category Reference
 
-| Category | Rust | Python | Java |
-|----------|------|--------|------|
-| Dates | `.convert_dates(bool)` / `.convert_dates_config(DateConversionConfig)` | `.convert_dates(enable, normalize_to_utc=None, assume_utc_for_naive=None)` | `.convertDates(boolean)` / `.dateNormalizeToUtc(boolean)` / `.dateAssumeUtcForNaive(boolean)` |
-| Nulls | `.convert_nulls(bool)` / `.convert_nulls_config(NullConversionConfig)` | `.convert_nulls(enable, extra_tokens=None)` | `.convertNulls(boolean)` / `.nullExtraToken(String)` |
-| Booleans | `.convert_booleans(bool)` / `.convert_booleans_config(BooleanConversionConfig)` | `.convert_booleans(enable, extra_true_tokens=None, extra_false_tokens=None)` | `.convertBooleans(boolean)` / `.booleanExtraTrueToken(String)` / `.booleanExtraFalseToken(String)` |
-| Numbers | `.convert_numbers(bool)` / `.convert_numbers_config(NumberConversionConfig)` | `.convert_numbers(enable, currency=None, percent=None, basis_points=None, suffixes=None, fractions=None, radix=None)` | `.convertNumbers(boolean)` / `.numberCurrency(boolean)` / `.numberPercent(boolean)` / `.numberBasisPoints(boolean)` / `.numberSuffixes(boolean)` / `.numberFractions(boolean)` / `.numberRadix(boolean)` |
+| Category | Rust | Python |
+|----------|------|--------|
+| Dates | `.convert_dates(bool)` / `.convert_dates_config(DateConversionConfig)` | `.convert_dates(enable, normalize_to_utc=None, assume_utc_for_naive=None)` |
+| Nulls | `.convert_nulls(bool)` / `.convert_nulls_config(NullConversionConfig)` | `.convert_nulls(enable, extra_tokens=None)` |
+| Booleans | `.convert_booleans(bool)` / `.convert_booleans_config(BooleanConversionConfig)` | `.convert_booleans(enable, extra_true_tokens=None, extra_false_tokens=None)` |
+| Numbers | `.convert_numbers(bool)` / `.convert_numbers_config(NumberConversionConfig)` | `.convert_numbers(enable, currency=None, percent=None, basis_points=None, suffixes=None, fractions=None, radix=None)` |
 
 **Dates** (`DateConversionConfig`):
 - `normalize_to_utc` (default `true`) -- when `false`, a recognized date/datetime is left byte-for-byte unchanged (still protected from being misread as a number).
 - `assume_utc_for_naive` (default `true`) -- when `false`, a timezone-less datetime (e.g. `"2024-01-15T10:30:00"`) is left unchanged instead of getting a `Z` appended.
 
 **Nulls** (`NullConversionConfig`) / **Booleans** (`BooleanConversionConfig`):
-- `extra_tokens` / `extra_true_tokens` / `extra_false_tokens` -- additional strings recognized beyond the built-in list. **Additive only**: the built-in list stays active regardless, this only extends it. Matched exactly (case-sensitive) against the *trimmed* value -- consistent with every other category and the built-in lists (e.g. `" 123 "` already converts to `123`), so a token like `"si"` also matches `"si "` (trailing whitespace), not only a byte-for-byte match against the raw string. In Rust, add one token per call (`.add_extra_token("missing")`, matching `key_replacement()`'s idiom); in Python, `extra_tokens=[...]` is bulk-replace (a later call's list replaces, not merges with, an earlier one); in Java, add one token per call (`.nullExtraToken("missing")`, additive like Rust).
+- `extra_tokens` / `extra_true_tokens` / `extra_false_tokens` -- additional strings recognized beyond the built-in list. **Additive only**: the built-in list stays active regardless, this only extends it. Matched exactly (case-sensitive) against the *trimmed* value -- consistent with every other category and the built-in lists (e.g. `" 123 "` already converts to `123`), so a token like `"si"` also matches `"si "` (trailing whitespace), not only a byte-for-byte match against the raw string. In Rust, add one token per call (`.add_extra_token("missing")`, matching `key_replacement()`'s idiom); in Python, `extra_tokens=[...]` is bulk-replace (a later call's list replaces, not merges with, an earlier one).
 
 **Numbers** (`NumberConversionConfig`) -- plain integers/decimals, scientific
 notation, and thousands-separator cleanup are always applied when the category is

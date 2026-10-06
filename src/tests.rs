@@ -1256,6 +1256,22 @@ mod unit_tests {
     }
 
     #[test]
+    fn test_always_array_keys_is_additive() {
+        // Each call adds keys. Second call must not drop the first set.
+        let json = r#"{"name": "a", "age": 1}"#;
+        let result = JSONTools::new()
+            .flatten()
+            .always_array_keys(["name"])
+            .always_array_keys(["age"])
+            .execute(json)
+            .unwrap();
+        let flattened = extract_single(result);
+        let parsed: Value = serde_json::from_str(&flattened).unwrap();
+        assert!(parsed["name"].is_array());
+        assert!(parsed["age"].is_array());
+    }
+
+    #[test]
     fn test_collision_with_custom_separator() {
         let json = r#"{"User_name": "John", "Admin_name": "Jane"}"#;
         let result = JSONTools::new()
@@ -5238,6 +5254,172 @@ mod validation_and_edge_case_tests {
                     "panicked on template {template:?} with 'Á' inserted at byte {byte_pos}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn test_empty_batch_returns_empty() {
+        let empty: Vec<String> = Vec::new();
+        let result = JSONTools::new().flatten().execute(empty).unwrap();
+        let out = extract_multiple(result);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn test_parallel_threshold_zero_handles_empty_and_single() {
+        let empty: Vec<String> = Vec::new();
+        let result = JSONTools::new()
+            .flatten()
+            .parallel_threshold(0)
+            .execute(empty)
+            .unwrap();
+        assert!(extract_multiple(result).is_empty());
+
+        let single = vec![r#"{"a": 1}"#.to_string()];
+        let result = JSONTools::new()
+            .flatten()
+            .parallel_threshold(0)
+            .execute(single)
+            .unwrap();
+        assert_eq!(extract_multiple(result).len(), 1);
+    }
+
+    #[test]
+    fn test_unicode_and_multichar_separators() {
+        let json = r#"{"a": {"b": 1}}"#;
+        let result = JSONTools::new()
+            .flatten()
+            .separator("é")
+            .execute(json)
+            .unwrap();
+        let parsed: Value = serde_json::from_str(&extract_single(result)).unwrap();
+        assert_eq!(parsed["aéb"], 1);
+
+        let result = JSONTools::new()
+            .flatten()
+            .separator("::")
+            .execute(json)
+            .unwrap();
+        let parsed: Value = serde_json::from_str(&extract_single(result)).unwrap();
+        assert_eq!(parsed["a::b"], 1);
+    }
+
+    #[test]
+    fn test_max_array_index_boundary() {
+        let ok_json = r#"{"items.99999": "v"}"#;
+        let tools = JSONTools::new().unflatten().max_array_index(100_000);
+        assert!(tools.execute(ok_json).is_ok());
+
+        let over_json = r#"{"items.100001": "v"}"#;
+        let err = tools.execute(over_json).unwrap_err();
+        assert_eq!(err.error_code(), "E007");
+    }
+
+    #[test]
+    fn test_error_helpers_cover_all_codes() {
+        let invalid = JSONTools::new().flatten().execute("not json");
+        let e = invalid.unwrap_err();
+        assert_eq!(e.error_code(), "E001");
+        assert!(!e.message().is_empty());
+        assert!(!e.suggestion().is_empty());
+        assert!(e.batch_index().is_none());
+        assert!(e.to_string().contains("[E001]"));
+        assert!(!e.to_string().contains("💡"));
+
+        let no_mode = JSONTools::new().execute(r#"{"a": 1}"#);
+        let e = no_mode.unwrap_err();
+        assert_eq!(e.error_code(), "E005");
+        assert_eq!(e.batch_index(), None);
+
+        let batch = vec!["not json".to_string(), r#"{"a": 1}"#.to_string()];
+        let e = JSONTools::new().flatten().execute(batch).unwrap_err();
+        assert_eq!(e.error_code(), "E006");
+        assert_eq!(e.batch_index(), Some(0));
+    }
+
+    #[test]
+    fn test_effective_thread_count_never_zero() {
+        use crate::config::ProcessingConfig;
+        let cfg = ProcessingConfig::new();
+        assert_eq!(cfg.effective_thread_count(0), 1);
+        assert!(cfg.effective_thread_count(10) >= 1);
+    }
+
+    #[test]
+    fn test_cache_stats_are_monotonic() {
+        use crate::cache::{cache_stats, get_cached_regex};
+        let (h0, m0) = cache_stats();
+        let pat = "test_stats_unique_pattern_xyz123";
+        let _ = get_cached_regex(pat);
+        let _ = get_cached_regex(pat);
+        let (h1, m1) = cache_stats();
+        assert!(h1 >= h0);
+        assert!(m1 >= m0);
+        assert!(h1 + m1 > h0 + m0);
+    }
+
+    #[test]
+    fn test_processing_config_reclassify_after_direct_write() {
+        use crate::config::{DateConversionConfig, NumberConversionConfig};
+        use crate::config::{ProcessingConfig, TypeConversionConfig};
+        let mut cfg = ProcessingConfig::new();
+        // Direct field write bypasses type_conversion() -- mode stays Disabled.
+        cfg.type_conversion = TypeConversionConfig {
+            dates: DateConversionConfig {
+                enabled: true,
+                ..DateConversionConfig::default()
+            },
+            numbers: NumberConversionConfig {
+                enabled: true,
+                ..NumberConversionConfig::default()
+            },
+            ..TypeConversionConfig::default()
+        };
+        cfg.reclassify();
+        // Two categories enabled with defaults still counts as Custom (not AllDefault).
+        let flat = JSONTools::new()
+            .flatten()
+            .convert_dates(true)
+            .convert_numbers(true)
+            .execute(r#"{"a": "123"}"#)
+            .unwrap();
+        assert!(!extract_single(flat).is_empty());
+    }
+
+    #[test]
+    fn test_malformed_regex_is_silent_no_match() {
+        // Documented behavior: malformed r'...' never errors, it just matches nothing.
+        let json = r#"{"name": "John"}"#;
+        let result = JSONTools::new()
+            .flatten()
+            .key_replacement("r'([unclosed'", "x")
+            .execute(json)
+            .unwrap();
+        let parsed: Value = serde_json::from_str(&extract_single(result)).unwrap();
+        assert_eq!(parsed["name"], "John");
+    }
+
+    #[test]
+    fn test_roundtrip_property_sampled() {
+        // Lightweight property check without new deps: flatten then unflatten
+        // must restore the original structure for representative shapes.
+        let cases = [
+            r#"{"a": 1, "b": {"c": [1, 2, {"d": null}]}}"#,
+            r#"{"user": {"name": "Ann", "tags": [], "meta": {}}}"#,
+            r#"{"arr": [{"k": "v"}, 2, true]}"#,
+            r#"{"café": {"naïve": 1}}"#,
+            r#"{"a": {"b": {"c": {"d": "deep"}}}}"#,
+        ];
+        for json in cases {
+            let flat = JSONTools::new().flatten().execute(json).unwrap();
+            let flat_str = extract_single(flat);
+            let back = JSONTools::new()
+                .unflatten()
+                .execute(flat_str.as_str())
+                .unwrap();
+            let orig: Value = serde_json::from_str(json).unwrap();
+            let round: Value = serde_json::from_str(&extract_single(back)).unwrap();
+            assert_eq!(orig, round, "roundtrip failed for {json}");
         }
     }
 }

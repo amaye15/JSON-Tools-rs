@@ -5,7 +5,7 @@ edition = "2021"
 rust-version = "1.85"
 description = "A high-performance Rust library for advanced JSON manipulation with SIMD-accelerated parsing, Rayon parallelism, and Python bindings with DataFrame/Series support"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/amaye15/json-tools-rs"
+repository = "https://github.com/amaye15/JSON-Tools-rs"
 keywords = ["json", "flatten", "manipulation", "simd"]
 categories = ["data-structures", "parsing"]
 readme = "README.md"
@@ -95,7 +95,8 @@ arrow-buffer = { version = "59", optional = true }
 # version that resolves without this pin, doesn't even declare a rust-version
 # at all). Pinned <7.2 (7.1.x's own MSRV is 1.64) until upstream fixes their
 # rust-version metadata or this crate's MSRV moves past whatever 7.2.x
-# actually needs.
+# actually needs. Review date: 2026-12-01. Upstream: comfy-table issue tracker
+# (no filed issue yet -- file one if pin still needed at review).
 comfy-table = { version = "<7.2", optional = true }
 memchr = "2.8.0"  # SIMD-optimized byte searching
 smallvec = "1.15.1"  # Stack-allocated vectors for small buffers
@@ -137,7 +138,8 @@ indexmap = { version = ">=2.11, <2.15", features = ["serde"] }
 # needed a newer rustc than the then-MSRV of 1.80. Lifted 2026-08-05 in a
 # dedicated dependency-bump pass now that MSRV is already 1.85 -- confirmed
 # 0.5.8 builds clean on both stable and `+1.85.0 check --locked --all-features`.
-sonic-rs = "=0.5.8"
+# Caret range allows patch updates within 0.5.x.
+sonic-rs = "0.5.8"
 
 [target.'cfg(target_pointer_width = "32")'.dependencies]
 # simd-json fallback for 32-bit architectures

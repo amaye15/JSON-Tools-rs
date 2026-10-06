@@ -334,12 +334,12 @@ cargo bench --bench stress_benchmarks
 ## Performance Targets
 
 Based on v0.9.0 baseline (`std::thread::scope`-based parallelism, optimized caching).
-**Not re-baselined since** -- test data and parallelism internals have both changed
+Current release is v0.9.30. **Not re-baselined since v0.9.0** -- test data and parallelism internals have both changed
 across v0.9.0-0.9.4 (see [CHANGELOG.md](CHANGELOG.md)), so these ops/ms figures are
 historical context, not a live guarantee (a direct re-run of `iso_01_baseline/flatten/
 medium` on current `master` measured well under the "> 2,000 ops/ms" row below). The
 `benchmark` CI job's Criterion-based regression alerting (see below) is the
-authoritative, currently-enforced check; treat this table as directional only:
+authoritative, currently-enforced check; treat this table as directional only. Machine spec for the original baseline: Apple Silicon; current numbers vary by OS/arch/threads -- see `benches/history.csv` which records `(commit, os, arch, threads, operation, scenario, size)` per row:
 
 | Operation | Target | Notes |
 |-----------|--------|-------|

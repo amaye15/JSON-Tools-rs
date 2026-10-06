@@ -1,5 +1,7 @@
 # Changelog
 
+> Source of truth is the root `CHANGELOG.md`. This file mirrors it for the mdBook site. Do not edit here; edit root `CHANGELOG.md` instead.
+
 ## Unreleased
 
 ## v0.9.30 (2026-08-09)
